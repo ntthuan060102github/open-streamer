@@ -1,0 +1,34 @@
+{
+  "test": {
+    "code": "test",
+    "name": "string",
+    "description": "string",
+    "tags": [
+      "string"
+    ],
+    "stream_key": "string",
+    "status": "idle",
+    "inputs": [
+      {
+        "url": "http://10.241.1.84/test1/index.m3u8",
+        "priority": 0,
+        "net": {}
+      },
+      {
+        "url": "http://10.241.1.84/test2/index.m3u8",
+        "priority": 1,
+        "net": {}
+      }
+    ],
+    "protocols": {
+      "hls": true,
+      "dash": true,
+      "rtsp": true,
+      "srt": true,
+      "rts": true
+    },
+    "push": [],
+    "created_at": "2026-03-31T21:25:45.370384+07:00",
+    "updated_at": "2026-03-31T21:25:45.370384+07:00"
+  }
+}

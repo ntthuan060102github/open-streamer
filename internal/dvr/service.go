@@ -32,7 +32,7 @@ type Service struct {
 	bus       events.Bus
 	recRepo   store.RecordingRepository
 	mu        sync.Mutex
-	sessions  map[domain.StreamID]*recordingSession
+	sessions  map[domain.StreamCode]*recordingSession
 }
 
 // New creates a Service and registers it with the DI injector.
@@ -51,14 +51,14 @@ func New(i do.Injector) (*Service, error) {
 		buf:      buf,
 		bus:      bus,
 		recRepo:  recRepo,
-		sessions: make(map[domain.StreamID]*recordingSession),
+		sessions: make(map[domain.StreamCode]*recordingSession),
 	}, nil
 }
 
 // StartRecording begins writing segments for the given stream.
 // segmentDuration controls how long each MPEG-TS segment file will be.
 // If 0, defaults to 6 seconds. Pass the stream's DVR config value if available.
-func (s *Service) StartRecording(ctx context.Context, streamID domain.StreamID, segmentDuration time.Duration) (*domain.Recording, error) {
+func (s *Service) StartRecording(ctx context.Context, streamID domain.StreamCode, segmentDuration time.Duration) (*domain.Recording, error) {
 	if !s.cfg.Enabled {
 		return nil, fmt.Errorf("dvr: disabled in config")
 	}
@@ -72,7 +72,7 @@ func (s *Service) StartRecording(ctx context.Context, streamID domain.StreamID, 
 
 	rec := &domain.Recording{
 		ID:        domain.RecordingID(fmt.Sprintf("%s-%d", streamID, time.Now().UnixNano())),
-		StreamID:  streamID,
+		StreamCode: streamID,
 		StartedAt: time.Now(),
 		Status:    domain.RecordingStatusRecording,
 	}
@@ -91,16 +91,16 @@ func (s *Service) StartRecording(ctx context.Context, streamID domain.StreamID, 
 
 	s.bus.Publish(ctx, domain.Event{
 		Type:     domain.EventRecordingStarted,
-		StreamID: streamID,
+		StreamCode: streamID,
 		Payload:  map[string]any{"recording_id": rec.ID},
 	})
 
-	slog.Info("dvr: recording started", "stream_id", streamID, "recording_id", rec.ID)
+	slog.Info("dvr: recording started", "stream_code", streamID, "recording_id", rec.ID)
 	return rec, nil
 }
 
 // StopRecording finalises the recording and flushes the M3U8 index.
-func (s *Service) StopRecording(ctx context.Context, streamID domain.StreamID) error {
+func (s *Service) StopRecording(ctx context.Context, streamID domain.StreamCode) error {
 	s.mu.Lock()
 	session, ok := s.sessions[streamID]
 	if !ok {
@@ -121,12 +121,12 @@ func (s *Service) StopRecording(ctx context.Context, streamID domain.StreamID) e
 
 	s.bus.Publish(ctx, domain.Event{
 		Type:     domain.EventRecordingStopped,
-		StreamID: streamID,
+		StreamCode: streamID,
 		Payload:  map[string]any{"recording_id": session.recording.ID},
 	})
 
 	slog.Info("dvr: recording stopped",
-		"stream_id", streamID,
+		"stream_code", streamID,
 		"recording_id", session.recording.ID,
 		"segments", len(session.recording.Segments),
 	)
@@ -134,12 +134,12 @@ func (s *Service) StopRecording(ctx context.Context, streamID domain.StreamID) e
 }
 
 func (s *Service) record(ctx context.Context, rec *domain.Recording, segDuration time.Duration) {
-	sub, err := s.buf.Subscribe(rec.StreamID)
+	sub, err := s.buf.Subscribe(rec.StreamCode)
 	if err != nil {
-		slog.Error("dvr: subscribe failed", "stream_id", rec.StreamID, "err", err)
+		slog.Error("dvr: subscribe failed", "stream_code", rec.StreamCode, "err", err)
 		return
 	}
-	defer s.buf.Unsubscribe(rec.StreamID, sub)
+	defer s.buf.Unsubscribe(rec.StreamCode, sub)
 	var (
 		segBuf   []byte
 		segStart = time.Now()
@@ -174,7 +174,7 @@ func (s *Service) flushSegment(_ context.Context, rec *domain.Recording, idx int
 	// TODO: update M3U8 playlist file
 	seg := domain.Segment{
 		Index:     idx,
-		Path:      fmt.Sprintf("%s/%s/%d.ts", rec.StreamID, rec.ID, idx),
+		Path:      fmt.Sprintf("%s/%s/%d.ts", rec.StreamCode, rec.ID, idx),
 		Duration:  dur,
 		Size:      int64(len(data)),
 		CreatedAt: time.Now(),
@@ -182,7 +182,7 @@ func (s *Service) flushSegment(_ context.Context, rec *domain.Recording, idx int
 	rec.Segments = append(rec.Segments, seg)
 
 	slog.Debug("dvr: segment flushed",
-		"stream_id", rec.StreamID,
+		"stream_code", rec.StreamCode,
 		"recording_id", rec.ID,
 		"index", idx,
 		"size_bytes", seg.Size,

@@ -26,17 +26,12 @@ package domain
 // Push mode is detected automatically when the URL host is a wildcard address
 // (0.0.0.0, ::, empty) and the scheme is rtmp or srt.
 type Input struct {
-	ID   string
-	Name string
-
 	// URL is the source endpoint. See the package doc for supported formats.
-	URL string
+	URL string `json:"url"`
 
 	// Priority determines failover order. Lower value = higher priority.
 	// The Stream Manager always prefers the lowest-priority alive input.
-	Priority int
-
-	Enabled bool
+	Priority int `json:"priority"`
 
 	// Headers are arbitrary HTTP headers sent with every request for HTTP/HLS inputs.
 	// Common uses:
@@ -54,7 +49,7 @@ type Input struct {
 	Params map[string]string `json:"params,omitempty"`
 
 	// Net controls reconnect and timeout behaviour.
-	Net InputNetConfig
+	Net InputNetConfig `json:"net,omitempty"`
 
 	// Alive is a runtime-only field updated by the Stream Manager health checker.
 	// Not persisted to storage.
@@ -63,7 +58,9 @@ type Input struct {
 
 // InputNetConfig controls reconnect and timeout behaviour for an input.
 type InputNetConfig struct {
-	// ConnectTimeoutSec is how long to wait for the initial connection.
+	// ConnectTimeoutSec caps each HTTP round-trip (headers + full body) for pull
+	// readers that use net/http (e.g. HLS playlist and segment GETs). Zero uses
+	// the reader's default (30s for HLS).
 	ConnectTimeoutSec int `json:"connect_timeout_sec,omitempty"`
 
 	// ReadTimeoutSec is the max silence duration before declaring the input dead.

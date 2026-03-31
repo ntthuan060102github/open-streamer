@@ -18,11 +18,11 @@ func TestRegistry_RegisterAndLookup(t *testing.T) {
 	buf := buffer.NewServiceForTesting(64)
 	reg := ingestor.NewRegistry()
 
-	reg.Register("mykey", "stream-1", "input-1", buf)
+	reg.Register("mykey", "stream-1", buf)
 
 	streamID, gotBuf, err := reg.Lookup("mykey")
 	require.NoError(t, err)
-	assert.Equal(t, domain.StreamID("stream-1"), streamID)
+	assert.Equal(t, domain.StreamCode("stream-1"), streamID)
 	assert.Same(t, buf, gotBuf)
 }
 
@@ -42,12 +42,12 @@ func TestRegistry_Overwrite(t *testing.T) {
 	buf2 := buffer.NewServiceForTesting(64)
 	reg := ingestor.NewRegistry()
 
-	reg.Register("key", "stream-1", "input-1", buf1)
-	reg.Register("key", "stream-2", "input-2", buf2)
+	reg.Register("key", "stream-1", buf1)
+	reg.Register("key", "stream-2", buf2)
 
 	streamID, gotBuf, err := reg.Lookup("key")
 	require.NoError(t, err)
-	assert.Equal(t, domain.StreamID("stream-2"), streamID)
+	assert.Equal(t, domain.StreamCode("stream-2"), streamID)
 	assert.Same(t, buf2, gotBuf)
 }
 
@@ -57,7 +57,7 @@ func TestRegistry_Unregister(t *testing.T) {
 	buf := buffer.NewServiceForTesting(64)
 	reg := ingestor.NewRegistry()
 
-	reg.Register("key", "stream-1", "input-1", buf)
+	reg.Register("key", "stream-1", buf)
 	reg.Unregister("key")
 
 	_, _, err := reg.Lookup("key")
@@ -80,14 +80,14 @@ func TestRegistry_MultipleKeys(t *testing.T) {
 
 	keys := []string{"stream-a", "stream-b", "stream-c"}
 	for i, k := range keys {
-		reg.Register(k, domain.StreamID(k), "input", buf)
+		reg.Register(k, domain.StreamCode(k), buf)
 		_ = i
 	}
 
 	for _, k := range keys {
 		id, _, err := reg.Lookup(k)
 		require.NoError(t, err)
-		assert.Equal(t, domain.StreamID(k), id)
+		assert.Equal(t, domain.StreamCode(k), id)
 	}
 }
 
@@ -105,7 +105,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "key"
-			reg.Register(key, domain.StreamID("s"), "i", buf)
+			reg.Register(key, domain.StreamCode("s"), buf)
 			_, _, _ = reg.Lookup(key)
 			if i%5 == 0 {
 				reg.Unregister(key)

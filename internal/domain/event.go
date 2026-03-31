@@ -21,9 +21,9 @@ const (
 
 // Event is an immutable fact describing a domain state change.
 type Event struct {
-	ID         string            // UUID for idempotent delivery
-	Type       EventType
-	StreamID   StreamID
-	OccurredAt time.Time
-	Payload    map[string]any    // event-specific fields
+	ID         string         `json:"id"` // UUID for idempotent delivery
+	Type       EventType      `json:"type"`
+	StreamCode StreamCode     `json:"stream_code"`
+	OccurredAt time.Time      `json:"occurred_at"`
+	Payload    map[string]any `json:"payload,omitempty"` // event-specific fields
 }

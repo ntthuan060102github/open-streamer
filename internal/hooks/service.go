@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,9 @@ import (
 	"github.com/open-streamer/open-streamer/internal/store"
 	"github.com/samber/do/v2"
 )
+
+// ErrHookTestUnsupported is returned when the hook type cannot receive a synthetic test delivery.
+var ErrHookTestUnsupported = errors.New("hooks: test delivery not supported for this hook type")
 
 // Service subscribes to the event bus and dispatches events to registered hooks.
 type Service struct {
@@ -45,6 +49,27 @@ func New(i do.Injector) (*Service, error) {
 		client: &http.Client{},
 	}
 	return svc, nil
+}
+
+// DeliverTestEvent sends a single synthetic event to the hook using the same path as live delivery.
+func (s *Service) DeliverTestEvent(ctx context.Context, id domain.HookID) error {
+	h, err := s.hookRepo.FindByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	switch h.Type {
+	case domain.HookTypeHTTP:
+		ev := domain.Event{
+			ID:         fmt.Sprintf("test-%d", time.Now().UnixNano()),
+			Type:       domain.EventStreamCreated,
+			StreamCode: "_open_streamer_test_",
+			OccurredAt: time.Now(),
+			Payload:    map[string]any{"test": true, "hook_id": string(h.ID)},
+		}
+		return s.deliver(ctx, h, ev)
+	default:
+		return fmt.Errorf("%w: %s", ErrHookTestUnsupported, h.Type)
+	}
 }
 
 // Start subscribes to all domain events and begins dispatching.
@@ -94,7 +119,7 @@ func (s *Service) dispatch(ctx context.Context, event domain.Event) error {
 			slog.Error("hooks: delivery failed",
 				"hook_id", h.ID,
 				"event_type", event.Type,
-				"stream_id", event.StreamID,
+				"stream_code", event.StreamCode,
 				"err", err,
 			)
 		}

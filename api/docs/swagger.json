@@ -1,0 +1,1712 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "REST API for live stream configuration, ingest/publish lifecycle, DVR recordings, and event hooks.",
+        "title": "Open Streamer API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "basePath": "/",
+    "paths": {
+        "/healthz": {
+            "get": {
+                "description": "Returns 200 if the process is up.",
+                "tags": [
+                    "system"
+                ],
+                "summary": "Liveness",
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/hooks": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "hooks"
+                ],
+                "summary": "List hooks",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.HookList"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "hooks"
+                ],
+                "summary": "Create hook",
+                "parameters": [
+                    {
+                        "description": "Hook configuration",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/domain.Hook"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.HookData"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/hooks/{hid}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "hooks"
+                ],
+                "summary": "Get hook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Hook ID",
+                        "name": "hid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.HookData"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "hooks"
+                ],
+                "summary": "Update hook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Hook ID",
+                        "name": "hid",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Hook configuration",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/domain.Hook"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.HookData"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "hooks"
+                ],
+                "summary": "Delete hook",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Hook ID",
+                        "name": "hid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/hooks/{hid}/test": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "hooks"
+                ],
+                "summary": "Test hook delivery",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Hook ID",
+                        "name": "hid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.HookTestData"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/readyz": {
+            "get": {
+                "description": "Returns 200 when the server accepts traffic (basic check).",
+                "tags": [
+                    "system"
+                ],
+                "summary": "Readiness",
+                "responses": {
+                    "200": {
+                        "description": "ok",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/recordings/{rid}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Get recording",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recording ID",
+                        "name": "rid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.RecordingData"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Delete recording",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recording ID",
+                        "name": "rid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/recordings/{rid}/playlist.m3u8": {
+            "get": {
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Recording VOD playlist",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recording ID",
+                        "name": "rid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "M3U8 body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "streams"
+                ],
+                "summary": "List streams",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Filter by status",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamList"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "streams"
+                ],
+                "summary": "Get stream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code (a-zA-Z0-9_)",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamData"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "streams"
+                ],
+                "summary": "Create or update stream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Full stream document",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamPutRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamData"
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamData"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "streams"
+                ],
+                "summary": "Delete stream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}/recordings": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "List recordings by stream",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.RecordingList"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}/recordings/start": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Start recording",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.RecordingData"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}/recordings/stop": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Stop recording",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamActionData"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}/start": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "streams"
+                ],
+                "summary": "Start stream pipeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamActionData"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}/status": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "streams"
+                ],
+                "summary": "Stream status",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamStatusData"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/streams/{code}/stop": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "streams"
+                ],
+                "summary": "Stop stream pipeline",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stream code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.StreamActionData"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "apidocs.ErrorBody": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string"
+                        },
+                        "message": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "apidocs.HookData": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/domain.Hook"
+                }
+            }
+        },
+        "apidocs.HookList": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Hook"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "apidocs.HookTestData": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/apidocs.HookTestInner"
+                }
+            }
+        },
+        "apidocs.HookTestInner": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "apidocs.RecordingData": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/domain.Recording"
+                }
+            }
+        },
+        "apidocs.RecordingList": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Recording"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "apidocs.StreamActionData": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/apidocs.StreamActionInner"
+                }
+            }
+        },
+        "apidocs.StreamActionInner": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "apidocs.StreamData": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/domain.Stream"
+                }
+            }
+        },
+        "apidocs.StreamList": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Stream"
+                    }
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "apidocs.StreamPutRequest": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "dvr": {
+                    "$ref": "#/definitions/domain.StreamDVRConfig"
+                },
+                "inputs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Input"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "protocols": {
+                    "$ref": "#/definitions/domain.OutputProtocols"
+                },
+                "push": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.PushDestination"
+                    }
+                },
+                "stream_key": {
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "thumbnail": {
+                    "$ref": "#/definitions/domain.ThumbnailConfig"
+                },
+                "transcoder": {
+                    "$ref": "#/definitions/domain.TranscoderConfig"
+                },
+                "watermark": {
+                    "$ref": "#/definitions/domain.WatermarkConfig"
+                }
+            }
+        },
+        "apidocs.StreamStatusData": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "additionalProperties": {}
+                }
+            }
+        },
+        "domain.AudioCodec": {
+            "type": "string",
+            "enum": [
+                "aac",
+                "mp3",
+                "opus",
+                "ac3",
+                "copy"
+            ],
+            "x-enum-comments": {
+                "AudioCodecAAC": "default for HLS/DASH",
+                "AudioCodecAC3": "Dolby Digital — broadcast use",
+                "AudioCodecCopy": "passthrough — no re-encode",
+                "AudioCodecMP3": "legacy compatibility",
+                "AudioCodecOpus": "best for WebRTC / low-latency"
+            },
+            "x-enum-descriptions": [
+                "default for HLS/DASH",
+                "legacy compatibility",
+                "best for WebRTC / low-latency",
+                "Dolby Digital — broadcast use",
+                "passthrough — no re-encode"
+            ],
+            "x-enum-varnames": [
+                "AudioCodecAAC",
+                "AudioCodecMP3",
+                "AudioCodecOpus",
+                "AudioCodecAC3",
+                "AudioCodecCopy"
+            ]
+        },
+        "domain.AudioTranscodeConfig": {
+            "type": "object",
+            "properties": {
+                "bitrate": {
+                    "description": "Bitrate is the audio bitrate in kbps.",
+                    "type": "integer"
+                },
+                "channels": {
+                    "description": "Channels: 1 = mono, 2 = stereo, 6 = 5.1.",
+                    "type": "integer"
+                },
+                "codec": {
+                    "$ref": "#/definitions/domain.AudioCodec"
+                },
+                "copy": {
+                    "description": "Copy copies origin audio without re-encoding.",
+                    "type": "boolean"
+                },
+                "language": {
+                    "description": "Language is ISO 639-1 code, e.g. \"en\", \"vi\".",
+                    "type": "string"
+                },
+                "normalize": {
+                    "description": "Normalize applies EBU R128 loudness normalization.",
+                    "type": "boolean"
+                },
+                "sample_rate": {
+                    "description": "SampleRate is output sample rate in Hz.",
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.DecoderConfig": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "description": "Name is the FFmpeg decoder name.\n\"\" = let FFmpeg choose automatically.\nExamples: \"h264_cuvid\", \"h264_qsv\".",
+                    "type": "string"
+                }
+            }
+        },
+        "domain.EventType": {
+            "type": "string",
+            "enum": [
+                "stream.created",
+                "stream.started",
+                "stream.stopped",
+                "stream.deleted",
+                "input.degraded",
+                "input.failed",
+                "input.failover",
+                "recording.started",
+                "recording.stopped",
+                "recording.failed",
+                "segment.written"
+            ],
+            "x-enum-varnames": [
+                "EventStreamCreated",
+                "EventStreamStarted",
+                "EventStreamStopped",
+                "EventStreamDeleted",
+                "EventInputDegraded",
+                "EventInputFailed",
+                "EventInputFailover",
+                "EventRecordingStarted",
+                "EventRecordingStopped",
+                "EventRecordingFailed",
+                "EventSegmentWritten"
+            ]
+        },
+        "domain.HWAccel": {
+            "type": "string",
+            "enum": [
+                "none",
+                "nvenc",
+                "vaapi",
+                "videotoolbox",
+                "qsv"
+            ],
+            "x-enum-comments": {
+                "HWAccelNVENC": "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
+                "HWAccelNone": "CPU only (libx264, libx265)",
+                "HWAccelQSV": "Intel Quick Sync Video",
+                "HWAccelVAAPI": "Intel/AMD GPU via VA-API (Linux)",
+                "HWAccelVideoToolbox": "Apple GPU (macOS)"
+            },
+            "x-enum-descriptions": [
+                "CPU only (libx264, libx265)",
+                "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
+                "Intel/AMD GPU via VA-API (Linux)",
+                "Apple GPU (macOS)",
+                "Intel Quick Sync Video"
+            ],
+            "x-enum-varnames": [
+                "HWAccelNone",
+                "HWAccelNVENC",
+                "HWAccelVAAPI",
+                "HWAccelVideoToolbox",
+                "HWAccelQSV"
+            ]
+        },
+        "domain.Hook": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "event_types": {
+                    "description": "EventTypes filters which events trigger delivery. nil = all events.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.EventType"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "max_retries": {
+                    "description": "MaxRetries is the number of delivery attempts before giving up.\n0 means use the server default (3).",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "secret": {
+                    "description": "HMAC-SHA256 signing secret (HTTP only)",
+                    "type": "string"
+                },
+                "target": {
+                    "description": "HTTP URL, NATS subject, or Kafka topic",
+                    "type": "string"
+                },
+                "timeout_sec": {
+                    "description": "TimeoutSec is the per-attempt delivery timeout in seconds.\n0 means use the server default (10s).",
+                    "type": "integer"
+                },
+                "type": {
+                    "$ref": "#/definitions/domain.HookType"
+                }
+            }
+        },
+        "domain.HookType": {
+            "type": "string",
+            "enum": [
+                "http",
+                "nats",
+                "kafka"
+            ],
+            "x-enum-varnames": [
+                "HookTypeHTTP",
+                "HookTypeNATS",
+                "HookTypeKafka"
+            ]
+        },
+        "domain.Input": {
+            "type": "object",
+            "properties": {
+                "headers": {
+                    "description": "Headers are arbitrary HTTP headers sent with every request for HTTP/HLS inputs.\nCommon uses:\n  \"Authorization\": \"Bearer \u003ctoken\u003e\"\n  \"Authorization\": \"Basic \u003cbase64(user:pass)\u003e\"\n  \"X-Custom-Token\": \"secret\"",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "net": {
+                    "description": "Net controls reconnect and timeout behaviour.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.InputNetConfig"
+                        }
+                    ]
+                },
+                "params": {
+                    "description": "Params are extra URL query parameters merged into the source URL before\nconnecting. Used for protocols that carry credentials or options in the\nquery string (SRT ?passphrase=, S3 ?access_key= / ?secret_key=, etc.).\n  \"passphrase\": \"my-srt-passphrase\"\n  \"access_key\": \"AKID...\"   (S3)\n  \"secret_key\": \"wJal...\"   (S3)",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "priority": {
+                    "description": "Priority determines failover order. Lower value = higher priority.\nThe Stream Manager always prefers the lowest-priority alive input.",
+                    "type": "integer"
+                },
+                "url": {
+                    "description": "URL is the source endpoint. See the package doc for supported formats.",
+                    "type": "string"
+                }
+            }
+        },
+        "domain.InputNetConfig": {
+            "type": "object",
+            "properties": {
+                "connect_timeout_sec": {
+                    "description": "ConnectTimeoutSec caps each HTTP round-trip (headers + full body) for pull\nreaders that use net/http (e.g. HLS playlist and segment GETs). Zero uses\nthe reader's default (30s for HLS).",
+                    "type": "integer"
+                },
+                "max_reconnects": {
+                    "description": "MaxReconnects is the total number of reconnect attempts (0 = unlimited).",
+                    "type": "integer"
+                },
+                "read_timeout_sec": {
+                    "description": "ReadTimeoutSec is the max silence duration before declaring the input dead.",
+                    "type": "integer"
+                },
+                "reconnect": {
+                    "description": "Reconnect enables automatic reconnection when the input drops.",
+                    "type": "boolean"
+                },
+                "reconnect_delay_sec": {
+                    "description": "ReconnectDelaySec is the initial delay before the first reconnect attempt.",
+                    "type": "integer"
+                },
+                "reconnect_max_delay_sec": {
+                    "description": "ReconnectMaxDelaySec caps the exponential backoff delay.",
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.OutputProtocols": {
+            "type": "object",
+            "properties": {
+                "dash": {
+                    "description": "DASH enables MPEG-DASH packaging over HTTP.\nRequired for Widevine/PlayReady DRM.",
+                    "type": "boolean"
+                },
+                "hls": {
+                    "description": "HLS enables Apple HTTP Live Streaming (m3u8 + segments over HTTP).\nCompatible with browsers, iOS, Android, Smart TVs.",
+                    "type": "boolean"
+                },
+                "rtmp": {
+                    "description": "RTMP opens an RTMP publish endpoint for legacy players/CDNs.",
+                    "type": "boolean"
+                },
+                "rts": {
+                    "description": "RTS enables WebRTC-based real-time streaming (WHEP endpoint).\nSub-second glass-to-glass latency.",
+                    "type": "boolean"
+                },
+                "rtsp": {
+                    "description": "RTSP opens an RTSP listener for pull clients (VLC, broadcast tools).",
+                    "type": "boolean"
+                },
+                "srt": {
+                    "description": "SRT opens an SRT listener port for contribution-quality pull.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "domain.PushDestination": {
+            "type": "object",
+            "properties": {
+                "comment": {
+                    "description": "Comment is a human-readable note for this destination.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "Enabled controls whether this destination is active.",
+                    "type": "boolean"
+                },
+                "limit": {
+                    "description": "Limit is the maximum number of retry attempts. 0 = unlimited.",
+                    "type": "integer"
+                },
+                "retry_timeout_sec": {
+                    "description": "RetryTimeoutSec is the delay between retry attempts in seconds.",
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "Status is a runtime-only field updated by the publisher.\nNot persisted to storage.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.PushStatus"
+                        }
+                    ]
+                },
+                "timeout_sec": {
+                    "description": "TimeoutSec is the connection/write timeout in seconds.",
+                    "type": "integer"
+                },
+                "url": {
+                    "description": "URL is the destination ingest endpoint.\nE.g. rtmp://a.rtmp.youtube.com/live2/{stream_key}",
+                    "type": "string"
+                }
+            }
+        },
+        "domain.PushStatus": {
+            "type": "string",
+            "enum": [
+                "idle",
+                "connecting",
+                "active",
+                "retrying",
+                "failed",
+                "disabled"
+            ],
+            "x-enum-varnames": [
+                "PushStatusIdle",
+                "PushStatusConnecting",
+                "PushStatusActive",
+                "PushStatusRetrying",
+                "PushStatusFailed",
+                "PushStatusDisabled"
+            ]
+        },
+        "domain.Recording": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Segment"
+                    }
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/domain.RecordingStatus"
+                },
+                "stopped_at": {
+                    "type": "string"
+                },
+                "stream_code": {
+                    "type": "string"
+                },
+                "total_size_bytes": {
+                    "description": "TotalSizeBytes is the sum of all segment sizes. Updated as segments are flushed.",
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.RecordingStatus": {
+            "type": "string",
+            "enum": [
+                "recording",
+                "stopped",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "RecordingStatusRecording",
+                "RecordingStatusStopped",
+                "RecordingStatusFailed"
+            ]
+        },
+        "domain.Segment": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "duration": {
+                    "type": "string",
+                    "example": "6s"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "path": {
+                    "description": "relative path under DVR root dir",
+                    "type": "string"
+                },
+                "size": {
+                    "description": "bytes",
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.Stream": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "description": "Code is the unique key chosen by the user ([a-zA-Z0-9_]).",
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "dvr": {
+                    "description": "DVR overrides the global DVR settings for this specific stream.\nIf nil, the global config is used (when DVR is enabled globally).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.StreamDVRConfig"
+                        }
+                    ]
+                },
+                "inputs": {
+                    "description": "Inputs are the available ingest sources ordered by Priority.\nThe Stream Manager monitors health and switches between them on failure.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Input"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "protocols": {
+                    "description": "Protocols defines which delivery protocols are opened for this stream.\nThe server opens a listener/packager for each enabled protocol.\nProtocol-level config (ports, segment duration, CDN URL) lives in server config.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.OutputProtocols"
+                        }
+                    ]
+                },
+                "push": {
+                    "description": "Push is the list of external destinations the server actively pushes to.\nEach entry defines one push target (YouTube, Facebook, Twitch, CDN relay, etc.).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.PushDestination"
+                    }
+                },
+                "status": {
+                    "description": "Status is the runtime lifecycle state (not persisted between restarts).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.StreamStatus"
+                        }
+                    ]
+                },
+                "stream_key": {
+                    "description": "StreamKey is used to authenticate RTMP/SRT push ingest.",
+                    "type": "string"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "thumbnail": {
+                    "description": "Thumbnail controls periodic screenshot generation for preview images.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.ThumbnailConfig"
+                        }
+                    ]
+                },
+                "transcoder": {
+                    "description": "Transcoder controls encoding/decoding settings.\nnil means no transcoding for this stream.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.TranscoderConfig"
+                        }
+                    ]
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "watermark": {
+                    "description": "Watermark is an optional text or image overlay applied before encoding.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.WatermarkConfig"
+                        }
+                    ]
+                }
+            }
+        },
+        "domain.StreamDVRConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "max_size_gb": {
+                    "description": "MaxSizeGB caps the total disk usage for this stream's recordings.\nWhen exceeded, the oldest segments are pruned. 0 = no limit.",
+                    "type": "number"
+                },
+                "retention_hours": {
+                    "description": "RetentionHours overrides the global retention window.\n0 = keep forever (or use global setting).",
+                    "type": "integer"
+                },
+                "segment_duration": {
+                    "description": "SegmentDuration overrides the global segment length in seconds.\nMust align with the transcoder KeyframeInterval.\n0 = use global default (typically 6s).",
+                    "type": "integer"
+                },
+                "storage_path": {
+                    "description": "StoragePath overrides the global DVR root directory for this stream.\n\"\" = use global DVR root dir.",
+                    "type": "string"
+                }
+            }
+        },
+        "domain.StreamStatus": {
+            "type": "string",
+            "enum": [
+                "idle",
+                "active",
+                "degraded",
+                "stopped"
+            ],
+            "x-enum-varnames": [
+                "StatusIdle",
+                "StatusActive",
+                "StatusDegraded",
+                "StatusStopped"
+            ]
+        },
+        "domain.ThumbnailConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "interval_sec": {
+                    "description": "IntervalSec generates one thumbnail every N seconds.",
+                    "type": "integer"
+                },
+                "output_dir": {
+                    "description": "OutputDir is relative to the publisher HLS directory.\nE.g. \"thumbnails\" → written to {hls_dir}/{stream_code}/thumbnails/thumb.jpg",
+                    "type": "string"
+                },
+                "quality": {
+                    "description": "Quality is the JPEG quality (1–31, lower = better). Default: 5.",
+                    "type": "integer"
+                },
+                "width": {
+                    "description": "Width and Height of the output thumbnail in pixels.\n0 = match source resolution.",
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.TranscoderConfig": {
+            "type": "object",
+            "properties": {
+                "audio": {
+                    "$ref": "#/definitions/domain.AudioTranscodeConfig"
+                },
+                "decoder": {
+                    "$ref": "#/definitions/domain.DecoderConfig"
+                },
+                "extra_args": {
+                    "description": "ExtraArgs are raw FFmpeg arguments appended after the generated command.\nUse with caution — may conflict with generated arguments.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "global": {
+                    "$ref": "#/definitions/domain.TranscoderGlobalConfig"
+                },
+                "video": {
+                    "$ref": "#/definitions/domain.VideoTranscodeConfig"
+                }
+            }
+        },
+        "domain.TranscoderGlobalConfig": {
+            "type": "object",
+            "properties": {
+                "deviceid": {
+                    "description": "DeviceID selects hardware device index.",
+                    "type": "integer"
+                },
+                "external": {
+                    "description": "External indicates transcoding is handled by an external pipeline.",
+                    "type": "boolean"
+                },
+                "fps": {
+                    "description": "FPS sets output framerate. 0 = source/default.",
+                    "type": "integer"
+                },
+                "gop": {
+                    "description": "GOP sets keyframe interval in frames. 0 = encoder default.",
+                    "type": "integer"
+                },
+                "hw": {
+                    "description": "HW selects the acceleration backend.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.HWAccel"
+                        }
+                    ]
+                }
+            }
+        },
+        "domain.VideoCodec": {
+            "type": "string",
+            "enum": [
+                "h264",
+                "h265",
+                "av1",
+                "vp9",
+                "copy"
+            ],
+            "x-enum-comments": {
+                "VideoCodecAV1": "royalty-free, best compression (high CPU)",
+                "VideoCodecCopy": "passthrough — no re-encode",
+                "VideoCodecH264": "AVC — widest device support",
+                "VideoCodecH265": "HEVC — ~50% smaller than H.264",
+                "VideoCodecVP9": "Google codec, WebRTC-friendly"
+            },
+            "x-enum-descriptions": [
+                "AVC — widest device support",
+                "HEVC — ~50% smaller than H.264",
+                "royalty-free, best compression (high CPU)",
+                "Google codec, WebRTC-friendly",
+                "passthrough — no re-encode"
+            ],
+            "x-enum-varnames": [
+                "VideoCodecH264",
+                "VideoCodecH265",
+                "VideoCodecAV1",
+                "VideoCodecVP9",
+                "VideoCodecCopy"
+            ]
+        },
+        "domain.VideoProfile": {
+            "type": "object",
+            "properties": {
+                "bitrate": {
+                    "description": "Bitrate is the target video bitrate in kbps. 0 = encoder auto.",
+                    "type": "integer"
+                },
+                "codec": {
+                    "$ref": "#/definitions/domain.VideoCodec"
+                },
+                "framerate": {
+                    "description": "Framerate is the output frame rate (fps). 0 = match source.",
+                    "type": "number"
+                },
+                "height": {
+                    "type": "integer"
+                },
+                "keyframe_interval": {
+                    "description": "KeyframeInterval is the GOP size in seconds.\nMust match or be a multiple of the HLS/DASH segment duration.",
+                    "type": "integer"
+                },
+                "level": {
+                    "description": "Level controls the H.264/H.265 encoding level.\nCommon: \"3.1\", \"4.0\", \"4.1\", \"4.2\", \"5.0\", \"5.1\"",
+                    "type": "string"
+                },
+                "max_bitrate": {
+                    "description": "MaxBitrate caps the peak bitrate in kbps (CBR/VBR ceiling). 0 = no cap.",
+                    "type": "integer"
+                },
+                "name": {
+                    "description": "Name is the human-readable label, e.g. \"1080p\", \"720p\", \"480p\".",
+                    "type": "string"
+                },
+                "preset": {
+                    "description": "Preset controls the encoder speed/quality tradeoff.\nlibx264: \"ultrafast\" | \"superfast\" | \"veryfast\" | \"faster\" | \"fast\" | \"medium\" | \"slow\" | \"veryslow\"\nNVENC:   \"p1\" (fastest) .. \"p7\" (highest quality)",
+                    "type": "string"
+                },
+                "profile": {
+                    "description": "Profile controls the H.264/H.265 encoding profile.\n\"baseline\" | \"main\" | \"high\" (H.264); \"main\" | \"main10\" (H.265)",
+                    "type": "string"
+                },
+                "width": {
+                    "description": "Width and Height define the output resolution.\nSet to 0 to keep the source dimensions (Width=0 \u0026 Height=0 = no scaling).",
+                    "type": "integer"
+                }
+            }
+        },
+        "domain.VideoTranscodeConfig": {
+            "type": "object",
+            "properties": {
+                "copy": {
+                    "description": "Copy copies origin video without re-encoding.",
+                    "type": "boolean"
+                },
+                "profiles": {
+                    "description": "Profiles defines ABR renditions when re-encoding.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.VideoProfile"
+                    }
+                }
+            }
+        },
+        "domain.WatermarkConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "font_color": {
+                    "description": "FontColor in FFmpeg color syntax. E.g. \"white\", \"#FFFFFF\", \"white@0.8\".",
+                    "type": "string"
+                },
+                "font_file": {
+                    "description": "FontFile is the path to a .ttf/.otf font file.\n\"\" = FFmpeg default font.",
+                    "type": "string"
+                },
+                "font_size": {
+                    "description": "FontSize in pixels. Default: 24.",
+                    "type": "integer"
+                },
+                "image_path": {
+                    "description": "ImagePath is the path to the watermark image (PNG with alpha recommended).",
+                    "type": "string"
+                },
+                "offset_x": {
+                    "description": "OffsetX and OffsetY are pixel offsets from the chosen position edge.",
+                    "type": "integer"
+                },
+                "offset_y": {
+                    "type": "integer"
+                },
+                "opacity": {
+                    "description": "Opacity controls transparency: 0.0 = fully transparent, 1.0 = fully opaque.",
+                    "type": "number"
+                },
+                "position": {
+                    "description": "Position is the corner/center anchor for the watermark.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.WatermarkPosition"
+                        }
+                    ]
+                },
+                "text": {
+                    "description": "Text is the string to render. Supports strftime directives for live timestamps.\nE.g. \"LIVE %{localtime:%H:%M:%S}\"",
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/definitions/domain.WatermarkType"
+                }
+            }
+        },
+        "domain.WatermarkPosition": {
+            "type": "string",
+            "enum": [
+                "top_left",
+                "top_right",
+                "bottom_left",
+                "bottom_right",
+                "center"
+            ],
+            "x-enum-varnames": [
+                "WatermarkTopLeft",
+                "WatermarkTopRight",
+                "WatermarkBottomLeft",
+                "WatermarkBottomRight",
+                "WatermarkCenter"
+            ]
+        },
+        "domain.WatermarkType": {
+            "type": "string",
+            "enum": [
+                "text",
+                "image"
+            ],
+            "x-enum-varnames": [
+                "WatermarkTypeText",
+                "WatermarkTypeImage"
+            ]
+        }
+    }
+}

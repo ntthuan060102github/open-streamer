@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Open Streamer Server",
+        "type": "go",
+        "request": "launch",
+        "mode": "auto",
+        "program": "${workspaceFolder}/cmd/server/main.go",
+        "cwd": "${workspaceFolder}",
+        "envFile": "${workspaceFolder}/.env",
+        "buildFlags": "-tags=dev",
+        "args": ["server"],
+        "showGlobalVariables": false
+      }
+    ]
+  }
+  

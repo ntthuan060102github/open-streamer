@@ -70,7 +70,7 @@ func (s *SRTServer) ListenAndServe(ctx context.Context) error {
 			}
 			slog.Info("srt: publisher connected",
 				"stream_key", streamKey,
-				"stream_id", streamID,
+				"stream_code", streamID,
 				"remote", conn.RemoteAddr(),
 			)
 			handleSRTConn(ctx, conn, streamID, buf)
@@ -95,9 +95,9 @@ func (s *SRTServer) ListenAndServe(ctx context.Context) error {
 }
 
 // handleSRTConn reads MPEG-TS from the SRT connection and writes to the buffer.
-func handleSRTConn(ctx context.Context, conn srt.Conn, streamID domain.StreamID, buf *buffer.Service) {
+func handleSRTConn(ctx context.Context, conn srt.Conn, streamID domain.StreamCode, buf *buffer.Service) {
 	defer conn.Close()
-	defer slog.Info("srt: publisher disconnected", "stream_id", streamID)
+	defer slog.Info("srt: publisher disconnected", "stream_code", streamID)
 
 	readBuf := make([]byte, 1316*4) // read a few SRT payloads at a time
 
@@ -112,7 +112,7 @@ func handleSRTConn(ctx context.Context, conn srt.Conn, streamID domain.StreamID,
 			copy(pkt, readBuf[:n])
 			if writeErr := buf.Write(streamID, buffer.Packet(pkt)); writeErr != nil {
 				slog.Error("srt: buffer write failed",
-					"stream_id", streamID,
+					"stream_code", streamID,
 					"err", writeErr,
 				)
 				return

@@ -10,16 +10,16 @@ import (
 // Config is the root configuration for the entire application.
 // Each module receives only its own sub-config.
 type Config struct {
-	Server      ServerConfig
-	Storage     StorageConfig
-	Ingestor    IngestorConfig
-	Buffer      BufferConfig
-	Transcoder  TranscoderConfig
-	Publisher   PublisherConfig
-	DVR         DVRConfig
-	Hooks       HooksConfig
-	Metrics     MetricsConfig
-	Log         LogConfig
+	Server     ServerConfig
+	Storage    StorageConfig
+	Ingestor   IngestorConfig
+	Buffer     BufferConfig
+	Transcoder TranscoderConfig
+	Publisher  PublisherConfig
+	DVR        DVRConfig
+	Hooks      HooksConfig
+	Metrics    MetricsConfig
+	Log        LogConfig
 }
 
 // ServerConfig holds HTTP/gRPC server settings.
@@ -77,7 +77,18 @@ type TranscoderConfig struct {
 // PublisherConfig controls output delivery.
 type PublisherConfig struct {
 	HLSDir     string `mapstructure:"hls_dir"`
+	DASHDir    string `mapstructure:"dash_dir"`
 	HLSBaseURL string `mapstructure:"hls_base_url"`
+	// LiveEphemeral enables low-retention live output for HLS/DASH.
+	// It keeps only a tiny rolling window and aggressively deletes old segments.
+	LiveEphemeral bool `mapstructure:"live_ephemeral"`
+	// LiveSegmentSec is segment duration in seconds for live outputs.
+	LiveSegmentSec int `mapstructure:"live_segment_sec"`
+	// LiveWindow is the number of segments retained in live playlists/manifests.
+	LiveWindow int `mapstructure:"live_window"`
+	// LiveHistory is extra historical segments kept on disk/RAM for safety.
+	// This helps slow clients recover when they briefly lag behind live edge.
+	LiveHistory int `mapstructure:"live_history"`
 }
 
 // DVRConfig controls server-level DVR infrastructure.
@@ -162,7 +173,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("transcoder.ffmpeg_path", "ffmpeg")
 
 	v.SetDefault("publisher.hls_dir", "./hls")
+	v.SetDefault("publisher.dash_dir", "./dash")
 	v.SetDefault("publisher.hls_base_url", "http://localhost:8080/hls")
+	v.SetDefault("publisher.live_ephemeral", true)
+	v.SetDefault("publisher.live_segment_sec", 2)
+	v.SetDefault("publisher.live_window", 6)
+	v.SetDefault("publisher.live_history", 3)
 
 	v.SetDefault("dvr.enabled", false)
 	v.SetDefault("dvr.root_dir", "./dvr")

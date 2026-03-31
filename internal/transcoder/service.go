@@ -35,7 +35,7 @@ var DefaultProfiles = []Profile{
 
 // worker is a single FFmpeg process handling one stream.
 type worker struct {
-	streamID domain.StreamID
+	streamID domain.StreamCode
 	cancel   context.CancelFunc
 }
 
@@ -45,7 +45,7 @@ type Service struct {
 	buf     *buffer.Service
 	sem     chan struct{} // bounded semaphore to cap concurrent FFmpeg processes
 	mu      sync.Mutex
-	workers map[domain.StreamID]*worker
+	workers map[domain.StreamCode]*worker
 }
 
 // New creates a Service and registers it with the DI injector.
@@ -57,12 +57,12 @@ func New(i do.Injector) (*Service, error) {
 		cfg:     cfg.Transcoder,
 		buf:     buf,
 		sem:     make(chan struct{}, cfg.Transcoder.MaxWorkers),
-		workers: make(map[domain.StreamID]*worker),
+		workers: make(map[domain.StreamCode]*worker),
 	}, nil
 }
 
 // Start subscribes to the buffer and launches an FFmpeg worker for the stream.
-func (s *Service) Start(ctx context.Context, streamID domain.StreamID, profiles []Profile) error {
+func (s *Service) Start(ctx context.Context, streamID domain.StreamCode, profiles []Profile) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -78,7 +78,7 @@ func (s *Service) Start(ctx context.Context, streamID domain.StreamID, profiles 
 }
 
 // Stop cancels the FFmpeg worker for a stream.
-func (s *Service) Stop(streamID domain.StreamID) {
+func (s *Service) Stop(streamID domain.StreamCode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if w, ok := s.workers[streamID]; ok {
@@ -87,7 +87,7 @@ func (s *Service) Stop(streamID domain.StreamID) {
 	}
 }
 
-func (s *Service) runWorker(ctx context.Context, streamID domain.StreamID, profiles []Profile) {
+func (s *Service) runWorker(ctx context.Context, streamID domain.StreamCode, profiles []Profile) {
 	// acquire semaphore slot
 	select {
 	case s.sem <- struct{}{}:
@@ -98,7 +98,7 @@ func (s *Service) runWorker(ctx context.Context, streamID domain.StreamID, profi
 
 	sub, err := s.buf.Subscribe(streamID)
 	if err != nil {
-		slog.Error("transcoder: subscribe failed", "stream_id", streamID, "err", err)
+		slog.Error("transcoder: subscribe failed", "stream_code", streamID, "err", err)
 		return
 	}
 	defer s.buf.Unsubscribe(streamID, sub)
@@ -106,16 +106,16 @@ func (s *Service) runWorker(ctx context.Context, streamID domain.StreamID, profi
 	cmd := s.buildFFmpegCmd(ctx, profiles)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		slog.Error("transcoder: stdin pipe failed", "stream_id", streamID, "err", err)
+		slog.Error("transcoder: stdin pipe failed", "stream_code", streamID, "err", err)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		slog.Error("transcoder: ffmpeg start failed", "stream_id", streamID, "err", err)
+		slog.Error("transcoder: ffmpeg start failed", "stream_code", streamID, "err", err)
 		return
 	}
 
-	slog.Info("transcoder: worker started", "stream_id", streamID, "profiles", len(profiles))
+	slog.Info("transcoder: worker started", "stream_code", streamID, "profiles", len(profiles))
 
 	go func() {
 		defer stdin.Close()
@@ -127,7 +127,7 @@ func (s *Service) runWorker(ctx context.Context, streamID domain.StreamID, profi
 	}()
 
 	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
-		slog.Error("transcoder: ffmpeg exited with error", "stream_id", streamID, "err", err)
+		slog.Error("transcoder: ffmpeg exited with error", "stream_code", streamID, "err", err)
 	}
 }
 

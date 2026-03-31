@@ -16,6 +16,9 @@ type OutputProtocols struct {
 	// RTSP opens an RTSP listener for pull clients (VLC, broadcast tools).
 	RTSP bool `json:"rtsp"`
 
+	// RTMP opens an RTMP publish endpoint for legacy players/CDNs.
+	RTMP bool `json:"rtmp"`
+
 	// SRT opens an SRT listener port for contribution-quality pull.
 	SRT bool `json:"srt"`
 

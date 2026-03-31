@@ -1,0 +1,1253 @@
+basePath: /
+definitions:
+  apidocs.ErrorBody:
+    properties:
+      error:
+        properties:
+          code:
+            type: string
+          message:
+            type: string
+        type: object
+    type: object
+  apidocs.HookData:
+    properties:
+      data:
+        $ref: '#/definitions/domain.Hook'
+    type: object
+  apidocs.HookList:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/domain.Hook'
+        type: array
+      total:
+        type: integer
+    type: object
+  apidocs.HookTestData:
+    properties:
+      data:
+        $ref: '#/definitions/apidocs.HookTestInner'
+    type: object
+  apidocs.HookTestInner:
+    properties:
+      at:
+        type: string
+      status:
+        type: string
+    type: object
+  apidocs.RecordingData:
+    properties:
+      data:
+        $ref: '#/definitions/domain.Recording'
+    type: object
+  apidocs.RecordingList:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/domain.Recording'
+        type: array
+      total:
+        type: integer
+    type: object
+  apidocs.StreamActionData:
+    properties:
+      data:
+        $ref: '#/definitions/apidocs.StreamActionInner'
+    type: object
+  apidocs.StreamActionInner:
+    properties:
+      status:
+        type: string
+    type: object
+  apidocs.StreamData:
+    properties:
+      data:
+        $ref: '#/definitions/domain.Stream'
+    type: object
+  apidocs.StreamList:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/domain.Stream'
+        type: array
+      total:
+        type: integer
+    type: object
+  apidocs.StreamPutRequest:
+    properties:
+      description:
+        type: string
+      dvr:
+        $ref: '#/definitions/domain.StreamDVRConfig'
+      inputs:
+        items:
+          $ref: '#/definitions/domain.Input'
+        type: array
+      name:
+        type: string
+      protocols:
+        $ref: '#/definitions/domain.OutputProtocols'
+      push:
+        items:
+          $ref: '#/definitions/domain.PushDestination'
+        type: array
+      stream_key:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      thumbnail:
+        $ref: '#/definitions/domain.ThumbnailConfig'
+      transcoder:
+        $ref: '#/definitions/domain.TranscoderConfig'
+      watermark:
+        $ref: '#/definitions/domain.WatermarkConfig'
+    type: object
+  apidocs.StreamStatusData:
+    properties:
+      data:
+        additionalProperties: {}
+        type: object
+    type: object
+  domain.AudioCodec:
+    enum:
+    - aac
+    - mp3
+    - opus
+    - ac3
+    - copy
+    type: string
+    x-enum-comments:
+      AudioCodecAAC: default for HLS/DASH
+      AudioCodecAC3: Dolby Digital — broadcast use
+      AudioCodecCopy: passthrough — no re-encode
+      AudioCodecMP3: legacy compatibility
+      AudioCodecOpus: best for WebRTC / low-latency
+    x-enum-descriptions:
+    - default for HLS/DASH
+    - legacy compatibility
+    - best for WebRTC / low-latency
+    - Dolby Digital — broadcast use
+    - passthrough — no re-encode
+    x-enum-varnames:
+    - AudioCodecAAC
+    - AudioCodecMP3
+    - AudioCodecOpus
+    - AudioCodecAC3
+    - AudioCodecCopy
+  domain.AudioTranscodeConfig:
+    properties:
+      bitrate:
+        description: Bitrate is the audio bitrate in kbps.
+        type: integer
+      channels:
+        description: 'Channels: 1 = mono, 2 = stereo, 6 = 5.1.'
+        type: integer
+      codec:
+        $ref: '#/definitions/domain.AudioCodec'
+      copy:
+        description: Copy copies origin audio without re-encoding.
+        type: boolean
+      language:
+        description: Language is ISO 639-1 code, e.g. "en", "vi".
+        type: string
+      normalize:
+        description: Normalize applies EBU R128 loudness normalization.
+        type: boolean
+      sample_rate:
+        description: SampleRate is output sample rate in Hz.
+        type: integer
+    type: object
+  domain.DecoderConfig:
+    properties:
+      name:
+        description: |-
+          Name is the FFmpeg decoder name.
+          "" = let FFmpeg choose automatically.
+          Examples: "h264_cuvid", "h264_qsv".
+        type: string
+    type: object
+  domain.EventType:
+    enum:
+    - stream.created
+    - stream.started
+    - stream.stopped
+    - stream.deleted
+    - input.degraded
+    - input.failed
+    - input.failover
+    - recording.started
+    - recording.stopped
+    - recording.failed
+    - segment.written
+    type: string
+    x-enum-varnames:
+    - EventStreamCreated
+    - EventStreamStarted
+    - EventStreamStopped
+    - EventStreamDeleted
+    - EventInputDegraded
+    - EventInputFailed
+    - EventInputFailover
+    - EventRecordingStarted
+    - EventRecordingStopped
+    - EventRecordingFailed
+    - EventSegmentWritten
+  domain.HWAccel:
+    enum:
+    - none
+    - nvenc
+    - vaapi
+    - videotoolbox
+    - qsv
+    type: string
+    x-enum-comments:
+      HWAccelNVENC: NVIDIA GPU (h264_nvenc, hevc_nvenc)
+      HWAccelNone: CPU only (libx264, libx265)
+      HWAccelQSV: Intel Quick Sync Video
+      HWAccelVAAPI: Intel/AMD GPU via VA-API (Linux)
+      HWAccelVideoToolbox: Apple GPU (macOS)
+    x-enum-descriptions:
+    - CPU only (libx264, libx265)
+    - NVIDIA GPU (h264_nvenc, hevc_nvenc)
+    - Intel/AMD GPU via VA-API (Linux)
+    - Apple GPU (macOS)
+    - Intel Quick Sync Video
+    x-enum-varnames:
+    - HWAccelNone
+    - HWAccelNVENC
+    - HWAccelVAAPI
+    - HWAccelVideoToolbox
+    - HWAccelQSV
+  domain.Hook:
+    properties:
+      enabled:
+        type: boolean
+      event_types:
+        description: EventTypes filters which events trigger delivery. nil = all events.
+        items:
+          $ref: '#/definitions/domain.EventType'
+        type: array
+      id:
+        type: string
+      max_retries:
+        description: |-
+          MaxRetries is the number of delivery attempts before giving up.
+          0 means use the server default (3).
+        type: integer
+      name:
+        type: string
+      secret:
+        description: HMAC-SHA256 signing secret (HTTP only)
+        type: string
+      target:
+        description: HTTP URL, NATS subject, or Kafka topic
+        type: string
+      timeout_sec:
+        description: |-
+          TimeoutSec is the per-attempt delivery timeout in seconds.
+          0 means use the server default (10s).
+        type: integer
+      type:
+        $ref: '#/definitions/domain.HookType'
+    type: object
+  domain.HookType:
+    enum:
+    - http
+    - nats
+    - kafka
+    type: string
+    x-enum-varnames:
+    - HookTypeHTTP
+    - HookTypeNATS
+    - HookTypeKafka
+  domain.Input:
+    properties:
+      headers:
+        additionalProperties:
+          type: string
+        description: |-
+          Headers are arbitrary HTTP headers sent with every request for HTTP/HLS inputs.
+          Common uses:
+            "Authorization": "Bearer <token>"
+            "Authorization": "Basic <base64(user:pass)>"
+            "X-Custom-Token": "secret"
+        type: object
+      net:
+        allOf:
+        - $ref: '#/definitions/domain.InputNetConfig'
+        description: Net controls reconnect and timeout behaviour.
+      params:
+        additionalProperties:
+          type: string
+        description: |-
+          Params are extra URL query parameters merged into the source URL before
+          connecting. Used for protocols that carry credentials or options in the
+          query string (SRT ?passphrase=, S3 ?access_key= / ?secret_key=, etc.).
+            "passphrase": "my-srt-passphrase"
+            "access_key": "AKID..."   (S3)
+            "secret_key": "wJal..."   (S3)
+        type: object
+      priority:
+        description: |-
+          Priority determines failover order. Lower value = higher priority.
+          The Stream Manager always prefers the lowest-priority alive input.
+        type: integer
+      url:
+        description: URL is the source endpoint. See the package doc for supported
+          formats.
+        type: string
+    type: object
+  domain.InputNetConfig:
+    properties:
+      connect_timeout_sec:
+        description: |-
+          ConnectTimeoutSec caps each HTTP round-trip (headers + full body) for pull
+          readers that use net/http (e.g. HLS playlist and segment GETs). Zero uses
+          the reader's default (30s for HLS).
+        type: integer
+      max_reconnects:
+        description: MaxReconnects is the total number of reconnect attempts (0 =
+          unlimited).
+        type: integer
+      read_timeout_sec:
+        description: ReadTimeoutSec is the max silence duration before declaring the
+          input dead.
+        type: integer
+      reconnect:
+        description: Reconnect enables automatic reconnection when the input drops.
+        type: boolean
+      reconnect_delay_sec:
+        description: ReconnectDelaySec is the initial delay before the first reconnect
+          attempt.
+        type: integer
+      reconnect_max_delay_sec:
+        description: ReconnectMaxDelaySec caps the exponential backoff delay.
+        type: integer
+    type: object
+  domain.OutputProtocols:
+    properties:
+      dash:
+        description: |-
+          DASH enables MPEG-DASH packaging over HTTP.
+          Required for Widevine/PlayReady DRM.
+        type: boolean
+      hls:
+        description: |-
+          HLS enables Apple HTTP Live Streaming (m3u8 + segments over HTTP).
+          Compatible with browsers, iOS, Android, Smart TVs.
+        type: boolean
+      rtmp:
+        description: RTMP opens an RTMP publish endpoint for legacy players/CDNs.
+        type: boolean
+      rts:
+        description: |-
+          RTS enables WebRTC-based real-time streaming (WHEP endpoint).
+          Sub-second glass-to-glass latency.
+        type: boolean
+      rtsp:
+        description: RTSP opens an RTSP listener for pull clients (VLC, broadcast
+          tools).
+        type: boolean
+      srt:
+        description: SRT opens an SRT listener port for contribution-quality pull.
+        type: boolean
+    type: object
+  domain.PushDestination:
+    properties:
+      comment:
+        description: Comment is a human-readable note for this destination.
+        type: string
+      enabled:
+        description: Enabled controls whether this destination is active.
+        type: boolean
+      limit:
+        description: Limit is the maximum number of retry attempts. 0 = unlimited.
+        type: integer
+      retry_timeout_sec:
+        description: RetryTimeoutSec is the delay between retry attempts in seconds.
+        type: integer
+      status:
+        allOf:
+        - $ref: '#/definitions/domain.PushStatus'
+        description: |-
+          Status is a runtime-only field updated by the publisher.
+          Not persisted to storage.
+      timeout_sec:
+        description: TimeoutSec is the connection/write timeout in seconds.
+        type: integer
+      url:
+        description: |-
+          URL is the destination ingest endpoint.
+          E.g. rtmp://a.rtmp.youtube.com/live2/{stream_key}
+        type: string
+    type: object
+  domain.PushStatus:
+    enum:
+    - idle
+    - connecting
+    - active
+    - retrying
+    - failed
+    - disabled
+    type: string
+    x-enum-varnames:
+    - PushStatusIdle
+    - PushStatusConnecting
+    - PushStatusActive
+    - PushStatusRetrying
+    - PushStatusFailed
+    - PushStatusDisabled
+  domain.Recording:
+    properties:
+      id:
+        type: string
+      segments:
+        items:
+          $ref: '#/definitions/domain.Segment'
+        type: array
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/domain.RecordingStatus'
+      stopped_at:
+        type: string
+      stream_code:
+        type: string
+      total_size_bytes:
+        description: TotalSizeBytes is the sum of all segment sizes. Updated as segments
+          are flushed.
+        type: integer
+    type: object
+  domain.RecordingStatus:
+    enum:
+    - recording
+    - stopped
+    - failed
+    type: string
+    x-enum-varnames:
+    - RecordingStatusRecording
+    - RecordingStatusStopped
+    - RecordingStatusFailed
+  domain.Segment:
+    properties:
+      created_at:
+        type: string
+      duration:
+        example: 6s
+        type: string
+      index:
+        type: integer
+      path:
+        description: relative path under DVR root dir
+        type: string
+      size:
+        description: bytes
+        type: integer
+    type: object
+  domain.Stream:
+    properties:
+      code:
+        description: Code is the unique key chosen by the user ([a-zA-Z0-9_]).
+        type: string
+      created_at:
+        type: string
+      description:
+        type: string
+      dvr:
+        allOf:
+        - $ref: '#/definitions/domain.StreamDVRConfig'
+        description: |-
+          DVR overrides the global DVR settings for this specific stream.
+          If nil, the global config is used (when DVR is enabled globally).
+      inputs:
+        description: |-
+          Inputs are the available ingest sources ordered by Priority.
+          The Stream Manager monitors health and switches between them on failure.
+        items:
+          $ref: '#/definitions/domain.Input'
+        type: array
+      name:
+        type: string
+      protocols:
+        allOf:
+        - $ref: '#/definitions/domain.OutputProtocols'
+        description: |-
+          Protocols defines which delivery protocols are opened for this stream.
+          The server opens a listener/packager for each enabled protocol.
+          Protocol-level config (ports, segment duration, CDN URL) lives in server config.
+      push:
+        description: |-
+          Push is the list of external destinations the server actively pushes to.
+          Each entry defines one push target (YouTube, Facebook, Twitch, CDN relay, etc.).
+        items:
+          $ref: '#/definitions/domain.PushDestination'
+        type: array
+      status:
+        allOf:
+        - $ref: '#/definitions/domain.StreamStatus'
+        description: Status is the runtime lifecycle state (not persisted between
+          restarts).
+      stream_key:
+        description: StreamKey is used to authenticate RTMP/SRT push ingest.
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      thumbnail:
+        allOf:
+        - $ref: '#/definitions/domain.ThumbnailConfig'
+        description: Thumbnail controls periodic screenshot generation for preview
+          images.
+      transcoder:
+        allOf:
+        - $ref: '#/definitions/domain.TranscoderConfig'
+        description: |-
+          Transcoder controls encoding/decoding settings.
+          nil means no transcoding for this stream.
+      updated_at:
+        type: string
+      watermark:
+        allOf:
+        - $ref: '#/definitions/domain.WatermarkConfig'
+        description: Watermark is an optional text or image overlay applied before
+          encoding.
+    type: object
+  domain.StreamDVRConfig:
+    properties:
+      enabled:
+        type: boolean
+      max_size_gb:
+        description: |-
+          MaxSizeGB caps the total disk usage for this stream's recordings.
+          When exceeded, the oldest segments are pruned. 0 = no limit.
+        type: number
+      retention_hours:
+        description: |-
+          RetentionHours overrides the global retention window.
+          0 = keep forever (or use global setting).
+        type: integer
+      segment_duration:
+        description: |-
+          SegmentDuration overrides the global segment length in seconds.
+          Must align with the transcoder KeyframeInterval.
+          0 = use global default (typically 6s).
+        type: integer
+      storage_path:
+        description: |-
+          StoragePath overrides the global DVR root directory for this stream.
+          "" = use global DVR root dir.
+        type: string
+    type: object
+  domain.StreamStatus:
+    enum:
+    - idle
+    - active
+    - degraded
+    - stopped
+    type: string
+    x-enum-varnames:
+    - StatusIdle
+    - StatusActive
+    - StatusDegraded
+    - StatusStopped
+  domain.ThumbnailConfig:
+    properties:
+      enabled:
+        type: boolean
+      height:
+        type: integer
+      interval_sec:
+        description: IntervalSec generates one thumbnail every N seconds.
+        type: integer
+      output_dir:
+        description: |-
+          OutputDir is relative to the publisher HLS directory.
+          E.g. "thumbnails" → written to {hls_dir}/{stream_code}/thumbnails/thumb.jpg
+        type: string
+      quality:
+        description: 'Quality is the JPEG quality (1–31, lower = better). Default:
+          5.'
+        type: integer
+      width:
+        description: |-
+          Width and Height of the output thumbnail in pixels.
+          0 = match source resolution.
+        type: integer
+    type: object
+  domain.TranscoderConfig:
+    properties:
+      audio:
+        $ref: '#/definitions/domain.AudioTranscodeConfig'
+      decoder:
+        $ref: '#/definitions/domain.DecoderConfig'
+      extra_args:
+        description: |-
+          ExtraArgs are raw FFmpeg arguments appended after the generated command.
+          Use with caution — may conflict with generated arguments.
+        items:
+          type: string
+        type: array
+      global:
+        $ref: '#/definitions/domain.TranscoderGlobalConfig'
+      video:
+        $ref: '#/definitions/domain.VideoTranscodeConfig'
+    type: object
+  domain.TranscoderGlobalConfig:
+    properties:
+      deviceid:
+        description: DeviceID selects hardware device index.
+        type: integer
+      external:
+        description: External indicates transcoding is handled by an external pipeline.
+        type: boolean
+      fps:
+        description: FPS sets output framerate. 0 = source/default.
+        type: integer
+      gop:
+        description: GOP sets keyframe interval in frames. 0 = encoder default.
+        type: integer
+      hw:
+        allOf:
+        - $ref: '#/definitions/domain.HWAccel'
+        description: HW selects the acceleration backend.
+    type: object
+  domain.VideoCodec:
+    enum:
+    - h264
+    - h265
+    - av1
+    - vp9
+    - copy
+    type: string
+    x-enum-comments:
+      VideoCodecAV1: royalty-free, best compression (high CPU)
+      VideoCodecCopy: passthrough — no re-encode
+      VideoCodecH264: AVC — widest device support
+      VideoCodecH265: HEVC — ~50% smaller than H.264
+      VideoCodecVP9: Google codec, WebRTC-friendly
+    x-enum-descriptions:
+    - AVC — widest device support
+    - HEVC — ~50% smaller than H.264
+    - royalty-free, best compression (high CPU)
+    - Google codec, WebRTC-friendly
+    - passthrough — no re-encode
+    x-enum-varnames:
+    - VideoCodecH264
+    - VideoCodecH265
+    - VideoCodecAV1
+    - VideoCodecVP9
+    - VideoCodecCopy
+  domain.VideoProfile:
+    properties:
+      bitrate:
+        description: Bitrate is the target video bitrate in kbps. 0 = encoder auto.
+        type: integer
+      codec:
+        $ref: '#/definitions/domain.VideoCodec'
+      framerate:
+        description: Framerate is the output frame rate (fps). 0 = match source.
+        type: number
+      height:
+        type: integer
+      keyframe_interval:
+        description: |-
+          KeyframeInterval is the GOP size in seconds.
+          Must match or be a multiple of the HLS/DASH segment duration.
+        type: integer
+      level:
+        description: |-
+          Level controls the H.264/H.265 encoding level.
+          Common: "3.1", "4.0", "4.1", "4.2", "5.0", "5.1"
+        type: string
+      max_bitrate:
+        description: MaxBitrate caps the peak bitrate in kbps (CBR/VBR ceiling). 0
+          = no cap.
+        type: integer
+      name:
+        description: Name is the human-readable label, e.g. "1080p", "720p", "480p".
+        type: string
+      preset:
+        description: |-
+          Preset controls the encoder speed/quality tradeoff.
+          libx264: "ultrafast" | "superfast" | "veryfast" | "faster" | "fast" | "medium" | "slow" | "veryslow"
+          NVENC:   "p1" (fastest) .. "p7" (highest quality)
+        type: string
+      profile:
+        description: |-
+          Profile controls the H.264/H.265 encoding profile.
+          "baseline" | "main" | "high" (H.264); "main" | "main10" (H.265)
+        type: string
+      width:
+        description: |-
+          Width and Height define the output resolution.
+          Set to 0 to keep the source dimensions (Width=0 & Height=0 = no scaling).
+        type: integer
+    type: object
+  domain.VideoTranscodeConfig:
+    properties:
+      copy:
+        description: Copy copies origin video without re-encoding.
+        type: boolean
+      profiles:
+        description: Profiles defines ABR renditions when re-encoding.
+        items:
+          $ref: '#/definitions/domain.VideoProfile'
+        type: array
+    type: object
+  domain.WatermarkConfig:
+    properties:
+      enabled:
+        type: boolean
+      font_color:
+        description: FontColor in FFmpeg color syntax. E.g. "white", "#FFFFFF", "white@0.8".
+        type: string
+      font_file:
+        description: |-
+          FontFile is the path to a .ttf/.otf font file.
+          "" = FFmpeg default font.
+        type: string
+      font_size:
+        description: 'FontSize in pixels. Default: 24.'
+        type: integer
+      image_path:
+        description: ImagePath is the path to the watermark image (PNG with alpha
+          recommended).
+        type: string
+      offset_x:
+        description: OffsetX and OffsetY are pixel offsets from the chosen position
+          edge.
+        type: integer
+      offset_y:
+        type: integer
+      opacity:
+        description: 'Opacity controls transparency: 0.0 = fully transparent, 1.0
+          = fully opaque.'
+        type: number
+      position:
+        allOf:
+        - $ref: '#/definitions/domain.WatermarkPosition'
+        description: Position is the corner/center anchor for the watermark.
+      text:
+        description: |-
+          Text is the string to render. Supports strftime directives for live timestamps.
+          E.g. "LIVE %{localtime:%H:%M:%S}"
+        type: string
+      type:
+        $ref: '#/definitions/domain.WatermarkType'
+    type: object
+  domain.WatermarkPosition:
+    enum:
+    - top_left
+    - top_right
+    - bottom_left
+    - bottom_right
+    - center
+    type: string
+    x-enum-varnames:
+    - WatermarkTopLeft
+    - WatermarkTopRight
+    - WatermarkBottomLeft
+    - WatermarkBottomRight
+    - WatermarkCenter
+  domain.WatermarkType:
+    enum:
+    - text
+    - image
+    type: string
+    x-enum-varnames:
+    - WatermarkTypeText
+    - WatermarkTypeImage
+info:
+  contact: {}
+  description: REST API for live stream configuration, ingest/publish lifecycle, DVR
+    recordings, and event hooks.
+  title: Open Streamer API
+  version: "1.0"
+paths:
+  /healthz:
+    get:
+      description: Returns 200 if the process is up.
+      responses:
+        "200":
+          description: ok
+          schema:
+            type: string
+      summary: Liveness
+      tags:
+      - system
+  /hooks:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.HookList'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: List hooks
+      tags:
+      - hooks
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Hook configuration
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.Hook'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/apidocs.HookData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Create hook
+      tags:
+      - hooks
+  /hooks/{hid}:
+    delete:
+      parameters:
+      - description: Hook ID
+        in: path
+        name: hid
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Delete hook
+      tags:
+      - hooks
+    get:
+      parameters:
+      - description: Hook ID
+        in: path
+        name: hid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.HookData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Get hook
+      tags:
+      - hooks
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Hook ID
+        in: path
+        name: hid
+        required: true
+        type: string
+      - description: Hook configuration
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.Hook'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.HookData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Update hook
+      tags:
+      - hooks
+  /hooks/{hid}/test:
+    post:
+      parameters:
+      - description: Hook ID
+        in: path
+        name: hid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.HookTestData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Test hook delivery
+      tags:
+      - hooks
+  /readyz:
+    get:
+      description: Returns 200 when the server accepts traffic (basic check).
+      responses:
+        "200":
+          description: ok
+          schema:
+            type: string
+      summary: Readiness
+      tags:
+      - system
+  /recordings/{rid}:
+    delete:
+      parameters:
+      - description: Recording ID
+        in: path
+        name: rid
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Delete recording
+      tags:
+      - recordings
+    get:
+      parameters:
+      - description: Recording ID
+        in: path
+        name: rid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.RecordingData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Get recording
+      tags:
+      - recordings
+  /recordings/{rid}/playlist.m3u8:
+    get:
+      parameters:
+      - description: Recording ID
+        in: path
+        name: rid
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: M3U8 body
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Recording VOD playlist
+      tags:
+      - recordings
+  /streams:
+    get:
+      parameters:
+      - description: Filter by status
+        in: query
+        name: status
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: List streams
+      tags:
+      - streams
+  /streams/{code}:
+    delete:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Delete stream
+      tags:
+      - streams
+    get:
+      parameters:
+      - description: Stream code (a-zA-Z0-9_)
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Get stream
+      tags:
+      - streams
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      - description: Full stream document
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/apidocs.StreamPutRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamData'
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/apidocs.StreamData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Create or update stream
+      tags:
+      - streams
+  /streams/{code}/recordings:
+    get:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.RecordingList'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: List recordings by stream
+      tags:
+      - recordings
+  /streams/{code}/recordings/start:
+    post:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/apidocs.RecordingData'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Start recording
+      tags:
+      - recordings
+  /streams/{code}/recordings/stop:
+    post:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamActionData'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Stop recording
+      tags:
+      - recordings
+  /streams/{code}/start:
+    post:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamActionData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Start stream pipeline
+      tags:
+      - streams
+  /streams/{code}/status:
+    get:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamStatusData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Stream status
+      tags:
+      - streams
+  /streams/{code}/stop:
+    post:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamActionData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Stop stream pipeline
+      tags:
+      - streams
+swagger: "2.0"

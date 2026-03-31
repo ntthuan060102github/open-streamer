@@ -97,7 +97,7 @@ func TestWaitBackoff_TimerFires(t *testing.T) {
 func TestReadLoop_WritesPacketsToBuffer(t *testing.T) {
 	t.Parallel()
 
-	streamID := domain.StreamID("test-stream")
+	streamID := domain.StreamCode("test-stream")
 	buf := buffer.NewServiceForTesting(128)
 	buf.Create(streamID)
 
@@ -112,7 +112,7 @@ func TestReadLoop_WritesPacketsToBuffer(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- readLoop(context.Background(), streamID, domain.Input{}, r, buf)
+		errCh <- readLoop(context.Background(), streamID, domain.Input{}, r, buf, nil)
 	}()
 
 	var received [][]byte
@@ -137,7 +137,7 @@ func TestReadLoop_WritesPacketsToBuffer(t *testing.T) {
 func TestReadLoop_ContextCancelled(t *testing.T) {
 	t.Parallel()
 
-	streamID := domain.StreamID("stream-ctx")
+	streamID := domain.StreamCode("stream-ctx")
 	buf := buffer.NewServiceForTesting(32)
 	buf.Create(streamID)
 
@@ -149,7 +149,7 @@ func TestReadLoop_ContextCancelled(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		cancel()
-		errCh <- readLoop(ctx, streamID, domain.Input{}, r, buf)
+		errCh <- readLoop(ctx, streamID, domain.Input{}, r, buf, nil)
 	}()
 
 	select {
@@ -163,7 +163,7 @@ func TestReadLoop_ContextCancelled(t *testing.T) {
 func TestReadLoop_SkipsEmptyPackets(t *testing.T) {
 	t.Parallel()
 
-	streamID := domain.StreamID("stream-empty")
+	streamID := domain.StreamCode("stream-empty")
 	buf := buffer.NewServiceForTesting(32)
 	buf.Create(streamID)
 
@@ -177,7 +177,7 @@ func TestReadLoop_SkipsEmptyPackets(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- readLoop(context.Background(), streamID, domain.Input{}, r, buf)
+		done <- readLoop(context.Background(), streamID, domain.Input{}, r, buf, nil)
 	}()
 
 	select {
@@ -194,7 +194,7 @@ func TestReadLoop_SkipsEmptyPackets(t *testing.T) {
 func TestRunPullWorker_ReadsAndWritesToBuffer(t *testing.T) {
 	t.Parallel()
 
-	streamID := domain.StreamID("worker-stream")
+	streamID := domain.StreamCode("worker-stream")
 	buf := buffer.NewServiceForTesting(128)
 	buf.Create(streamID)
 
@@ -212,7 +212,7 @@ func TestRunPullWorker_ReadsAndWritesToBuffer(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runPullWorker(ctx, streamID, domain.Input{ID: "i1"}, r, buf)
+		runPullWorker(ctx, streamID, domain.Input{Priority: 0}, r, buf, nil, nil)
 	}()
 
 	select {
@@ -232,7 +232,7 @@ func TestRunPullWorker_ReadsAndWritesToBuffer(t *testing.T) {
 func TestRunPullWorker_StopsOnContextCancel(t *testing.T) {
 	t.Parallel()
 
-	streamID := domain.StreamID("cancel-stream")
+	streamID := domain.StreamCode("cancel-stream")
 	buf := buffer.NewServiceForTesting(32)
 	buf.Create(streamID)
 
@@ -246,7 +246,7 @@ func TestRunPullWorker_StopsOnContextCancel(t *testing.T) {
 	go func() {
 		defer close(done)
 		r.packets = [][]byte{endlessPkt, endlessPkt, endlessPkt}
-		runPullWorker(ctx, streamID, domain.Input{ID: "i1"}, r, buf)
+		runPullWorker(ctx, streamID, domain.Input{Priority: 0}, r, buf, nil, nil)
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -262,7 +262,7 @@ func TestRunPullWorker_StopsOnContextCancel(t *testing.T) {
 func TestRunPullWorker_ReconnectsAfterOpenError(t *testing.T) {
 	t.Parallel()
 
-	streamID := domain.StreamID("reconnect-stream")
+	streamID := domain.StreamCode("reconnect-stream")
 	buf := buffer.NewServiceForTesting(64)
 	buf.Create(streamID)
 
@@ -305,7 +305,7 @@ func TestRunPullWorker_ReconnectsAfterOpenError(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		runPullWorker(ctx, streamID, domain.Input{ID: "i1"}, origReader, buf)
+		runPullWorker(ctx, streamID, domain.Input{Priority: 0}, origReader, buf, nil, nil)
 	}()
 
 	select {
@@ -323,6 +323,6 @@ type controlledReader struct {
 	closeFn func() error
 }
 
-func (c *controlledReader) Open(_ context.Context) error  { return c.openFn() }
+func (c *controlledReader) Open(_ context.Context) error           { return c.openFn() }
 func (c *controlledReader) Read(_ context.Context) ([]byte, error) { return c.readFn() }
 func (c *controlledReader) Close() error                           { return c.closeFn() }

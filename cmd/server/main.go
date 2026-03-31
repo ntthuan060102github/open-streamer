@@ -16,6 +16,7 @@ import (
 	"github.com/open-streamer/open-streamer/internal/api"
 	"github.com/open-streamer/open-streamer/internal/api/handler"
 	"github.com/open-streamer/open-streamer/internal/buffer"
+	"github.com/open-streamer/open-streamer/internal/coordinator"
 	"github.com/open-streamer/open-streamer/internal/dvr"
 	"github.com/open-streamer/open-streamer/internal/events"
 	"github.com/open-streamer/open-streamer/internal/hooks"
@@ -23,6 +24,7 @@ import (
 	"github.com/open-streamer/open-streamer/internal/manager"
 	"github.com/open-streamer/open-streamer/internal/metrics"
 	"github.com/open-streamer/open-streamer/internal/publisher"
+	"github.com/open-streamer/open-streamer/internal/store"
 	jsonstore "github.com/open-streamer/open-streamer/internal/store/json"
 	"github.com/open-streamer/open-streamer/internal/transcoder"
 	"github.com/open-streamer/open-streamer/pkg/logger"
@@ -87,6 +89,7 @@ func wire(i *do.RootScope, cfg *config.Config) error {
 	do.Provide(i, dvr.New)
 	do.Provide(i, hooks.New)
 	do.Provide(i, metrics.New)
+	do.Provide(i, coordinator.New)
 
 	// API handlers
 	do.Provide(i, handler.NewStreamHandler)
@@ -103,10 +106,20 @@ func startAll(ctx context.Context, i *do.RootScope) error {
 	bus := do.MustInvoke[events.Bus](i)
 	events.Start(ctx, bus)
 
+	ing := do.MustInvoke[*ingestor.Service](i)
+	coord := do.MustInvoke[*coordinator.Coordinator](i)
+	streamRepo := do.MustInvoke[store.StreamRepository](i)
+
 	hookSvc := do.MustInvoke[*hooks.Service](i)
 	apiSrv := do.MustInvoke[*api.Server](i)
 
 	g, gCtx := errgroup.WithContext(ctx)
+
+	g.Go(func() error { return ing.Run(gCtx) })
+
+	// Best-effort: let RTMP/SRT listeners bind before registering push routes from persisted streams.
+	time.Sleep(50 * time.Millisecond)
+	coordinator.BootstrapPersistedStreams(ctx, slog.Default(), streamRepo, coord)
 
 	g.Go(func() error { return hookSvc.Start(gCtx) })
 	g.Go(func() error { return apiSrv.Start(gCtx) })

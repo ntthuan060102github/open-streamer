@@ -5,9 +5,13 @@ package store
 
 import (
 	"context"
+	"errors"
 
 	"github.com/open-streamer/open-streamer/internal/domain"
 )
+
+// ErrNotFound is returned by lookups when the entity does not exist.
+var ErrNotFound = errors.New("store: not found")
 
 // StreamFilter holds optional filters for listing streams.
 type StreamFilter struct {
@@ -17,16 +21,16 @@ type StreamFilter struct {
 // StreamRepository persists stream configurations and state.
 type StreamRepository interface {
 	Save(ctx context.Context, stream *domain.Stream) error
-	FindByID(ctx context.Context, id domain.StreamID) (*domain.Stream, error)
+	FindByCode(ctx context.Context, code domain.StreamCode) (*domain.Stream, error)
 	List(ctx context.Context, filter StreamFilter) ([]*domain.Stream, error)
-	Delete(ctx context.Context, id domain.StreamID) error
+	Delete(ctx context.Context, code domain.StreamCode) error
 }
 
 // RecordingRepository persists DVR recording metadata.
 type RecordingRepository interface {
 	Save(ctx context.Context, rec *domain.Recording) error
 	FindByID(ctx context.Context, id domain.RecordingID) (*domain.Recording, error)
-	ListByStream(ctx context.Context, streamID domain.StreamID) ([]*domain.Recording, error)
+	ListByStream(ctx context.Context, streamCode domain.StreamCode) ([]*domain.Recording, error)
 	Delete(ctx context.Context, id domain.RecordingID) error
 }
 

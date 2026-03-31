@@ -2,7 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+
+	"github.com/open-streamer/open-streamer/internal/store"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -18,4 +21,12 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "STORE_ERROR", err.Error())
 }

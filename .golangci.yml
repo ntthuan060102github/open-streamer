@@ -7,7 +7,6 @@ linters:
     - staticcheck
     - revive
     - exhaustive
-    - gofumpt
     - misspell
     - bodyclose
     - contextcheck
@@ -16,6 +15,14 @@ linters:
     - unparam
     - prealloc
     - nilerr
+
+# gofumpt is a formatter in v2, not a linter — see https://golangci-lint.run/docs/formatters/
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      module-path: github.com/open-streamer/open-streamer
 
 linters-settings:
   exhaustive:

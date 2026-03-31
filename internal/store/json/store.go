@@ -84,18 +84,18 @@ func (r *streamRepo) Save(_ context.Context, stream *domain.Stream) error {
 	if err != nil {
 		return err
 	}
-	streams[string(stream.ID)] = stream
+	streams[string(stream.Code)] = stream
 	return r.s.writeAll("streams.json", streams)
 }
 
-func (r *streamRepo) FindByID(_ context.Context, id domain.StreamID) (*domain.Stream, error) {
+func (r *streamRepo) FindByCode(_ context.Context, code domain.StreamCode) (*domain.Stream, error) {
 	streams, err := r.load()
 	if err != nil {
 		return nil, err
 	}
-	s, ok := streams[string(id)]
+	s, ok := streams[string(code)]
 	if !ok {
-		return nil, fmt.Errorf("stream %s: %w", id, os.ErrNotExist)
+		return nil, fmt.Errorf("stream %s: %w", code, store.ErrNotFound)
 	}
 	return s, nil
 }
@@ -115,12 +115,12 @@ func (r *streamRepo) List(_ context.Context, filter store.StreamFilter) ([]*doma
 	return result, nil
 }
 
-func (r *streamRepo) Delete(_ context.Context, id domain.StreamID) error {
+func (r *streamRepo) Delete(_ context.Context, code domain.StreamCode) error {
 	streams, err := r.load()
 	if err != nil {
 		return err
 	}
-	delete(streams, string(id))
+	delete(streams, string(code))
 	return r.s.writeAll("streams.json", streams)
 }
 
@@ -149,19 +149,19 @@ func (r *recordingRepo) FindByID(_ context.Context, id domain.RecordingID) (*dom
 	}
 	rec, ok := recs[string(id)]
 	if !ok {
-		return nil, fmt.Errorf("recording %s: %w", id, os.ErrNotExist)
+		return nil, fmt.Errorf("recording %s: %w", id, store.ErrNotFound)
 	}
 	return rec, nil
 }
 
-func (r *recordingRepo) ListByStream(_ context.Context, streamID domain.StreamID) ([]*domain.Recording, error) {
+func (r *recordingRepo) ListByStream(_ context.Context, streamCode domain.StreamCode) ([]*domain.Recording, error) {
 	recs, err := r.load()
 	if err != nil {
 		return nil, err
 	}
 	result := make([]*domain.Recording, 0)
 	for _, rec := range recs {
-		if rec.StreamID == streamID {
+		if rec.StreamCode == streamCode {
 			result = append(result, rec)
 		}
 	}
@@ -202,7 +202,7 @@ func (r *hookRepo) FindByID(_ context.Context, id domain.HookID) (*domain.Hook, 
 	}
 	h, ok := hooks[string(id)]
 	if !ok {
-		return nil, fmt.Errorf("hook %s: %w", id, os.ErrNotExist)
+		return nil, fmt.Errorf("hook %s: %w", id, store.ErrNotFound)
 	}
 	return h, nil
 }

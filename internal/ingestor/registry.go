@@ -17,8 +17,7 @@ type Registry struct {
 }
 
 type registryEntry struct {
-	streamID domain.StreamID
-	inputID  string
+	streamID domain.StreamCode
 	buf      *buffer.Service
 }
 
@@ -29,12 +28,11 @@ func NewRegistry() *Registry {
 
 // Register maps key (stream key or SRT stream ID) to a stream's buffer.
 // Registering the same key twice overwrites the previous entry.
-func (r *Registry) Register(key string, streamID domain.StreamID, inputID string, buf *buffer.Service) {
+func (r *Registry) Register(key string, streamID domain.StreamCode, buf *buffer.Service) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.entries[key] = registryEntry{
 		streamID: streamID,
-		inputID:  inputID,
 		buf:      buf,
 	}
 }
@@ -47,7 +45,7 @@ func (r *Registry) Unregister(key string) {
 }
 
 // Lookup returns the buffer associated with key, or an error if not found.
-func (r *Registry) Lookup(key string) (domain.StreamID, *buffer.Service, error) {
+func (r *Registry) Lookup(key string) (domain.StreamCode, *buffer.Service, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	e, ok := r.entries[key]

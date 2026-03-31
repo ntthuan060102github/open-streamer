@@ -67,7 +67,7 @@ func (rb *ringBuffer) unsubscribe(s *Subscriber) {
 type Service struct {
 	cfg     config.BufferConfig
 	mu      sync.RWMutex
-	buffers map[domain.StreamID]*ringBuffer
+	buffers map[domain.StreamCode]*ringBuffer
 }
 
 // New creates a Service and registers it with the DI injector.
@@ -75,7 +75,7 @@ func New(i do.Injector) (*Service, error) {
 	cfg := do.MustInvoke[*config.Config](i)
 	return &Service{
 		cfg:     cfg.Buffer,
-		buffers: make(map[domain.StreamID]*ringBuffer),
+		buffers: make(map[domain.StreamCode]*ringBuffer),
 	}, nil
 }
 
@@ -83,12 +83,12 @@ func New(i do.Injector) (*Service, error) {
 func NewServiceForTesting(capacity int) *Service {
 	return &Service{
 		cfg:     config.BufferConfig{Capacity: capacity},
-		buffers: make(map[domain.StreamID]*ringBuffer),
+		buffers: make(map[domain.StreamCode]*ringBuffer),
 	}
 }
 
 // Create initialises a ring buffer for the given stream.
-func (s *Service) Create(id domain.StreamID) {
+func (s *Service) Create(id domain.StreamCode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.buffers[id]; !ok {
@@ -98,7 +98,7 @@ func (s *Service) Create(id domain.StreamID) {
 
 // Write pushes a packet into the stream's ring buffer.
 // Only the active Ingestor goroutine for this stream should call Write.
-func (s *Service) Write(id domain.StreamID, pkt Packet) error {
+func (s *Service) Write(id domain.StreamCode, pkt Packet) error {
 	s.mu.RLock()
 	rb, ok := s.buffers[id]
 	s.mu.RUnlock()
@@ -111,7 +111,7 @@ func (s *Service) Write(id domain.StreamID, pkt Packet) error {
 
 // Subscribe registers a new consumer for the stream's buffer.
 // The caller must call Unsubscribe when done to avoid a goroutine/channel leak.
-func (s *Service) Subscribe(id domain.StreamID) (*Subscriber, error) {
+func (s *Service) Subscribe(id domain.StreamCode) (*Subscriber, error) {
 	s.mu.RLock()
 	rb, ok := s.buffers[id]
 	s.mu.RUnlock()
@@ -122,7 +122,7 @@ func (s *Service) Subscribe(id domain.StreamID) (*Subscriber, error) {
 }
 
 // Unsubscribe removes a consumer and closes its channel.
-func (s *Service) Unsubscribe(id domain.StreamID, sub *Subscriber) {
+func (s *Service) Unsubscribe(id domain.StreamCode, sub *Subscriber) {
 	s.mu.RLock()
 	rb, ok := s.buffers[id]
 	s.mu.RUnlock()
@@ -132,7 +132,7 @@ func (s *Service) Unsubscribe(id domain.StreamID, sub *Subscriber) {
 }
 
 // Delete removes the ring buffer for a stream (call when stream is stopped).
-func (s *Service) Delete(id domain.StreamID) {
+func (s *Service) Delete(id domain.StreamCode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.buffers, id)

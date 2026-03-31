@@ -22,7 +22,7 @@ import (
 // Registry maps a stream key to the stream's buffer hub slot.
 // Implemented by ingestor.Registry and injected at construction time.
 type Registry interface {
-	Lookup(key string) (domain.StreamID, *buffer.Service, error)
+	Lookup(key string) (domain.StreamCode, *buffer.Service, error)
 }
 
 // RTMPServer is a single-port RTMP push server.
@@ -99,7 +99,7 @@ type rtmpSession struct {
 	audioPid uint16
 	hasVideo bool
 	hasAudio bool
-	streamID domain.StreamID
+	streamID domain.StreamCode
 	buf      *buffer.Service
 }
 
@@ -112,7 +112,7 @@ func (s *rtmpSession) run() {
 		pkt := make([]byte, len(pkg))
 		copy(pkt, pkg)
 		if err := s.buf.Write(s.streamID, buffer.Packet(pkt)); err != nil {
-			slog.Error("rtmp: buffer write failed", "stream_id", s.streamID, "err", err)
+			slog.Error("rtmp: buffer write failed", "stream_code", s.streamID, "err", err)
 		}
 	}
 
@@ -132,7 +132,7 @@ func (s *rtmpSession) run() {
 		s.streamID = streamID
 		s.buf = buf
 		s.mu.Unlock()
-		slog.Info("rtmp: publisher connected", "stream_key", streamName, "stream_id", streamID)
+		slog.Info("rtmp: publisher connected", "stream_key", streamName, "stream_code", streamID)
 		return gortmp.NETSTREAM_PUBLISH_START
 	})
 

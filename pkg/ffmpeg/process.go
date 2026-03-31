@@ -6,11 +6,15 @@ package ffmpeg
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Process wraps an FFmpeg subprocess with stdin/stdout pipes.
@@ -25,6 +29,7 @@ type Process struct {
 // stderr lines are logged (DEBUG level, ERROR for fatal lines).
 func Start(ctx context.Context, ffmpegPath string, args []string) (*Process, error) {
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -56,6 +61,46 @@ func Start(ctx context.Context, ffmpegPath string, args []string) (*Process, err
 // Wait waits for the FFmpeg process to exit and returns any error.
 func (p *Process) Wait() error {
 	return p.cmd.Wait()
+}
+
+// Close terminates the FFmpeg process and closes stdin.
+// Safe to call multiple times.
+func (p *Process) Close() error {
+	if p.Stdin != nil {
+		_ = p.Stdin.Close()
+	}
+	if p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
+
+	pid := p.cmd.Process.Pid
+	if pid <= 0 {
+		return nil
+	}
+
+	// Send SIGTERM to the whole process group first.
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("ffmpeg: term process group: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- p.cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err == nil || errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		// Process exited with non-zero after TERM; treat as closed.
+		return nil
+	case <-time.After(2 * time.Second):
+		// Escalate to SIGKILL for the whole process group.
+		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("ffmpeg: kill process group: %w", err)
+		}
+		<-done
+		return nil
+	}
 }
 
 // PID returns the process ID of the running FFmpeg process.

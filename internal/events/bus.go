@@ -67,7 +67,7 @@ func (b *inProcessBus) Publish(_ context.Context, event domain.Event) {
 	default:
 		slog.Warn("event bus: queue full, dropping event",
 			"event_type", event.Type,
-			"stream_id", event.StreamID,
+			"stream_code", event.StreamCode,
 		)
 	}
 }
@@ -115,7 +115,7 @@ func (b *inProcessBus) dispatch(ctx context.Context, event domain.Event) {
 		if err := h(ctx, event); err != nil {
 			slog.Error("event bus: handler error",
 				"event_type", event.Type,
-				"stream_id", event.StreamID,
+				"stream_code", event.StreamCode,
 				"err", err,
 			)
 		}
