@@ -35,14 +35,14 @@ func New(i do.Injector) (*Server, error) {
 	recordingHandler := do.MustInvoke[*handler.RecordingHandler](i)
 	hookHandler := do.MustInvoke[*handler.HookHandler](i)
 
-	dashDir := cfg.Publisher.DASHDir
-	if strings.TrimSpace(dashDir) == "" {
-		dashDir = cfg.Publisher.HLSDir
+	dashDir := strings.TrimSpace(cfg.Publisher.DASH.Dir)
+	if dashDir == "" {
+		dashDir = "./dash"
 	}
 
 	s := &Server{
 		cfg:     cfg.Server,
-		hlsDir:  cfg.Publisher.HLSDir,
+		hlsDir:  cfg.Publisher.HLS.Dir,
 		dashDir: dashDir,
 	}
 	s.router = s.buildRouter(streamHandler, recordingHandler, hookHandler)
@@ -158,6 +158,10 @@ func (s *Server) serveManifest(filename, contentType, rootDir string) http.Handl
 			return
 		}
 		w.Header().Set("Content-Type", contentType)
+		if filename == "index.mpd" {
+			// Live MPD changes every segment; avoid stale segment indices after restart (dash.js caching seg_00011 while disk reset to 00001).
+			w.Header().Set("Cache-Control", "no-store, max-age=0, must-revalidate")
+		}
 		http.ServeFile(w, r, filepath.Join(rootDir, code, filename))
 	}
 }
@@ -179,7 +183,7 @@ func (s *Server) serveStreamAsset() http.HandlerFunc {
 		switch ext {
 		case ".ts", ".m3u8":
 			baseDir = s.hlsDir
-		case ".m4s", ".mpd":
+		case ".m4s", ".mpd", ".mp4":
 			baseDir = s.dashDir
 		default:
 			http.NotFound(w, r)

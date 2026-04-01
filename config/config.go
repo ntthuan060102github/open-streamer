@@ -7,6 +7,9 @@ import (
 	"github.com/spf13/viper"
 )
 
+// defaultPublisherListenHost is the default bind address for RTSP/RTMP/SRT publisher listeners.
+const defaultPublisherListenHost = "0.0.0.0"
+
 // Config is the root configuration for the entire application.
 // Each module receives only its own sub-config.
 type Config struct {
@@ -74,21 +77,71 @@ type TranscoderConfig struct {
 	FFmpegPath string `mapstructure:"ffmpeg_path"`
 }
 
-// PublisherConfig controls output delivery.
+// PublisherConfig controls output delivery; settings are grouped by protocol.
 type PublisherConfig struct {
-	HLSDir     string `mapstructure:"hls_dir"`
-	DASHDir    string `mapstructure:"dash_dir"`
-	HLSBaseURL string `mapstructure:"hls_base_url"`
-	// LiveEphemeral enables low-retention live output for HLS/DASH.
-	// It keeps only a tiny rolling window and aggressively deletes old segments.
+	HLS  PublisherHLSConfig         `mapstructure:"hls"`
+	DASH PublisherDASHConfig        `mapstructure:"dash"`
+	RTSP PublisherRTSPConfig        `mapstructure:"rtsp"`
+	RTMP PublisherRTMPServeConfig   `mapstructure:"rtmp"`
+	SRT  PublisherSRTListenerConfig `mapstructure:"srt"`
+}
+
+// PublisherHLSConfig is filesystem + live packaging for Apple HLS (m3u8 + segments).
+type PublisherHLSConfig struct {
+	Dir     string `mapstructure:"dir"`
+	BaseURL string `mapstructure:"base_url"`
+	// LiveEphemeral enables bounded retention (sliding manifest, delete old segments).
 	LiveEphemeral bool `mapstructure:"live_ephemeral"`
-	// LiveSegmentSec is segment duration in seconds for live outputs.
+	// LiveSegmentSec is segment duration in seconds.
 	LiveSegmentSec int `mapstructure:"live_segment_sec"`
-	// LiveWindow is the number of segments retained in live playlists/manifests.
+	// LiveWindow is the sliding window size (segments) in the playlist.
 	LiveWindow int `mapstructure:"live_window"`
-	// LiveHistory is extra historical segments kept on disk/RAM for safety.
-	// This helps slow clients recover when they briefly lag behind live edge.
+	// LiveHistory is extra segments kept on disk after they leave the manifest.
 	LiveHistory int `mapstructure:"live_history"`
+}
+
+// PublisherDASHConfig is filesystem + live packaging for MPEG-DASH (dynamic MPD + ISO BMFF init/media .m4s).
+// Dir must be set and must not match PublisherHLSConfig.Dir (separate subscribers and segment files).
+type PublisherDASHConfig struct {
+	Dir string `mapstructure:"dir"`
+	// Live* mirror HLS packaging semantics for the DASH muxer.
+	LiveEphemeral  bool `mapstructure:"live_ephemeral"`
+	LiveSegmentSec int  `mapstructure:"live_segment_sec"`
+	LiveWindow     int  `mapstructure:"live_window"`
+	LiveHistory    int  `mapstructure:"live_history"`
+}
+
+// PublisherRTSPConfig is native RTSP listen mode (protocols.rtsp).
+// All streams share PortMin; clients use rtsp://host:PortMin/live/<stream_code>.
+type PublisherRTSPConfig struct {
+	// ListenHost is the bind address (empty = 0.0.0.0).
+	ListenHost string `mapstructure:"listen_host"`
+	// PortMin is the single RTSP listen port (PortMax is unused for publisher RTSP).
+	PortMin int `mapstructure:"port_min"`
+	PortMax int `mapstructure:"port_max"`
+	// Transport is "tcp" (default) or "udp" for the RTSP muxer.
+	Transport string `mapstructure:"transport"`
+}
+
+// PublisherRTMPServeConfig is native RTMP listen output for viewers (not ingestor push).
+// All streams share PortMin; clients use rtmp://host:PortMin/live/<stream_code>.
+// Keep PortMin distinct from ingestor.rtmp_addr (default :1935).
+type PublisherRTMPServeConfig struct {
+	ListenHost string `mapstructure:"listen_host"`
+	// PortMin is the single RTMP listen port (PortMax is unused for publisher RTMP).
+	PortMin int `mapstructure:"port_min"`
+	PortMax int `mapstructure:"port_max"`
+}
+
+// PublisherSRTListenerConfig is native SRT listener (protocols.srt).
+// All streams share PortMin; clients set streamid=live/<stream_code> (or a bare valid stream code).
+type PublisherSRTListenerConfig struct {
+	ListenHost string `mapstructure:"listen_host"`
+	// PortMin is the single SRT listen port (PortMax is unused for publisher SRT).
+	PortMin int `mapstructure:"port_min"`
+	PortMax int `mapstructure:"port_max"`
+	// LatencyMS is the SRT latency in milliseconds for listener URLs.
+	LatencyMS int `mapstructure:"latency_ms"`
 }
 
 // DVRConfig controls server-level DVR infrastructure.
@@ -172,13 +225,33 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("transcoder.max_workers", 4)
 	v.SetDefault("transcoder.ffmpeg_path", "ffmpeg")
 
-	v.SetDefault("publisher.hls_dir", "./hls")
-	v.SetDefault("publisher.dash_dir", "./dash")
-	v.SetDefault("publisher.hls_base_url", "http://localhost:8080/hls")
-	v.SetDefault("publisher.live_ephemeral", true)
-	v.SetDefault("publisher.live_segment_sec", 2)
-	v.SetDefault("publisher.live_window", 6)
-	v.SetDefault("publisher.live_history", 3)
+	v.SetDefault("publisher.hls.dir", "./hls")
+	v.SetDefault("publisher.hls.base_url", "http://localhost:8080/hls")
+	v.SetDefault("publisher.hls.live_ephemeral", true)
+	v.SetDefault("publisher.hls.live_segment_sec", 2)
+	v.SetDefault("publisher.hls.live_window", 24)
+	// History: segments kept after leaving the playlist; large enough for slow clients / transient write errors.
+	v.SetDefault("publisher.hls.live_history", 48)
+
+	v.SetDefault("publisher.dash.dir", "./dash")
+	v.SetDefault("publisher.dash.live_ephemeral", true)
+	v.SetDefault("publisher.dash.live_segment_sec", 2)
+	v.SetDefault("publisher.dash.live_window", 24)
+	v.SetDefault("publisher.dash.live_history", 48)
+
+	v.SetDefault("publisher.rtsp.listen_host", defaultPublisherListenHost)
+	v.SetDefault("publisher.rtsp.port_min", 18554)
+	v.SetDefault("publisher.rtsp.port_max", 18653)
+	v.SetDefault("publisher.rtsp.transport", "tcp")
+
+	v.SetDefault("publisher.rtmp.listen_host", defaultPublisherListenHost)
+	v.SetDefault("publisher.rtmp.port_min", 1936)
+	v.SetDefault("publisher.rtmp.port_max", 2035)
+
+	v.SetDefault("publisher.srt.listen_host", defaultPublisherListenHost)
+	v.SetDefault("publisher.srt.port_min", 10000)
+	v.SetDefault("publisher.srt.port_max", 10099)
+	v.SetDefault("publisher.srt.latency_ms", 120)
 
 	v.SetDefault("dvr.enabled", false)
 	v.SetDefault("dvr.root_dir", "./dvr")

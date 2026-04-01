@@ -31,3 +31,8 @@ go.work.sum
 # .idea/
 # .vscode/
 .cursor
+
+# Data
+hls/
+dash/
+dvr/

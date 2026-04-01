@@ -338,7 +338,7 @@ OPEN_STREAMER_INGESTOR_HLS_MAX_SEGMENT_BUFFER=8
 OPEN_STREAMER_TRANSCODER_MAX_WORKERS=4
 OPEN_STREAMER_TRANSCODER_FFMPEG_PATH=ffmpeg
 
-# Publisher
+# Publisher — nested keys publisher.hls.*, publisher.dash.*, publisher.rtsp.*, publisher.rtmp.*, publisher.srt.*
 OPEN_STREAMER_PUBLISHER_HLS_DIR=./hls
 OPEN_STREAMER_PUBLISHER_HLS_BASE_URL=http://localhost:8080/hls
 
