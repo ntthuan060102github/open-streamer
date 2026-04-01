@@ -80,7 +80,7 @@ func (m *dashABRMaster) flushRoot() {
 	}
 	m.mu.Unlock()
 
-	var vreps []dashABRVRep
+	vreps := make([]dashABRVRep, 0, len(slugs))
 	var ast time.Time
 
 	for _, slug := range slugs {
