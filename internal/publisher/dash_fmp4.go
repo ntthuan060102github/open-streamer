@@ -1,16 +1,38 @@
 package publisher
 
+// dash_fmp4.go — ISO BMFF (fMP4) packager for live MPEG-DASH.
+//
+// Data flow:
+//
+//	Buffer → FeedWirePacket → aligned TS → io.Pipe → mpeg2.TSDemuxer
+//	                                                         │
+//	                        ┌────────────────────────────────┤
+//	                        │ onTSFrame (H.264 AU, AAC ADTS) │
+//	                        └────────────────────────────────┘
+//	                                         │
+//	                          queue: vAnnex/vDTS/vPTS, aRaw/aPTS
+//	                                         │
+//	                     ticker ─► flushSegmentLocked
+//	                                         │
+//	                          init_v.mp4 / init_a.mp4
+//	                          seg_v_NNNNN.m4s / seg_a_NNNNN.m4s
+//	                          index.mpd (per-shard or root via abrMaster)
+//
+// Codec support: H.264 + AAC-LC.  H.265 and MP3 are logged and skipped.
+//
+// Segment trigger: queued video duration ≥ segSec (in 90 kHz ticks) AND the
+// queue starts with an IDR, OR wall-clock elapsed ≥ segSec (fallback for
+// audio-only or streams with wide keyframe intervals).
+
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,39 +48,24 @@ import (
 	"github.com/ntthuan060102github/open-streamer/internal/tsmux"
 )
 
+// dashVideoTimescale is the standard MPEG timescale for video tracks (90 kHz).
 const dashVideoTimescale = 90000
 
-// dashSegMediaPatterns are used with SegmentTemplate $Number%05d$ (Shaka / Flussonic-style); must match writeSegment filenames.
+// SegmentTemplate $Number$ patterns used by DASH clients (Shaka, dash.js, …).
 const (
 	dashVideoMediaPattern = `seg_v_$Number%05d$.m4s`
 	dashAudioMediaPattern = `seg_a_$Number%05d$.m4s`
 )
 
-// parseDashSegMediaNumber returns the numeric suffix in seg_v_00054.m4s / seg_a_00012.m4s (0 if invalid).
-// annexB4To3ForPSExtract collapses 4-byte Annex-B start codes to 3-byte so mp4ff's
-// Annex-B scanners (which use 0x000001) align NAL headers correctly on mux output
-// that uses 0x00000001.
-func annexB4To3ForPSExtract(b []byte) []byte {
-	if len(b) == 0 {
-		return b
-	}
-	return bytes.ReplaceAll(b, []byte{0x00, 0x00, 0x00, 0x01}, []byte{0x00, 0x00, 0x01})
+// dashRunOpts carries per-rendition ABR metadata.  nil = single-rendition mode.
+type dashRunOpts struct {
+	abrMaster         *dashABRMaster
+	abrSlug           string
+	videoBandwidthBps int
+	packAudio         bool
 }
 
-func parseDashSegMediaNumber(kind byte, name string) int {
-	prefix := "seg_" + string(kind) + "_"
-	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".m4s") {
-		return 0
-	}
-	s := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".m4s")
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0
-	}
-	return n
-}
-
-// runDASHFMP4Packager writes ISO BMFF init + fragmented media (.m4s) and a dynamic MPD (ISO 23009-1, isoff-live profile).
+// runDASHFMP4Packager is the entry point used by both serveDASH and serveDASHAdaptive.
 func runDASHFMP4Packager(
 	ctx context.Context,
 	streamID domain.StreamCode,
@@ -102,47 +109,83 @@ func runDASHFMP4Packager(
 		p.packAudio = opts.packAudio
 	}
 
+	p.run(ctx, sub)
+}
+
+// dashFMP4Packager holds the mutable per-stream state for one DASH output shard.
+type dashFMP4Packager struct {
+	streamID     domain.StreamCode
+	streamDir    string
+	manifestPath string // empty when abrMaster writes the root MPD
+	segSec       int
+	window       int
+	history      int
+	ephemeral    bool
+
+	mu sync.Mutex
+
+	segmentStart time.Time
+
+	// Video frame queue — Annex-B access units + ms timestamps from TSDemuxer.
+	vAnnex  [][]byte
+	vDTS    []uint64 // ms
+	vPTS    []uint64 // ms
+	videoPS []byte   // aggregate SPS+PPS bytes for init detection (cleared after init)
+
+	// Audio frame queue — raw AAC (ADTS header stripped).
+	aRaw [][]byte
+	aPTS []uint64 // ms
+
+	// Init segments (written once on first codec header detection).
+	videoInit *mp4.InitSegment
+	audioInit *mp4.InitSegment
+	videoTID  uint32
+	audioTID  uint32
+	audioSR   int // sample rate in Hz
+
+	// Codec strings for MPD representations.
+	videoCodec string // e.g. "avc1.4d401f"
+	audioCodec string // "mp4a.40.2"
+	width      int
+	height     int
+
+	hevcWarned bool
+
+	// Segment counters (1-based, match $Number$ in filenames).
+	vSegN uint64
+	aSegN uint64
+
+	// Continuous decode timeline (tfdt) in track timescale.
+	videoNextDecode uint64 // 90 kHz
+	audioNextDecode uint64 // audioSR Hz
+
+	// Sliding-window state for MPD generation.
+	onDiskV    []string  // filenames of written video segments
+	onDiskA    []string  // filenames of written audio segments
+	vSegDurs   []uint64  // per-segment duration in 90 kHz ticks
+	aSegDurs   []uint64  // per-segment duration in audioSR ticks
+	vSegStarts []uint64  // tfdt of first sample per video segment
+	aSegStarts []uint64  // tfdt of first sample per audio segment
+
+	// Set on first segment available; needed for MPD availabilityStartTime.
+	availabilityStart time.Time
+
+	// ABR wiring.
+	abrMaster *dashABRMaster
+	abrSlug   string
+	videoBW   int  // override bandwidth for ABR root MPD
+	packAudio bool // false for non-best ABR renditions
+}
+
+// run is the main goroutine: wires the TS pipe, demuxer, and flush ticker.
+func (p *dashFMP4Packager) run(ctx context.Context, sub *buffer.Subscriber) {
 	pr, pw := io.Pipe()
 
+	// Producer: buffer → FeedWirePacket → aligned TS → pw.
 	go func() {
 		defer func() { _ = pw.Close() }()
-		var tsBuf []byte
+		var tsCarry []byte
 		var avMux *tsmux.FromAV
-
-		writeAlignedTS := func(in []byte) error {
-			if len(in) == 0 {
-				return nil
-			}
-			tsBuf = append(tsBuf, in...)
-
-			for len(tsBuf) >= 188 {
-				if tsBuf[0] != 0x47 {
-					idx := bytes.IndexByte(tsBuf, 0x47)
-					if idx < 0 {
-						if len(tsBuf) > 187 {
-							tsBuf = append([]byte(nil), tsBuf[len(tsBuf)-187:]...)
-						}
-						return nil
-					}
-					tsBuf = tsBuf[idx:]
-					if len(tsBuf) < 188 {
-						return nil
-					}
-				}
-
-				// Guard against false sync: require next packet sync when available.
-				if len(tsBuf) >= 376 && tsBuf[188] != 0x47 {
-					tsBuf = tsBuf[1:]
-					continue
-				}
-
-				if _, err := pw.Write(tsBuf[:188]); err != nil {
-					return err
-				}
-				tsBuf = tsBuf[188:]
-			}
-			return nil
-		}
 
 		for {
 			select {
@@ -152,20 +195,37 @@ func runDASHFMP4Packager(
 				if !ok {
 					return
 				}
-				var werr error
 				tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
-					if werr != nil {
-						return
+					tsCarry = append(tsCarry, b...)
+					for len(tsCarry) >= 188 {
+						if tsCarry[0] != 0x47 {
+							idx := bytes.IndexByte(tsCarry, 0x47)
+							if idx < 0 {
+								if len(tsCarry) > 187 {
+									tsCarry = tsCarry[len(tsCarry)-187:]
+								}
+								return
+							}
+							tsCarry = tsCarry[idx:]
+							if len(tsCarry) < 188 {
+								return
+							}
+						}
+						if len(tsCarry) >= 376 && tsCarry[188] != 0x47 {
+							tsCarry = tsCarry[1:]
+							continue
+						}
+						if _, err := pw.Write(tsCarry[:188]); err != nil {
+							return
+						}
+						tsCarry = tsCarry[188:]
 					}
-					werr = writeAlignedTS(b)
 				})
-				if werr != nil {
-					return
-				}
 			}
 		}
 	}()
 
+	// Demuxer: pr → onTSFrame (H.264 AUs and AAC ADTS frames).
 	demux := mpeg2.NewTSDemuxer()
 	demux.OnFrame = p.onTSFrame
 
@@ -177,40 +237,53 @@ func runDASHFMP4Packager(
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 
+	segDur := time.Duration(p.segSec) * time.Second
+
 	for {
 		select {
 		case <-ctx.Done():
 			_ = pr.Close()
 			<-demuxDone
-			p.flushManifest()
+			p.mu.Lock()
+			_ = p.flushSegmentLocked()
+			p.mu.Unlock()
 			return
+
 		case err := <-demuxDone:
 			if err != nil && ctx.Err() == nil {
-				slog.Warn("publisher: DASH TS demux ended", "stream_code", streamID, "err", err)
+				slog.Warn("publisher: DASH TS demux ended",
+					"stream_code", p.streamID, "err", err)
 			}
-			p.flushManifest()
+			p.mu.Lock()
+			_ = p.flushSegmentLocked()
+			p.mu.Unlock()
 			return
+
 		case <-tick.C:
 			p.mu.Lock()
-			if p.videoInit == nil && p.audioInit == nil && len(p.vAnnex) == 0 && len(p.aRaw) == 0 {
+
+			// No data yet.
+			if p.videoInit == nil && p.audioInit == nil {
 				p.mu.Unlock()
 				continue
 			}
-			wallDue := !p.segmentStart.IsZero() && time.Since(p.segmentStart) >= time.Duration(p.segSec)*time.Second
-			targetV := uint64(p.segSec) * uint64(dashVideoTimescale)
-			vDurQ := totalQueuedVideoDur90k(p.vDTS)
-			audioNeed := 1 << 30 // no audio flush by count
-			if p.audioInit != nil {
-				audioNeed = p.audioFramesPerSegment()
-			}
-			// Do not use vDurQ as a trigger before the first IDR (avoids busy-loop while skipping pre-GOP frames).
-			videoByDur := p.videoInit != nil && vDurQ >= targetV &&
+
+			wallDue := !p.segmentStart.IsZero() &&
+				time.Since(p.segmentStart) >= segDur
+
+			targetV := uint64(p.segSec) * dashVideoTimescale
+			queuedV := totalQueuedVideoDur90k(p.vDTS)
+			videoByDur := p.videoInit != nil && len(p.vAnnex) > 0 &&
+				queuedV >= targetV &&
 				(p.vSegN > 0 || p.queuedVideoStartsWithIDRLocked())
-			audioOnlyByCount := p.videoInit == nil && p.audioInit != nil && len(p.aRaw) >= audioNeed
-			mediaFlush := videoByDur || audioOnlyByCount
-			if wallDue || mediaFlush {
+
+			audioOnly := p.videoInit == nil && p.audioInit != nil &&
+				len(p.aRaw) >= p.audioFramesPerSegment()
+
+			if wallDue || videoByDur || audioOnly {
 				if err := p.flushSegmentLocked(); err != nil {
-					slog.Warn("publisher: DASH segment flush failed", "stream_code", streamID, "err", err)
+					slog.Warn("publisher: DASH segment flush failed",
+						"stream_code", p.streamID, "err", err)
 				}
 			}
 			p.mu.Unlock()
@@ -218,76 +291,16 @@ func runDASHFMP4Packager(
 	}
 }
 
-type dashFMP4Packager struct {
-	streamID  domain.StreamCode
-	streamDir string
-
-	manifestPath string
-	segSec       int
-	window       int
-	history      int
-	ephemeral    bool
-
-	mu sync.Mutex
-
-	segmentStart time.Time
-
-	// TS demux → queues
-	vAnnex [][]byte // Annex-B access units
-	vDTS   []uint64 // ms
-	vPTS   []uint64 // ms
-
-	aRaw [][]byte // AAC raw (no ADTS)
-	aPTS []uint64 // ms ordering
-
-	videoPS []byte // Annex-B bytes scanned for SPS/PPS
-
-	videoInit *mp4.InitSegment
-	audioInit *mp4.InitSegment
-	videoTID  uint32
-	audioTID  uint32
-	audioSR   int
-
-	videoCodec string
-	audioCodec string
-	width      int
-	height     int
-
-	hevcWarned bool
-
-	vSegN uint64
-	aSegN uint64
-
-	// Continuous decode timeline in track timescale (Shaka/MSE require tfdt to match a coherent Period timeline; TS DTS is not aligned with audioNextDecode).
-	videoNextDecode uint64 // 90 kHz
-	audioNextDecode uint64 // audio mdhd timescale (sample rate)
-
-	onDiskV []string
-	onDiskA []string
-	// Per-segment total duration in track timescale (video: 90kHz ticks; audio: sample_rate ticks, multiple of 1024).
-	vSegDurs []uint64
-	aSegDurs []uint64
-	// First-sample decode time at segment start (matches tfdt in each .m4s); required on SegmentTimeline@t after window trim.
-	vSegStarts []uint64
-	aSegStarts []uint64
-
-	// Set once when the first media segment exists; required for type=dynamic MPD (dash.js / ISO 23009-1).
-	availabilityStart time.Time
-
-	abrMaster *dashABRMaster
-	abrSlug   string
-	videoBW   int
-	packAudio bool
-}
-
+// onTSFrame is the TSDemuxer callback; it runs in the demuxer goroutine.
 func (p *dashFMP4Packager) onTSFrame(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts, dts uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	switch cid {
 	case mpeg2.TS_STREAM_AUDIO_MPEG1, mpeg2.TS_STREAM_AUDIO_MPEG2:
-		// MP3 in TS — not packaged into fMP4 DASH in this packager.
+		// MP3 in TS — not supported in DASH fMP4.
 		return
+
 	case mpeg2.TS_STREAM_H264:
 		if len(frame) == 0 {
 			return
@@ -296,8 +309,12 @@ func (p *dashFMP4Packager) onTSFrame(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts
 		p.vAnnex = append(p.vAnnex, cp)
 		p.vDTS = append(p.vDTS, dts)
 		p.vPTS = append(p.vPTS, pts)
-		p.videoPS = append(p.videoPS, cp...)
-		p.tryInitVideoLocked()
+
+		// Accumulate SPS/PPS until the init segment is written.
+		if p.videoInit == nil {
+			p.videoPS = append(p.videoPS, cp...)
+			p.tryInitVideoLocked()
+		}
 		if p.segmentStart.IsZero() && p.videoInit != nil {
 			p.segmentStart = time.Now()
 		}
@@ -305,32 +322,31 @@ func (p *dashFMP4Packager) onTSFrame(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts
 	case mpeg2.TS_STREAM_H265:
 		if !p.hevcWarned {
 			p.hevcWarned = true
-			slog.Warn("publisher: DASH fMP4 packager ignores H.265 in TS for now (H.264 + AAC-LC only)",
-				"stream_code", p.streamID,
-			)
+			slog.Warn("publisher: DASH fMP4 H.265 not yet supported — H.264+AAC-LC only",
+				"stream_code", p.streamID)
 		}
 
 	case mpeg2.TS_STREAM_AAC:
 		if !p.packAudio {
 			return
 		}
-		if p.audioInit != nil {
-			p.ingestADTSLocked(frame, pts)
-			return
-		}
-		frames := splitADTSFrames(frame)
-		for _, f := range frames {
-			hdr, _, err := aac.DecodeADTSHeader(bytes.NewReader(f))
+		// A PES payload may contain multiple concatenated ADTS frames.
+		pos := 0
+		for pos+7 <= len(frame) {
+			hdr, _, err := aac.DecodeADTSHeader(bytes.NewReader(frame[pos:]))
 			if err != nil {
+				pos++
 				continue
 			}
-			hlen := int(hdr.HeaderLength)
-			if len(f) < hlen+int(hdr.PayloadLength) {
-				continue
+			hLen := int(hdr.HeaderLength)
+			pLen := int(hdr.PayloadLength)
+			if pos+hLen+pLen > len(frame) {
+				break
 			}
-			raw := append([]byte(nil), f[hlen:hlen+int(hdr.PayloadLength)]...)
+			raw := append([]byte(nil), frame[pos+hLen:pos+hLen+pLen]...)
 			if p.audioInit == nil {
-				if err := p.buildAudioInitLocked(hdr, raw); err != nil {
+				if err := p.buildAudioInitLocked(hdr); err != nil {
+					pos += hLen + pLen
 					continue
 				}
 			}
@@ -339,49 +355,56 @@ func (p *dashFMP4Packager) onTSFrame(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts
 			if p.segmentStart.IsZero() && p.videoInit == nil && p.audioInit != nil {
 				p.segmentStart = time.Now()
 			}
+			pos += hLen + pLen
 		}
+
 	default:
 		return
 	}
 }
 
+// tryInitVideoLocked scans videoPS for SPS/PPS and, when found, writes init_v.mp4.
+// Caller must hold p.mu.
 func (p *dashFMP4Packager) tryInitVideoLocked() {
 	if p.videoInit != nil || len(p.videoPS) < 20 {
 		return
 	}
+	// ExtractNalusOfTypeFromByteStream expects 3-byte start codes (0x00 0x00 0x01).
 	psBuf := annexB4To3ForPSExtract(p.videoPS)
-	// GetParameterSetsFromByteStream stops scanning when the NAL after a start code is
-	// VCL (type < 6). videoPS is a running aggregate: it may start with P/IDR bytes before
-	// later AUs add SPS/PPS — then PS extraction would return empty forever. Extract with
-	// stopAtVideo=false scans the full buffer.
 	spss := avc.ExtractNalusOfTypeFromByteStream(avc.NALU_SPS, psBuf, false)
 	ppss := avc.ExtractNalusOfTypeFromByteStream(avc.NALU_PPS, psBuf, false)
 	if len(spss) == 0 || len(ppss) == 0 {
 		return
 	}
+
 	init := mp4.CreateEmptyInit()
 	trak := init.AddEmptyTrack(dashVideoTimescale, "video", "und")
 	if err := trak.SetAVCDescriptor("avc1", spss, ppss, true); err != nil {
-		slog.Error("publisher: DASH SetAVCDescriptor failed", "stream_code", p.streamID, "err", err)
+		slog.Error("publisher: DASH SetAVCDescriptor failed",
+			"stream_code", p.streamID, "err", err)
 		return
 	}
-	sps, err := avc.ParseSPSNALUnit(spss[0], false)
-	if err == nil && sps != nil {
+
+	if sps, err := avc.ParseSPSNALUnit(spss[0], false); err == nil && sps != nil {
 		p.width = int(sps.Width)
 		p.height = int(sps.Height)
 		p.videoCodec = avc.CodecString("avc1", sps)
 	}
+
 	p.videoInit = init
 	p.videoTID = trak.Tkhd.TrackID
-	path := filepath.Join(p.streamDir, "init_v.mp4")
-	if err := encodeInitToFile(path, init); err != nil {
-		slog.Error("publisher: DASH write init_v failed", "stream_code", p.streamID, "err", err)
+	p.videoPS = nil // no longer needed
+
+	if err := encodeInitToFile(filepath.Join(p.streamDir, "init_v.mp4"), init); err != nil {
+		slog.Error("publisher: DASH write init_v.mp4 failed",
+			"stream_code", p.streamID, "err", err)
 		p.videoInit = nil
-		return
 	}
 }
 
-func (p *dashFMP4Packager) buildAudioInitLocked(hdr *aac.ADTSHeader, firstRaw []byte) error {
+// buildAudioInitLocked creates and writes init_a.mp4 from the first ADTS header.
+// Caller must hold p.mu.
+func (p *dashFMP4Packager) buildAudioInitLocked(hdr *aac.ADTSHeader) error {
 	sr := int(hdr.Frequency())
 	if sr <= 0 {
 		return fmt.Errorf("invalid AAC sample rate")
@@ -395,412 +418,231 @@ func (p *dashFMP4Packager) buildAudioInitLocked(hdr *aac.ADTSHeader, firstRaw []
 	p.audioTID = trak.Tkhd.TrackID
 	p.audioSR = sr
 	p.audioNextDecode = 0
-	path := filepath.Join(p.streamDir, "init_a.mp4")
-	if err := encodeInitToFile(path, init); err != nil {
+	p.audioCodec = "mp4a.40.2"
+
+	if err := encodeInitToFile(filepath.Join(p.streamDir, "init_a.mp4"), init); err != nil {
 		p.audioInit = nil
 		return err
 	}
-	_ = firstRaw
 	return nil
 }
 
-func (p *dashFMP4Packager) ingestADTSLocked(frame []byte, pts uint64) {
-	for _, f := range splitADTSFrames(frame) {
-		hdr, _, err := aac.DecodeADTSHeader(bytes.NewReader(f))
-		if err != nil {
-			continue
-		}
-		hlen := int(hdr.HeaderLength)
-		pl := int(hdr.PayloadLength)
-		if len(f) < hlen+pl {
-			continue
-		}
-		raw := append([]byte(nil), f[hlen:hlen+pl]...)
-		p.aRaw = append(p.aRaw, raw)
-		p.aPTS = append(p.aPTS, pts)
+// audioFramesPerSegment returns the expected number of 1024-sample AAC frames per segment.
+func (p *dashFMP4Packager) audioFramesPerSegment() int {
+	if p.audioSR <= 0 {
+		return 94 // safe default for 48 kHz × 2 s
 	}
+	return (p.segSec*p.audioSR + 1023) / 1024
 }
 
-func splitADTSFrames(data []byte) [][]byte {
-	var out [][]byte
-	i := 0
-	for i+7 <= len(data) {
-		hdr, off, err := aac.DecodeADTSHeader(bytes.NewReader(data[i:]))
-		if err != nil {
-			i++
-			continue
-		}
-		i += off
-		total := int(hdr.HeaderLength) + int(hdr.PayloadLength)
-		if i+total > len(data) {
-			break
-		}
-		out = append(out, data[i:i+total])
-		i += total
-	}
-	return out
-}
-
-// h264AnnexBToAVCC converts one H.264 access unit (Annex B) to mp4/MSE-style length-prefixed NALUs.
-// ConvertByteStreamToNaluSample can return empty for some edge layouts; dropping those samples breaks
-// reference chains and shows as heavy macroblocking. We fall back via ExtractNalusFromByteStream.
-func h264AnnexBToAVCC(annexB []byte) []byte {
-	if len(annexB) == 0 {
-		return nil
-	}
-	cp := append([]byte(nil), annexB...)
-	if out := avc.ConvertByteStreamToNaluSample(cp); len(out) > 0 {
-		return out
-	}
-	norm := bytes.ReplaceAll(append([]byte(nil), annexB...), []byte{0x00, 0x00, 0x00, 0x01}, []byte{0x00, 0x00, 0x01})
-	cp2 := append([]byte(nil), norm...)
-	if out := avc.ConvertByteStreamToNaluSample(cp2); len(out) > 0 {
-		return out
-	}
-	nalus := avc.ExtractNalusFromByteStream(norm)
-	if len(nalus) == 0 {
-		nalus = avc.ExtractNalusFromByteStream(annexB)
-	}
-	if len(nalus) == 0 {
-		return nil
-	}
-	var out []byte
-	lf := make([]byte, 4)
-	for _, n := range nalus {
-		if len(n) == 0 {
-			continue
-		}
-		binary.BigEndian.PutUint32(lf, uint32(len(n)))
-		out = append(out, lf...)
-		out = append(out, n...)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func dashSortVideoSamplesByDTS(annex [][]byte, dts, pts []uint64) {
-	n := len(dts)
-	if n <= 1 {
-		return
-	}
-	ok := true
-	for i := 1; i < n; i++ {
-		if dts[i] < dts[i-1] {
-			ok = false
-			break
-		}
-	}
-	if ok {
-		return
-	}
-	idx := make([]int, n)
-	for i := range idx {
-		idx[i] = i
-	}
-	sort.Slice(idx, func(a, b int) bool {
-		da, db := dts[idx[a]], dts[idx[b]]
-		if da != db {
-			return da < db
-		}
-		return idx[a] < idx[b]
-	})
-	tmpA := make([][]byte, n)
-	tmpD := make([]uint64, n)
-	tmpP := make([]uint64, n)
-	for i, j := range idx {
-		tmpA[i] = annex[j]
-		tmpD[i] = dts[j]
-		tmpP[i] = pts[j]
-	}
-	copy(annex, tmpA)
-	copy(dts, tmpD)
-	copy(pts, tmpP)
-}
-
-func encodeInitToFile(path string, init *mp4.InitSegment) error {
-	var buf bytes.Buffer
-	if err := init.Encode(&buf); err != nil {
-		return err
-	}
-	return writeFileAtomic(path, buf.Bytes())
-}
-
-func h264SampleDur90k(dts []uint64, i int) uint32 {
-	dur := uint32(dashVideoTimescale / 30)
-	if i+1 < len(dts) {
-		delta := int64(dts[i+1]) - int64(dts[i])
-		if delta > 0 {
-			dur = uint32(delta * 90)
-		}
-	} else if i > 0 {
-		delta := int64(dts[i]) - int64(dts[i-1])
-		if delta > 0 {
-			dur = uint32(delta * 90)
-		}
-	}
-	if dur < 1 {
-		dur = 1
-	}
-	return dur
-}
-
-func totalQueuedVideoDur90k(dts []uint64) uint64 {
-	var sum uint64
-	for i := range dts {
-		sum += uint64(h264SampleDur90k(dts, i))
-	}
-	return sum
-}
-
+// queuedVideoStartsWithIDRLocked returns true when the first queued H.264 AU is an IDR.
+// Caller must hold p.mu.
 func (p *dashFMP4Packager) queuedVideoStartsWithIDRLocked() bool {
 	if len(p.vAnnex) == 0 {
 		return false
 	}
-	avcc := h264AnnexBToAVCC(p.vAnnex[0])
-	return len(avcc) > 0 && avc.IsIDRSample(avcc)
+	return tsmux.KeyFrameH264(p.vAnnex[0])
 }
 
-// takeVideoFlushChunkLocked removes one chunk of Annex-B access units whose summed sample duration
-// is at least targetTicks (90 kHz), or all queued units when wallDue is true. The first video
-// segment starts at an IDR. Returns ok=false if nothing can be emitted yet.
-func (p *dashFMP4Packager) takeVideoFlushChunkLocked(targetTicks uint64, wallDue bool) (annex [][]byte, dts []uint64, pts []uint64, totalDur uint64, ok bool) {
-	if p.videoInit == nil || len(p.vAnnex) == 0 {
-		return nil, nil, nil, 0, false
+// effectiveVideoBW returns the video bandwidth for MPD representations.
+func (p *dashFMP4Packager) effectiveVideoBW() int {
+	if p.videoBW > 0 {
+		return p.videoBW
 	}
-	if p.vSegN == 0 {
-		skip := 0
-		for skip < len(p.vAnnex) {
-			avcc := h264AnnexBToAVCC(p.vAnnex[skip])
-			if len(avcc) > 0 && avc.IsIDRSample(avcc) {
-				break
-			}
-			skip++
-		}
-		if skip >= len(p.vAnnex) {
-			return nil, nil, nil, 0, false
-		}
-		if skip > 0 {
-			p.vAnnex = append([][]byte(nil), p.vAnnex[skip:]...)
-			p.vDTS = append([]uint64(nil), p.vDTS[skip:]...)
-			p.vPTS = append([]uint64(nil), p.vPTS[skip:]...)
-		}
-	}
-	n := len(p.vAnnex)
-	var sum uint64
-	end := 0
-	for end < n {
-		dur := uint64(h264SampleDur90k(p.vDTS, end))
-		sum += dur
-		end++
-		if sum >= targetTicks {
-			break
-		}
-	}
-	if sum < targetTicks {
-		if !wallDue {
-			return nil, nil, nil, 0, false
-		}
-		end = n
-		sum = totalQueuedVideoDur90k(p.vDTS)
-		if end == 0 || sum == 0 {
-			return nil, nil, nil, 0, false
-		}
-	}
-
-	annex = append([][]byte(nil), p.vAnnex[:end]...)
-	dts = append([]uint64(nil), p.vDTS[:end]...)
-	pts = append([]uint64(nil), p.vPTS[:end]...)
-	p.vAnnex = append([][]byte(nil), p.vAnnex[end:]...)
-	p.vDTS = append([]uint64(nil), p.vDTS[end:]...)
-	p.vPTS = append([]uint64(nil), p.vPTS[end:]...)
-	return annex, dts, pts, sum, true
+	return 5_000_000
 }
 
-func (p *dashFMP4Packager) audioFramesPerSegment() int {
-	if p.audioSR <= 0 {
-		return 1
-	}
-	n := (p.audioSR*p.segSec + 1024 - 1) / 1024
-	if n < 1 {
-		n = 1
-	}
-	return n
-}
-
-// takeAudioFlushChunkLocked removes up to audioFramesPerSegment() AAC frames, or all queued frames
-// when allowPartial is true and fewer are available.
-func (p *dashFMP4Packager) takeAudioFlushChunkLocked(allowPartial bool) (raw [][]byte, totalDur uint64, ok bool) {
-	if p.audioInit == nil || len(p.aRaw) == 0 {
-		return nil, 0, false
-	}
-	want := p.audioFramesPerSegment()
-	if len(p.aRaw) < want {
-		if !allowPartial {
-			return nil, 0, false
-		}
-		want = len(p.aRaw)
-	}
-	raw = append([][]byte(nil), p.aRaw[:want]...)
-	p.aRaw = append([][]byte(nil), p.aRaw[want:]...)
-	p.aPTS = append([]uint64(nil), p.aPTS[want:]...)
-	totalDur = uint64(want * 1024)
-	return raw, totalDur, true
-}
-
+// flushSegmentLocked writes all queued video and audio frames as .m4s segments,
+// trims old segments from disk, and updates the manifest.
+// Caller must hold p.mu.
 func (p *dashFMP4Packager) flushSegmentLocked() error {
-	if p.videoInit == nil && p.audioInit == nil {
-		return nil
-	}
+	flushed := false
 
-	wallDue := !p.segmentStart.IsZero() && time.Since(p.segmentStart) >= time.Duration(p.segSec)*time.Second
-	targetV := uint64(p.segSec) * uint64(dashVideoTimescale)
-	vDurQ := totalQueuedVideoDur90k(p.vDTS)
-	videoByDur := p.videoInit != nil && vDurQ >= targetV &&
-		(p.vSegN > 0 || p.queuedVideoStartsWithIDRLocked())
-	audioOnlyByCount := p.videoInit == nil && p.audioInit != nil &&
-		len(p.aRaw) >= p.audioFramesPerSegment()
-	should := wallDue || videoByDur || audioOnlyByCount
-	if !should {
-		return nil
-	}
-
-	audioAllowPartial := wallDue
-	vAnnex, vDts, vPts, vTotalDur, vOk := p.takeVideoFlushChunkLocked(targetV, wallDue)
-	if vOk {
-		audioAllowPartial = true
-	}
-	var aRaw [][]byte
-	var aTotalDur uint64
-	var aOk bool
-	// Avoid emitting audio-only segments while H.264 is waiting for the first IDR.
-	if p.videoInit == nil || vOk || wallDue {
-		aRaw, aTotalDur, aOk = p.takeAudioFlushChunkLocked(audioAllowPartial)
-	}
-
-	if !vOk && !aOk {
-		if wallDue {
-			p.segmentStart = time.Now()
+	if p.videoInit != nil && len(p.vAnnex) > 0 {
+		if err := p.writeVideoSegmentLocked(); err != nil {
+			slog.Warn("publisher: DASH write video segment",
+				"stream_code", p.streamID, "err", err)
+		} else {
+			flushed = true
 		}
-		return nil
 	}
 
-	if vOk {
-		nextV := p.vSegN + 1
-		name := fmt.Sprintf("seg_v_%05d.m4s", nextV)
-		if err := p.writeVideoSegmentLocked(name, uint32(nextV), vAnnex, vDts, vPts); err != nil {
-			return err
+	if p.audioInit != nil && len(p.aRaw) > 0 {
+		if err := p.writeAudioSegmentLocked(); err != nil {
+			slog.Warn("publisher: DASH write audio segment",
+				"stream_code", p.streamID, "err", err)
+		} else {
+			flushed = true
 		}
-		p.vSegN = nextV
-		p.onDiskV = append(p.onDiskV, name)
-		p.vSegDurs = append(p.vSegDurs, vTotalDur)
-	}
-	if aOk {
-		nextA := p.aSegN + 1
-		name := fmt.Sprintf("seg_a_%05d.m4s", nextA)
-		if err := p.writeAudioSegmentLocked(name, uint32(nextA), aRaw); err != nil {
-			return err
-		}
-		p.aSegN = nextA
-		p.onDiskA = append(p.onDiskA, name)
-		p.aSegDurs = append(p.aSegDurs, aTotalDur)
 	}
 
-	p.trimDiskLocked()
+	// Reset queues.
+	p.vAnnex = p.vAnnex[:0]
+	p.vDTS = p.vDTS[:0]
+	p.vPTS = p.vPTS[:0]
+	p.aRaw = p.aRaw[:0]
+	p.aPTS = p.aPTS[:0]
 	p.segmentStart = time.Now()
-	if p.availabilityStart.IsZero() && (len(p.onDiskV) > 0 || len(p.onDiskA) > 0) {
-		p.availabilityStart = time.Now().UTC()
+
+	if !flushed {
+		return nil
 	}
+	if p.availabilityStart.IsZero() {
+		p.availabilityStart = time.Now()
+	}
+	p.trimDiskLocked()
 	return p.writeManifestLocked()
 }
 
-func (p *dashFMP4Packager) writeVideoSegmentLocked(baseName string, seqNr uint32, annex [][]byte, dts, pts []uint64) error {
-	dashSortVideoSamplesByDTS(annex, dts, pts)
-	segStartDecode := p.videoNextDecode
-	nextDecode := segStartDecode
-	frag, err := mp4.CreateFragment(seqNr, p.videoTID)
+// writeVideoSegmentLocked packages all queued H.264 AUs into one fMP4 .m4s file.
+// Caller must hold p.mu.
+func (p *dashFMP4Packager) writeVideoSegmentLocked() error {
+	p.vSegN++
+	name := fmt.Sprintf("seg_v_%05d.m4s", p.vSegN)
+	path := filepath.Join(p.streamDir, name)
+
+	frag, err := mp4.CreateFragment(uint32(p.vSegN), p.videoTID)
 	if err != nil {
-		return err
+		p.vSegN--
+		return fmt.Errorf("create video fragment: %w", err)
 	}
-	for i := range annex {
-		avcc := h264AnnexBToAVCC(annex[i])
+
+	segStart := p.videoNextDecode
+	var segDur uint64
+
+	for i, au := range p.vAnnex {
+		avcc := h264AnnexBToAVCC(au)
 		if len(avcc) == 0 {
 			continue
 		}
-		sync := avc.IsIDRSample(avcc)
+
+		// Sample duration in 90 kHz ticks from inter-frame DTS delta.
+		var dur uint32
+		if i+1 < len(p.vDTS) {
+			if d := p.vDTS[i+1] - p.vDTS[i]; d > 0 {
+				dur = uint32(d * 90)
+			}
+		}
+		if dur == 0 {
+			// Fallback: spread total queued duration evenly.
+			if len(p.vDTS) >= 2 {
+				total := (p.vDTS[len(p.vDTS)-1] - p.vDTS[0]) * 90
+				dur = uint32(total / uint64(len(p.vAnnex)))
+			}
+			if dur == 0 {
+				dur = uint32(p.segSec) * dashVideoTimescale / uint32(len(p.vAnnex))
+			}
+		}
+
 		flags := mp4.NonSyncSampleFlags
-		if sync {
+		if tsmux.KeyFrameH264(au) {
 			flags = mp4.SyncSampleFlags
 		}
-		dur := h264SampleDur90k(dts, i)
-		cto := int32((pts[i] - dts[i]) * 90)
-		dec := nextDecode
-		nextDecode += uint64(dur)
-		fs := mp4.FullSample{
+
+		var cto int32
+		if i < len(p.vPTS) && i < len(p.vDTS) {
+			cto = int32((int64(p.vPTS[i]) - int64(p.vDTS[i])) * 90)
+		}
+
+		frag.AddFullSample(mp4.FullSample{
 			Sample: mp4.Sample{
 				Flags:                 flags,
 				Dur:                   dur,
 				Size:                  uint32(len(avcc)),
 				CompositionTimeOffset: cto,
 			},
-			DecodeTime: dec,
+			DecodeTime: p.videoNextDecode + segDur,
 			Data:       avcc,
-		}
-		frag.AddFullSample(fs)
+		})
+		segDur += uint64(dur)
 	}
-	frag.EncOptimize = mp4.OptimizeTrun
+
+	if segDur == 0 {
+		p.vSegN--
+		return nil
+	}
+
 	seg := mp4.NewMediaSegment()
 	seg.AddFragment(frag)
 	var buf bytes.Buffer
 	if err := seg.Encode(&buf); err != nil {
-		return err
+		p.vSegN--
+		return fmt.Errorf("encode video segment: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(p.streamDir, baseName), buf.Bytes()); err != nil {
-		return err
+	if err := writeFileAtomic(path, buf.Bytes()); err != nil {
+		p.vSegN--
+		return fmt.Errorf("write video segment: %w", err)
 	}
-	p.videoNextDecode = nextDecode
-	p.vSegStarts = append(p.vSegStarts, segStartDecode)
+
+	slog.Debug("publisher: DASH video segment",
+		"stream_code", p.streamID, "segment", name,
+		"frames", len(p.vAnnex), "bytes", buf.Len())
+
+	p.onDiskV = append(p.onDiskV, name)
+	p.vSegDurs = append(p.vSegDurs, segDur)
+	p.vSegStarts = append(p.vSegStarts, segStart)
+	p.videoNextDecode += segDur
 	return nil
 }
 
-func (p *dashFMP4Packager) writeAudioSegmentLocked(baseName string, seqNr uint32, raw [][]byte) error {
-	segStartDecode := p.audioNextDecode
-	nextDecode := segStartDecode
-	frag, err := mp4.CreateFragment(seqNr, p.audioTID)
+// writeAudioSegmentLocked packages all queued raw AAC frames into one fMP4 .m4s file.
+// Caller must hold p.mu.
+func (p *dashFMP4Packager) writeAudioSegmentLocked() error {
+	p.aSegN++
+	name := fmt.Sprintf("seg_a_%05d.m4s", p.aSegN)
+	path := filepath.Join(p.streamDir, name)
+
+	frag, err := mp4.CreateFragment(uint32(p.aSegN), p.audioTID)
 	if err != nil {
-		return err
+		p.aSegN--
+		return fmt.Errorf("create audio fragment: %w", err)
 	}
-	const aacDur = 1024
-	for _, r := range raw {
-		fs := mp4.FullSample{
+
+	segStart := p.audioNextDecode
+	var segDur uint64
+
+	// Each AAC frame contains exactly 1024 samples at p.audioSR.
+	const aacFrameSamples = uint32(1024)
+
+	for _, raw := range p.aRaw {
+		frag.AddFullSample(mp4.FullSample{
 			Sample: mp4.Sample{
-				Flags:                 mp4.SyncSampleFlags,
-				Dur:                   aacDur,
-				Size:                  uint32(len(r)),
-				CompositionTimeOffset: 0,
+				Flags: mp4.SyncSampleFlags,
+				Dur:   aacFrameSamples,
+				Size:  uint32(len(raw)),
 			},
-			DecodeTime: nextDecode,
-			Data:       r,
-		}
-		nextDecode += aacDur
-		frag.AddFullSample(fs)
+			DecodeTime: p.audioNextDecode + segDur,
+			Data:       raw,
+		})
+		segDur += uint64(aacFrameSamples)
 	}
-	frag.EncOptimize = mp4.OptimizeTrun
+
+	if segDur == 0 {
+		p.aSegN--
+		return nil
+	}
+
 	seg := mp4.NewMediaSegment()
 	seg.AddFragment(frag)
 	var buf bytes.Buffer
 	if err := seg.Encode(&buf); err != nil {
-		return err
+		p.aSegN--
+		return fmt.Errorf("encode audio segment: %w", err)
 	}
-	if err := writeFileAtomic(filepath.Join(p.streamDir, baseName), buf.Bytes()); err != nil {
-		return err
+	if err := writeFileAtomic(path, buf.Bytes()); err != nil {
+		p.aSegN--
+		return fmt.Errorf("write audio segment: %w", err)
 	}
-	p.audioNextDecode = nextDecode
-	p.aSegStarts = append(p.aSegStarts, segStartDecode)
+
+	p.onDiskA = append(p.onDiskA, name)
+	p.aSegDurs = append(p.aSegDurs, segDur)
+	p.aSegStarts = append(p.aSegStarts, segStart)
+	p.audioNextDecode += segDur
 	return nil
 }
 
+// trimDiskLocked removes old segments beyond window+history.
+// Caller must hold p.mu.
 func (p *dashFMP4Packager) trimDiskLocked() {
 	maxKeep := p.window + p.history
 	if maxKeep < p.window {
@@ -810,7 +652,7 @@ func (p *dashFMP4Packager) trimDiskLocked() {
 		return
 	}
 	for len(p.onDiskV) > maxKeep {
-		old := p.onDiskV[0]
+		_ = os.Remove(filepath.Join(p.streamDir, p.onDiskV[0]))
 		p.onDiskV = p.onDiskV[1:]
 		if len(p.vSegDurs) > 0 {
 			p.vSegDurs = p.vSegDurs[1:]
@@ -818,10 +660,9 @@ func (p *dashFMP4Packager) trimDiskLocked() {
 		if len(p.vSegStarts) > 0 {
 			p.vSegStarts = p.vSegStarts[1:]
 		}
-		_ = os.Remove(filepath.Join(p.streamDir, old))
 	}
 	for len(p.onDiskA) > maxKeep {
-		old := p.onDiskA[0]
+		_ = os.Remove(filepath.Join(p.streamDir, p.onDiskA[0]))
 		p.onDiskA = p.onDiskA[1:]
 		if len(p.aSegDurs) > 0 {
 			p.aSegDurs = p.aSegDurs[1:]
@@ -829,16 +670,58 @@ func (p *dashFMP4Packager) trimDiskLocked() {
 		if len(p.aSegStarts) > 0 {
 			p.aSegStarts = p.aSegStarts[1:]
 		}
-		_ = os.Remove(filepath.Join(p.streamDir, old))
 	}
 }
 
-func (p *dashFMP4Packager) flushManifest() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_ = p.writeManifestLocked()
+// writeManifestLocked serialises the sliding-window MPD.
+// In ABR mode it notifies the master and returns without writing a per-shard file.
+// Caller must hold p.mu.
+func (p *dashFMP4Packager) writeManifestLocked() error {
+	if p.manifestPath == "" && p.abrMaster == nil {
+		return nil
+	}
+
+	vSegs := windowTail(p.onDiskV, p.window)
+	vDurs := windowTailUint64(p.vSegDurs, p.window)
+	vStarts := windowTailUint64(p.vSegStarts, p.window)
+	aSegs := windowTail(p.onDiskA, p.window)
+	aDurs := windowTailUint64(p.aSegDurs, p.window)
+	aStarts := windowTailUint64(p.aSegStarts, p.window)
+
+	if p.abrMaster != nil {
+		p.abrMaster.onShardUpdated(p)
+		return nil
+	}
+
+	doc := buildMPD(
+		p.availabilityStart, p.segSec, p.window,
+		p.videoInit, p.videoCodec, p.effectiveVideoBW(), p.width, p.height,
+		vSegs, vDurs, vStarts,
+		p.audioInit, p.audioCodec, p.audioSR,
+		aSegs, aDurs, aStarts,
+		"",
+	)
+	if doc == nil {
+		return nil
+	}
+	out, err := xml.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(p.manifestPath, append([]byte(xml.Header), out...))
 }
 
+// ─── helpers ───────────────────────────────────────────────────────────────
+
+// totalQueuedVideoDur90k returns the total duration of queued video in 90 kHz ticks.
+func totalQueuedVideoDur90k(vDTS []uint64) uint64 {
+	if len(vDTS) < 2 {
+		return 0
+	}
+	return (vDTS[len(vDTS)-1] - vDTS[0]) * 90
+}
+
+// windowTailUint64 returns the last n elements of vals.
 func windowTailUint64(vals []uint64, n int) []uint64 {
 	if n <= 0 || len(vals) == 0 {
 		return vals
@@ -849,27 +732,101 @@ func windowTailUint64(vals []uint64, n int) []uint64 {
 	return vals[len(vals)-n:]
 }
 
-func (p *dashFMP4Packager) effectiveVideoBW() int {
-	if p.videoBW > 0 {
-		return p.videoBW
-	}
-	return 5_000_000
-}
-
-func (p *dashFMP4Packager) writeManifestLocked() error {
-	if p.manifestPath == "" && p.abrMaster == nil {
+// h264AnnexBToAVCC converts an Annex-B H.264 access unit to AVCC (length-prefixed NALUs).
+func h264AnnexBToAVCC(annexB []byte) []byte {
+	if len(annexB) == 0 {
 		return nil
 	}
+	avcc := avc.ConvertByteStreamToNaluSample(annexB)
+	if len(avcc) > 0 {
+		return avcc
+	}
+	// Fallback: extract NALUs manually and prefix each with a 4-byte big-endian length.
+	nalus := avc.ExtractNalusFromByteStream(annexB)
+	if len(nalus) == 0 {
+		return nil
+	}
+	var out []byte
+	for _, nalu := range nalus {
+		n := len(nalu)
+		out = append(out, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		out = append(out, nalu...)
+	}
+	return out
+}
 
+// annexB4To3ForPSExtract replaces 4-byte Annex-B start codes with 3-byte ones
+// so that mp4ff's Annex-B scanners (which use 0x00 0x00 0x01) work correctly.
+func annexB4To3ForPSExtract(b []byte) []byte {
+	return bytes.ReplaceAll(b, []byte{0, 0, 0, 1}, []byte{0, 0, 1})
+}
+
+// encodeInitToFile writes an mp4.InitSegment atomically to the given path.
+func encodeInitToFile(path string, init *mp4.InitSegment) error {
+	var buf bytes.Buffer
+	if err := init.Encode(&buf); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, buf.Bytes())
+}
+
+// parseDashSegNum extracts the segment number from "seg_v_00042.m4s" / "seg_a_00012.m4s".
+func parseDashSegNum(kind byte, name string) int {
+	prefix := "seg_" + string(kind) + "_"
+	if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".m4s") {
+		return 0
+	}
+	s := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".m4s")
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+// buildSegTimeline constructs a SegmentTimeline from a window of (name, dur, start) triples.
+// Only the first entry gets an explicit @t attribute; the rest are implied.
+func buildSegTimeline(segs []string, durs []uint64, starts []uint64) *mpdSegTimeline {
+	if len(segs) == 0 {
+		return nil
+	}
+	tl := &mpdSegTimeline{S: make([]mpdSTimeline, 0, len(segs))}
+	for i := range segs {
+		var d uint64
+		if i < len(durs) {
+			d = durs[i]
+		}
+		if d == 0 {
+			continue
+		}
+		s := mpdSTimeline{D: d}
+		if i == 0 && len(starts) > 0 {
+			t := starts[0]
+			s.T = &t
+		}
+		tl.S = append(tl.S, s)
+	}
+	return tl
+}
+
+// buildMPD creates a dynamic MPD document from the provided per-track window slices.
+// baseURL is prepended to all init/media patterns (empty for per-shard MPD).
+// Returns nil when there are no segments available yet.
+func buildMPD(
+	availStart time.Time, segSec, window int,
+	videoInit *mp4.InitSegment, videoCodec string, videoBW, vW, vH int,
+	vSegs []string, vDurs, vStarts []uint64,
+	audioInit *mp4.InitSegment, audioCodec string, audioSR int,
+	aSegs []string, aDurs, aStarts []uint64,
+	baseURL string,
+) *mpdRoot {
 	ast := ""
-	if !p.availabilityStart.IsZero() {
-		ast = p.availabilityStart.UTC().Format(time.RFC3339)
+	if !availStart.IsZero() {
+		ast = availStart.UTC().Format(time.RFC3339)
 	}
 	pub := time.Now().UTC().Format(time.RFC3339)
-	minBuf := max(4, p.segSec*2)
-	sugDelay := max(6, p.segSec*3)
-	maxSegDur := max(p.segSec*3, p.segSec+1)
-	doc := mpdRoot{
+	minBuf := max(4, segSec*2)
+	sugDelay := max(6, segSec*3)
+	maxSegDur := max(segSec*3, segSec+1)
+
+	doc := &mpdRoot{
 		XMLName:                    xml.Name{Local: "MPD"},
 		XMLNS:                      "urn:mpeg:dash:schema:mpd:2011",
 		Type:                       "dynamic",
@@ -878,13 +835,10 @@ func (p *dashFMP4Packager) writeManifestLocked() error {
 		SuggestedPresentationDelay: fmt.Sprintf("PT%dS", sugDelay),
 		MaxSegmentDuration:         fmt.Sprintf("PT%dS", maxSegDur),
 		AvailabilityStartTime:      ast,
-		MinUpdate:                  fmt.Sprintf("PT%dS", p.segSec),
-		BufferDepth:                fmt.Sprintf("PT%dS", p.segSec*p.window),
+		MinUpdate:                  fmt.Sprintf("PT%dS", segSec),
+		BufferDepth:                fmt.Sprintf("PT%dS", segSec*window),
 		PublishTime:                pub,
-		Periods: []mpdPeriod{{
-			ID:    "0",
-			Start: "PT0S",
-		}},
+		Periods:                    []mpdPeriod{{ID: "0", Start: "PT0S"}},
 		UTCTiming: &mpdUTCTiming{
 			SchemeIDURI: "urn:mpeg:dash:utc:direct:2014",
 			Value:       pub,
@@ -892,115 +846,82 @@ func (p *dashFMP4Packager) writeManifestLocked() error {
 	}
 	per := &doc.Periods[0]
 
-	vSegs := windowTail(p.onDiskV, p.window)
-	vDurs := windowTailUint64(p.vSegDurs, p.window)
-	vStarts := windowTailUint64(p.vSegStarts, p.window)
-	if p.videoInit != nil && len(vSegs) > 0 {
-		vTL := &mpdSegTimeline{S: make([]mpdSTimeline, 0, len(vSegs))}
-		for i := range vSegs {
-			d := uint64(p.segSec) * uint64(dashVideoTimescale)
-			if i < len(vDurs) && vDurs[i] > 0 {
-				d = vDurs[i]
+	if videoInit != nil && len(vSegs) > 0 {
+		vTL := buildSegTimeline(vSegs, vDurs, vStarts)
+		if vTL != nil {
+			vStartNum := parseDashSegNum('v', vSegs[0])
+			if vStartNum <= 0 {
+				vStartNum = 1
 			}
-			st := mpdSTimeline{D: d}
-			if i == 0 && len(vStarts) > 0 {
-				t0 := vStarts[0]
-				st.T = &t0
-			}
-			vTL.S = append(vTL.S, st)
+			initV := baseURL + "init_v.mp4"
+			mediaV := baseURL + dashVideoMediaPattern
+			per.AdaptationSets = append(per.AdaptationSets, mpdAdaptationSet{
+				ID:               "0",
+				ContentType:      "video",
+				MimeType:         "video/mp4",
+				SegmentAlignment: "true",
+				StartWithSAP:     "1",
+				Representations: []mpdRepresentation{{
+					ID:        "v0",
+					MimeType:  "video/mp4",
+					Codecs:    videoCodec,
+					Bandwidth: videoBW,
+					Width:     vW,
+					Height:    vH,
+					SegmentTemplate: mpdSegmentTemplate{
+						Timescale:      dashVideoTimescale,
+						Initialization: initV,
+						Media:          mediaV,
+						StartNumber:    vStartNum,
+						Timeline:       vTL,
+					},
+				}},
+			})
 		}
-		vStartNum := parseDashSegMediaNumber('v', vSegs[0])
-		if vStartNum <= 0 {
-			vStartNum = 1
-		}
-		per.AdaptationSets = append(per.AdaptationSets, mpdAdaptationSet{
-			ID:               "0",
-			ContentType:      "video",
-			MimeType:         "video/mp4",
-			SegmentAlignment: "true",
-			StartWithSAP:     "1",
-			Representations: []mpdRepresentation{{
-				ID:        "v0",
-				MimeType:  "video/mp4",
-				Codecs:    p.videoCodec,
-				Bandwidth: p.effectiveVideoBW(),
-				Width:     p.width,
-				Height:    p.height,
-				SegmentTemplate: mpdSegmentTemplate{
-					Timescale:      dashVideoTimescale,
-					Initialization: "init_v.mp4",
-					Media:          dashVideoMediaPattern,
-					StartNumber:    vStartNum,
-					Timeline:       vTL,
-				},
-			}},
-		})
 	}
 
-	aSegs := windowTail(p.onDiskA, p.window)
-	aDurs := windowTailUint64(p.aSegDurs, p.window)
-	aStarts := windowTailUint64(p.aSegStarts, p.window)
-	if p.audioInit != nil && len(aSegs) > 0 {
-		defADur := uint64(p.audioFramesPerSegment() * 1024)
-		aTL := &mpdSegTimeline{S: make([]mpdSTimeline, 0, len(aSegs))}
-		for i := range aSegs {
-			d := defADur
-			if i < len(aDurs) && aDurs[i] > 0 {
-				d = aDurs[i]
+	if audioInit != nil && len(aSegs) > 0 {
+		aTL := buildSegTimeline(aSegs, aDurs, aStarts)
+		if aTL != nil {
+			aStartNum := parseDashSegNum('a', aSegs[0])
+			if aStartNum <= 0 {
+				aStartNum = 1
 			}
-			st := mpdSTimeline{D: d}
-			if i == 0 && len(aStarts) > 0 {
-				t0 := aStarts[0]
-				st.T = &t0
-			}
-			aTL.S = append(aTL.S, st)
+			asr := audioSR
+			initA := baseURL + "init_a.mp4"
+			mediaA := baseURL + dashAudioMediaPattern
+			per.AdaptationSets = append(per.AdaptationSets, mpdAdaptationSet{
+				ID:               "1",
+				ContentType:      "audio",
+				MimeType:         "audio/mp4",
+				SegmentAlignment: "true",
+				StartWithSAP:     "1",
+				Representations: []mpdRepresentation{{
+					ID:                "a0",
+					MimeType:          "audio/mp4",
+					Codecs:            audioCodec,
+					Bandwidth:         128_000,
+					AudioSamplingRate: &asr,
+					SegmentTemplate: mpdSegmentTemplate{
+						Timescale:      audioSR,
+						Initialization: initA,
+						Media:          mediaA,
+						StartNumber:    aStartNum,
+						Timeline:       aTL,
+					},
+				}},
+			})
 		}
-		aStartNum := parseDashSegMediaNumber('a', aSegs[0])
-		if aStartNum <= 0 {
-			aStartNum = 1
-		}
-		asr := p.audioSR
-		per.AdaptationSets = append(per.AdaptationSets, mpdAdaptationSet{
-			ID:               "1",
-			ContentType:      "audio",
-			MimeType:         "audio/mp4",
-			SegmentAlignment: "true",
-			StartWithSAP:     "1",
-			Representations: []mpdRepresentation{{
-				ID:                "a0",
-				MimeType:          "audio/mp4",
-				Codecs:            p.audioCodec,
-				Bandwidth:         128_000,
-				AudioSamplingRate: &asr,
-				SegmentTemplate: mpdSegmentTemplate{
-					Timescale:      p.audioSR,
-					Initialization: "init_a.mp4",
-					Media:          dashAudioMediaPattern,
-					StartNumber:    aStartNum,
-					Timeline:       aTL,
-				},
-			}},
-		})
 	}
 
 	if len(per.AdaptationSets) == 0 {
 		return nil
 	}
-
-	if p.abrMaster != nil {
-		p.abrMaster.onShardUpdated(p)
-		return nil
-	}
-
-	out, err := xml.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return err
-	}
-	hdr := []byte(xml.Header)
-	return writeFileAtomic(p.manifestPath, append(hdr, out...))
+	return doc
 }
 
-// MPD XML structs (MPEG-DASH schema subset).
+// ─── MPD XML structs (MPEG-DASH schema subset) ─────────────────────────────
+
 type mpdRoot struct {
 	XMLName                    xml.Name      `xml:"MPD"`
 	XMLNS                      string        `xml:"xmlns,attr"`
