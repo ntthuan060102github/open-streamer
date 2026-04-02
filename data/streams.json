@@ -1,6 +1,81 @@
 {
-  "test": {
-    "code": "test",
+  "test_file": {
+    "code": "test_file",
+    "name": "string",
+    "description": "string",
+    "tags": [
+      "string"
+    ],
+    "stream_key": "string",
+    "status": "idle",
+    "inputs": [
+      {
+        "url": "/Users/thuan.nguyen.trong/Desktop/workspace/thuannt/Open-Streamer/data/source.mp4",
+        "priority": 0,
+        "net": {}
+      }
+    ],
+    "transcoder": null,
+    "protocols": {
+      "hls": true,
+      "dash": true
+    },
+    "push": [],
+    "created_at": "2026-03-31T21:25:45.370384+07:00",
+    "updated_at": "2026-03-31T21:25:45.370384+07:00"
+  },
+  "test_hls": {
+    "code": "test_hls",
+    "name": "string",
+    "description": "string",
+    "tags": [
+      "string"
+    ],
+    "stream_key": "string",
+    "status": "idle",
+    "inputs": [
+      {
+        "url": "http://10.241.1.100/test1/index.m3u8",
+        "priority": 0,
+        "net": {}
+      }
+    ],
+    "transcoder": null,
+    "protocols": {
+      "hls": true,
+      "dash": true
+    },
+    "push": [],
+    "created_at": "2026-03-31T21:25:45.370384+07:00",
+    "updated_at": "2026-03-31T21:25:45.370384+07:00"
+  },
+  "test_rtmp": {
+    "code": "test_rtmp",
+    "name": "string",
+    "description": "string",
+    "tags": [
+      "string"
+    ],
+    "stream_key": "string",
+    "status": "idle",
+    "inputs": [
+      {
+        "url": "rtmp://10.241.1.100/static/test1",
+        "priority": 0,
+        "net": {}
+      }
+    ],
+    "transcoder": null,
+    "protocols": {
+      "hls": true,
+      "dash": true
+    },
+    "push": [],
+    "created_at": "2026-03-31T21:25:45.370384+07:00",
+    "updated_at": "2026-03-31T21:25:45.370384+07:00"
+  },
+  "test_rtsp": {
+    "code": "test_rtsp",
     "name": "string",
     "description": "string",
     "tags": [
