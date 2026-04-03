@@ -84,6 +84,11 @@ func (s *Service) runProfileEncoder(
 		defer stdinWG.Done()
 		defer func() { _ = stdin.Close() }()
 		var avMux *tsmux.FromAV
+		var tsCarry []byte
+		write := func(b []byte) error {
+			_, err := stdin.Write(b)
+			return err
+		}
 		for {
 			select {
 			case <-ctx.Done():
@@ -93,12 +98,21 @@ func (s *Service) runProfileEncoder(
 					return
 				}
 				var werr error
-				tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
-					if werr != nil {
-						return
-					}
-					_, werr = stdin.Write(b)
-				})
+				if len(pkt.TS) > 0 {
+					tsmux.DrainTS188Aligned(&tsCarry, pkt.TS, func(b []byte) {
+						if werr != nil {
+							return
+						}
+						werr = write(b)
+					})
+				} else {
+					tsmux.FeedWirePacket(nil, pkt.AV, &avMux, func(b []byte) {
+						if werr != nil {
+							return
+						}
+						werr = write(b)
+					})
+				}
 				if werr != nil {
 					return
 				}

@@ -19,10 +19,14 @@ func buildFFmpegArgs(profiles []Profile, tc *domain.TranscoderConfig) ([]string,
 	}
 	p := profiles[0]
 
+	// Input probe: live pipe TS often needs more than default probesize (5 MiB) so
+	// SPS/PPS and pixel format are known before libx264 consumes decoded frames.
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
 		"-fflags", "+genpts+discardcorrupt",
+		"-analyzeduration", "15000000",
+		"-probesize", "33554432",
 		"-f", "mpegts",
 		"-i", "pipe:0",
 		"-map", "0:v:0?",

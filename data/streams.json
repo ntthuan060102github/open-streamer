@@ -1,10 +1,10 @@
 {
-  "test_udp": {
-    "code": "test_udp",
+  "test_1": {
+    "code": "test_1",
     "name": "Test UDP / RTMP stream",
     "description": "",
     "tags": [],
-    "stream_key": "test_udp",
+    "stream_key": "test_1",
     "status": "idle",
     "inputs": [
       {
@@ -54,10 +54,14 @@
       }
     },
     "protocols": {
-      "hls": true,
-      "dash": true
+      "hls": true
     },
-    "push": [],
+    "push": [
+      {
+        "url": "rtmp://10.241.1.100:1935/static/test_push",
+        "enabled": true
+      }
+    ],
     "created_at": "2026-03-31T21:25:45.370384+07:00",
     "updated_at": "2026-03-31T21:25:45.370384+07:00"
   }

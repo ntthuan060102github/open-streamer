@@ -142,6 +142,27 @@ func (s *Service) logStderr(streamID domain.StreamCode, profile string, r io.Rea
 			slog.Debug("transcoder: ffmpeg timestamp resync", "stream_code", streamID, "profile", profile, "msg", line)
 			continue
 		}
+		trim := strings.TrimSpace(line)
+		if strings.Contains(line, "Packet corrupt") ||
+			strings.Contains(line, "PES packet size mismatch") ||
+			strings.HasPrefix(trim, "Last message repeated") {
+			slog.Debug("transcoder: ffmpeg stderr", "stream_code", streamID, "profile", profile, "msg", line)
+			continue
+		}
+		// H.264 decoder / demuxer noise: probe gaps, segment joins, B-frame reorder, MMCO.
+		if strings.Contains(line, "non-existing PPS") ||
+			strings.Contains(line, "no frame!") ||
+			strings.Contains(line, "error while decoding MB") ||
+			strings.Contains(line, "Could not find codec parameters") ||
+			strings.Contains(line, "Consider increasing the value for the 'analyzeduration'") ||
+			strings.Contains(line, "unspecified pixel format") ||
+			strings.Contains(line, "co located POCs unavailable") ||
+			strings.Contains(line, "mmco: unref short failure") ||
+			strings.Contains(line, "reference picture missing during reorder") ||
+			strings.Contains(line, "Missing reference picture") {
+			slog.Debug("transcoder: ffmpeg stderr", "stream_code", streamID, "profile", profile, "msg", line)
+			continue
+		}
 		slog.Warn("transcoder: ffmpeg stderr", "stream_code", streamID, "profile", profile, "msg", line)
 	}
 }

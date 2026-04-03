@@ -15,6 +15,8 @@ func TestBuildFFmpegArgs_CopyVideoAndAudio(t *testing.T) {
 	}
 	args, err := buildFFmpegArgs([]Profile{{Bitrate: "1k"}}, tc)
 	require.NoError(t, err)
+	require.Contains(t, args, "-analyzeduration")
+	require.Contains(t, args, "-probesize")
 	require.Contains(t, args, "-c:v")
 	require.Contains(t, args, "copy")
 	require.Contains(t, args, "-c:a")

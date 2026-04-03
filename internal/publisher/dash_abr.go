@@ -168,25 +168,34 @@ func (m *dashABRMaster) stop() {
 }
 
 // flushRoot builds and writes the root ABR MPD from the latest shard snapshots.
+//
+// Lock ordering: never acquire m.mu while holding any packager p.mu. A packager
+// tick holds p.mu and calls onShardUpdated → m.mu; flushRoot used to hold m.mu
+// then p.mu, which deadlocked the demuxer (onTSFrame waits on p.mu forever).
 func (m *dashABRMaster) flushRoot() {
 	m.mu.Lock()
 	if len(m.shards) == 0 {
 		m.mu.Unlock()
 		return
 	}
-
-	// Snapshot shard state while holding m.mu but NOT the individual p.mu.
-	// We can do this safely because we hold references and these fields are only
-	// mutated under p.mu; we take consistent snapshots below under p.mu.
 	slugs := make([]string, 0, len(m.shards))
 	for s := range m.shards {
 		slugs = append(slugs, s)
 	}
 	sort.Strings(slugs)
+	ordered := make([]*dashFMP4Packager, len(slugs))
+	for i, sl := range slugs {
+		ordered[i] = m.shards[sl]
+	}
+	window := m.window
+	segSec := m.segSec
+	rootManifest := m.rootManifest
+	streamID := m.streamID
+	m.mu.Unlock()
 
 	snaps := make([]dashABRRep, 0, len(slugs))
-	for _, sl := range slugs {
-		p := m.shards[sl]
+	for i, sl := range slugs {
+		p := ordered[i]
 		p.mu.Lock()
 		snap := dashABRRep{
 			slug:       sl,
@@ -198,23 +207,22 @@ func (m *dashABRMaster) flushRoot() {
 			audioCodec: p.audioCodec,
 			hasVideo:   p.videoInit != nil,
 			hasAudio:   p.audioInit != nil && p.packAudio,
-			vSegs:      windowTail(append([]string(nil), p.onDiskV...), m.window),
-			vDurs:      windowTailUint64(append([]uint64(nil), p.vSegDurs...), m.window),
-			vStarts:    windowTailUint64(append([]uint64(nil), p.vSegStarts...), m.window),
-			aSegs:      windowTail(append([]string(nil), p.onDiskA...), m.window),
-			aDurs:      windowTailUint64(append([]uint64(nil), p.aSegDurs...), m.window),
-			aStarts:    windowTailUint64(append([]uint64(nil), p.aSegStarts...), m.window),
+			vSegs:      windowTail(append([]string(nil), p.onDiskV...), window),
+			vDurs:      windowTailUint64(append([]uint64(nil), p.vSegDurs...), window),
+			vStarts:    windowTailUint64(append([]uint64(nil), p.vSegStarts...), window),
+			aSegs:      windowTail(append([]string(nil), p.onDiskA...), window),
+			aDurs:      windowTailUint64(append([]uint64(nil), p.aSegDurs...), window),
+			aStarts:    windowTailUint64(append([]uint64(nil), p.aSegStarts...), window),
 			availStart: p.availabilityStart,
 			segSec:     p.segSec,
 		}
 		p.mu.Unlock()
 		snaps = append(snaps, snap)
 	}
-	m.mu.Unlock()
 
-	if err := writeDASHABRRootMPD(m.rootManifest, m.segSec, m.window, snaps); err != nil {
+	if err := writeDASHABRRootMPD(rootManifest, segSec, window, snaps); err != nil {
 		slog.Warn("publisher: DASH ABR root MPD write failed",
-			"stream_code", m.streamID, "err", err)
+			"stream_code", streamID, "err", err)
 	}
 }
 

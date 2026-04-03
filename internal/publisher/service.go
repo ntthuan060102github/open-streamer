@@ -27,15 +27,16 @@ import (
 
 // Service manages all output workers for active streams.
 type Service struct {
-	cfg config.PublisherConfig
-	buf *buffer.Service
-	bus events.Bus
+	cfg        config.PublisherConfig
+	buf        *buffer.Service
+	bus        events.Bus
+	ffmpegPath string
 	// hlsFailoverGen: incremented on each input.failover so every ABR variant segmenter can tag
 	// exactly one EXT-X-DISCONTINUITY on its next flush (bool map would only let the first variant win).
-	hlsFailoverMu   sync.Mutex
-	hlsFailoverGen  map[domain.StreamCode]uint64
-	mu                  sync.Mutex
-	workers             map[domain.StreamCode]context.CancelFunc
+	hlsFailoverMu  sync.Mutex
+	hlsFailoverGen map[domain.StreamCode]uint64
+	mu             sync.Mutex
+	workers        map[domain.StreamCode]context.CancelFunc
 	// streamWorkCtx is the per-stream publisher worker context (same lifetime as workers).
 	streamWorkCtx map[domain.StreamCode]context.Context
 	// mediaBuffer is the Buffer Hub id for single-rendition outputs (RTSP, RTMP, SRT, push, DVR via API).
@@ -62,17 +63,23 @@ func New(i do.Injector) (*Service, error) {
 	bus := do.MustInvoke[events.Bus](i)
 	pub := &cfg.Publisher
 
+	ffmpegPath := cfg.Transcoder.FFmpegPath
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+
 	svc := &Service{
-		cfg:             *pub,
-		buf:             buf,
-		bus:             bus,
+		cfg:            *pub,
+		buf:            buf,
+		bus:            bus,
+		ffmpegPath:     ffmpegPath,
 		hlsFailoverGen: make(map[domain.StreamCode]uint64),
-		workers:         make(map[domain.StreamCode]context.CancelFunc),
-		streamWorkCtx:   make(map[domain.StreamCode]context.Context),
-		mediaBuffer:     make(map[domain.StreamCode]domain.StreamCode),
-		rtspMounts:      make(map[string]*gortsplib.ServerStream),
-		rtmpActive:      make(map[domain.StreamCode]struct{}),
-		srtActive:       make(map[domain.StreamCode]struct{}),
+		workers:        make(map[domain.StreamCode]context.CancelFunc),
+		streamWorkCtx:  make(map[domain.StreamCode]context.Context),
+		mediaBuffer:    make(map[domain.StreamCode]domain.StreamCode),
+		rtspMounts:     make(map[string]*gortsplib.ServerStream),
+		rtmpActive:     make(map[domain.StreamCode]struct{}),
+		srtActive:      make(map[domain.StreamCode]struct{}),
 	}
 	bus.Subscribe(domain.EventInputFailover, func(_ context.Context, e domain.Event) error {
 		svc.hlsFailoverMu.Lock()
@@ -143,21 +150,10 @@ func (s *Service) spawnOutputs(
 	}
 
 	playID := s.mediaBufferForLocked(code)
-	if p.RTSP {
-		go s.serveRTSP(workerCtx, code, playID)
-	}
-	if p.RTMP {
-		go s.serveRTMP(workerCtx, code)
-	}
-	if p.SRT {
-		go s.serveSRT(workerCtx, code)
-	}
-	if p.RTS {
-		go s.serveRTS(workerCtx, code)
-	}
+	_ = playID
 	for _, dest := range stream.Push {
 		if dest.Enabled {
-			go s.pushToDestination(workerCtx, code, playID, dest)
+			// TODO: Implement push to destination
 		}
 	}
 }
