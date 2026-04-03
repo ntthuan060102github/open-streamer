@@ -59,6 +59,9 @@ type Stream struct {
 	// Status is the runtime lifecycle state (not persisted between restarts).
 	Status StreamStatus `json:"status"`
 
+	// Disabled when true excludes the stream from server bootstrap and rejects pipeline Start.
+	Disabled bool `json:"disabled"`
+
 	// Inputs are the available ingest sources ordered by Priority.
 	// The Stream Manager monitors health and switches between them on failure.
 	Inputs []Input `json:"inputs"`

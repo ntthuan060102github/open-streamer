@@ -49,6 +49,9 @@ func (c *Coordinator) Start(ctx context.Context, stream *domain.Stream) error {
 	if c.mgr.IsRegistered(stream.Code) {
 		return nil
 	}
+	if stream.Disabled {
+		return fmt.Errorf("coordinator: stream %q is disabled", stream.Code)
+	}
 	if len(stream.Inputs) == 0 {
 		return fmt.Errorf("coordinator: stream %q has no inputs", stream.Code)
 	}
@@ -131,8 +134,8 @@ func (c *Coordinator) Stop(streamID domain.StreamCode) {
 	c.buf.Delete(streamID)
 }
 
-// BootstrapPersistedStreams loads every stream from the store (except those marked stopped)
-// and starts the ingest + publish pipeline for each stream that has at least one input.
+// BootstrapPersistedStreams loads every stream from the store (except those marked stopped
+// or disabled) and starts the ingest + publish pipeline for each stream that has at least one input.
 func BootstrapPersistedStreams(ctx context.Context, log *slog.Logger, repo store.StreamRepository, coord *Coordinator) {
 	streams, err := repo.List(ctx, store.StreamFilter{})
 	if err != nil {
@@ -144,6 +147,10 @@ func BootstrapPersistedStreams(ctx context.Context, log *slog.Logger, repo store
 			continue
 		}
 		if st.Status == domain.StatusStopped {
+			continue
+		}
+		if st.Disabled {
+			log.Debug("bootstrap: skip stream (disabled)", "stream_code", st.Code)
 			continue
 		}
 		if len(st.Inputs) == 0 {

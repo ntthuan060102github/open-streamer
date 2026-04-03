@@ -25,6 +25,8 @@ type StreamPutRequest struct {
 
 	StreamKey string `json:"stream_key"`
 
+	Disabled bool `json:"disabled"`
+
 	Inputs []domain.Input `json:"inputs"`
 
 	Transcoder *domain.TranscoderConfig `json:"transcoder,omitempty"`

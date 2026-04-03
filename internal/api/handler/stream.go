@@ -112,14 +112,14 @@ func (h *StreamHandler) Put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.streamRepo.Save(r.Context(), body); err != nil {
-		if wasRunning {
+		if wasRunning && !cur.Disabled {
 			_ = h.coordinator.Start(r.Context(), cur)
 		}
 		writeError(w, http.StatusInternalServerError, "SAVE_FAILED", "failed to save stream")
 		return
 	}
 
-	if wasRunning {
+	if wasRunning && !body.Disabled {
 		if err := h.coordinator.Start(r.Context(), body); err != nil {
 			writeError(w, http.StatusInternalServerError, "RESTART_FAILED", err.Error())
 			return
@@ -219,6 +219,10 @@ func (h *StreamHandler) Start(w http.ResponseWriter, r *http.Request) {
 	stream, err := h.streamRepo.FindByCode(r.Context(), code)
 	if err != nil {
 		writeStoreError(w, err)
+		return
+	}
+	if stream.Disabled {
+		writeError(w, http.StatusBadRequest, "STREAM_DISABLED", "stream is disabled; clear disabled flag before starting")
 		return
 	}
 	stream.Status = domain.StatusActive
