@@ -268,6 +268,8 @@ func (r *RTSPReader) emitJoyRTSPPacket(pkt joyav.Packet) bool {
 }
 
 // handleCodecDataChange handles a mid-stream SPS/PPS rotation.
+// It re-reads stream codec data and rebuilds the H.264 SPS/PPS prefix table
+// so that subsequent IDR frames carry the updated parameter sets.
 // Returns true to continue the read loop, false to abort.
 func (r *RTSPReader) handleCodecDataChange(c *joyrtsp.Client) bool {
 	newConn, err := c.HandleCodecDataChange()
@@ -276,9 +278,26 @@ func (r *RTSPReader) handleCodecDataChange(c *joyrtsp.Client) bool {
 			"url", r.input.URL, "err", err)
 		return false
 	}
+
+	streams, err := newConn.Streams()
+	if err != nil {
+		slog.Warn("rtsp reader: re-read streams after codec change failed",
+			"url", r.input.URL, "err", err)
+		_ = newConn.Close()
+		return false
+	}
+
+	filtered, idxMap := filterSupportedRTMPStreams(streams)
+	h264Prefix := r.buildH264Prefixes(filtered)
+
 	r.mu.Lock()
 	r.conn = newConn
+	r.filtered = filtered
+	r.idxMap = idxMap
+	r.h264KeyPrefixAnnexB = h264Prefix
 	r.mu.Unlock()
+
+	slog.Info("rtsp reader: codec data updated", "url", r.input.URL)
 	return true
 }
 
