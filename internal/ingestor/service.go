@@ -10,6 +10,7 @@ package ingestor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,6 +26,8 @@ import (
 	"github.com/ntthuan060102github/open-streamer/pkg/protocol"
 	"github.com/samber/do/v2"
 )
+
+var errNoPusherConnected = errors.New("ingestor: no pusher connected")
 
 type pullWorkerEntry struct {
 	inputPriority int
@@ -222,6 +225,15 @@ func (s *Service) startPushRegistration(streamID domain.StreamCode, input domain
 		"url", input.URL,
 		"stream_key", key,
 	)
+
+	// No pusher is connected yet — notify the manager so it can fall back to
+	// a lower-priority input immediately rather than waiting for the packet timeout.
+	s.mu.Lock()
+	errObserver := s.onInputError
+	s.mu.Unlock()
+	if errObserver != nil {
+		errObserver(streamID, input.Priority, errNoPusherConnected)
+	}
 	return nil
 }
 
