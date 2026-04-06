@@ -35,10 +35,8 @@ CLAUDE.md
 .claude
 
 # Data
-hls/
-dash/
-dvr/
 data/
+out/
 
 # Bin
 bin/
