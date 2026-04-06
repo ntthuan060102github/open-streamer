@@ -93,7 +93,10 @@ func (s *Server) buildRouter(
 	r.Route("/recordings/{rid}", func(r chi.Router) {
 		r.Get("/", recording.Get)
 		r.Delete("/", recording.Delete)
+		r.Get("/info", recording.Info)
 		r.Get("/playlist.m3u8", recording.Playlist)
+		r.Get("/timeshift.m3u8", recording.Timeshift)
+		r.Get("/{file}", recording.ServeSegment)
 	})
 
 	r.Route("/hooks", func(r chi.Router) {

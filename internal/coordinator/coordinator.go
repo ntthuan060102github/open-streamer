@@ -11,6 +11,7 @@ import (
 
 	"github.com/ntthuan060102github/open-streamer/internal/buffer"
 	"github.com/ntthuan060102github/open-streamer/internal/domain"
+	"github.com/ntthuan060102github/open-streamer/internal/dvr"
 	"github.com/ntthuan060102github/open-streamer/internal/manager"
 	"github.com/ntthuan060102github/open-streamer/internal/publisher"
 	"github.com/ntthuan060102github/open-streamer/internal/store"
@@ -24,6 +25,7 @@ type Coordinator struct {
 	mgr *manager.Service
 	tc  *transcoder.Service
 	pub *publisher.Service
+	dvr *dvr.Service
 
 	rendMu     sync.Mutex
 	renditions map[domain.StreamCode][]string // ABR rendition slugs per stream (for buffer teardown)
@@ -36,6 +38,7 @@ func New(i do.Injector) (*Coordinator, error) {
 		mgr:        do.MustInvoke[*manager.Service](i),
 		tc:         do.MustInvoke[*transcoder.Service](i),
 		pub:        do.MustInvoke[*publisher.Service](i),
+		dvr:        do.MustInvoke[*dvr.Service](i),
 		renditions: make(map[domain.StreamCode][]string),
 	}, nil
 }
@@ -127,6 +130,13 @@ func (c *Coordinator) Start(ctx context.Context, stream *domain.Stream) error {
 		c.rendMu.Unlock()
 	}
 
+	if stream.DVR != nil && stream.DVR.Enabled {
+		mediaBuf := buffer.PlaybackBufferID(stream.Code, stream.Transcoder)
+		if _, err := c.dvr.StartRecording(ctx, stream.Code, mediaBuf, stream.DVR); err != nil {
+			slog.Warn("coordinator: dvr start failed", "stream_code", stream.Code, "err", err)
+		}
+	}
+
 	return nil
 }
 
@@ -137,6 +147,11 @@ func (c *Coordinator) IsRunning(streamID domain.StreamCode) bool {
 
 // Stop tears down publisher, transcoder, manager (ingest), and the buffer.
 func (c *Coordinator) Stop(streamID domain.StreamCode) {
+	if c.dvr.IsRecording(streamID) {
+		if err := c.dvr.StopRecording(context.Background(), streamID); err != nil {
+			slog.Warn("coordinator: dvr stop failed", "stream_code", streamID, "err", err)
+		}
+	}
 	c.pub.Stop(streamID)
 	c.tc.Stop(streamID)
 	c.mgr.Unregister(streamID)

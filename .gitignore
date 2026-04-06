@@ -32,9 +32,13 @@ go.work.sum
 # .vscode/
 .cursor
 CLAUDE.md
+.claude
 
 # Data
 hls/
 dash/
 dvr/
 data/
+
+# Bin
+bin/

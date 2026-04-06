@@ -21,7 +21,6 @@ type Config struct {
 	Transcoder TranscoderConfig
 	Publisher  PublisherConfig
 	Manager    ManagerConfig
-	DVR        DVRConfig
 	Hooks      HooksConfig
 	Metrics    MetricsConfig
 	Log        LogConfig
@@ -156,18 +155,6 @@ type PublisherSRTListenerConfig struct {
 	LatencyMS int `mapstructure:"latency_ms"`
 }
 
-// DVRConfig controls server-level DVR infrastructure.
-// Per-stream DVR settings (segment duration, retention, storage path) are
-// configured on each Stream via the API.
-type DVRConfig struct {
-	// Enabled is the global on/off switch for DVR. When false, no stream
-	// can record regardless of its own DVR config.
-	Enabled bool `mapstructure:"enabled"`
-
-	// RootDir is the base directory where all stream recordings are stored.
-	RootDir string `mapstructure:"root_dir"`
-}
-
 // HooksConfig controls the hook dispatcher worker pool.
 // Per-hook settings (max retries, timeout, secret, event filter) are
 // configured on each Hook via the API.
@@ -265,9 +252,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("publisher.srt.port_min", 10000)
 	v.SetDefault("publisher.srt.port_max", 10099)
 	v.SetDefault("publisher.srt.latency_ms", 120)
-
-	v.SetDefault("dvr.enabled", false)
-	v.SetDefault("dvr.root_dir", "./dvr")
 
 	v.SetDefault("hooks.worker_count", 4)
 

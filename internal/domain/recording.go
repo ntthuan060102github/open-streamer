@@ -3,59 +3,75 @@ package domain
 import "time"
 
 // RecordingID is the unique identifier for a DVR recording.
+// Always equals the stream code — one recording per stream.
 type RecordingID string
 
 // RecordingStatus represents the lifecycle state of a recording.
 type RecordingStatus string
 
-// RecordingStatus values describe DVR recording lifecycle.
 const (
 	RecordingStatusRecording RecordingStatus = "recording"
 	RecordingStatusStopped   RecordingStatus = "stopped"
 	RecordingStatusFailed    RecordingStatus = "failed"
 )
 
-// Segment is a single MPEG-TS chunk produced by the DVR.
-type Segment struct {
-	Index     int           `json:"index"`
-	Path      string        `json:"path"` // relative path under DVR root dir
-	Duration  time.Duration `json:"duration" swaggertype:"string" example:"6s"`
-	Size      int64         `json:"size"` // bytes
-	CreatedAt time.Time     `json:"created_at"`
+// DVRGap represents a period of signal loss or server downtime.
+type DVRGap struct {
+	From     time.Time     `json:"from"`     // wall time gap started
+	To       time.Time     `json:"to"`       // wall time recording resumed
+	Duration time.Duration `json:"duration"` // To - From
 }
 
-// Recording represents a DVR recording session for a stream.
+// DVRIndex is the on-disk metadata index for a stream's DVR recording.
+// Written atomically to {SegmentDir}/index.json after every segment flush.
+//
+// Deliberately lightweight — no per-segment details.
+// Per-segment timeline (wall time, duration, discontinuity) lives in playlist.m3u8
+// via #EXT-X-PROGRAM-DATE-TIME and #EXTINF tags.
+type DVRIndex struct {
+	StreamCode    StreamCode `json:"stream_code"`
+	StartedAt     time.Time  `json:"started_at"`
+	LastSegmentAt time.Time  `json:"last_segment_at,omitempty"`
+
+	SegmentCount   int   `json:"segment_count"`
+	TotalSizeBytes int64 `json:"total_size_bytes"`
+
+	// Gaps is the list of known signal-loss / server-restart interruptions.
+	Gaps []DVRGap `json:"gaps,omitempty"`
+}
+
+// Recording represents the lifecycle metadata for a DVR recording session.
+// ID equals StreamCode — one persistent recording per stream.
+// Segment data lives in DVRIndex (index.json on disk), not here.
 type Recording struct {
 	ID         RecordingID     `json:"id"`
 	StreamCode StreamCode      `json:"stream_code"`
 	StartedAt  time.Time       `json:"started_at"`
 	StoppedAt  *time.Time      `json:"stopped_at,omitempty"`
 	Status     RecordingStatus `json:"status"`
-	Segments   []Segment       `json:"segments"`
 
-	// TotalSizeBytes is the sum of all segment sizes. Updated as segments are flushed.
-	TotalSizeBytes int64 `json:"total_size_bytes"`
+	// SegmentDir is the absolute path to the directory holding TS files,
+	// playlist.m3u8, and index.json.
+	SegmentDir string `json:"segment_dir"`
 }
 
 // StreamDVRConfig overrides the global DVR settings for a specific stream.
-// All zero values mean "use the global default".
 type StreamDVRConfig struct {
 	Enabled bool `json:"enabled"`
 
-	// RetentionHours overrides the global retention window.
-	// 0 = keep forever (or use global setting).
-	RetentionHours int `json:"retention_hours"`
+	// RetentionSec is the retention window in seconds.
+	// 0 = keep forever.
+	RetentionSec int `json:"retention_sec"`
 
 	// SegmentDuration overrides the global segment length in seconds.
-	// Must align with the transcoder KeyframeInterval.
-	// 0 = use global default (typically 6s).
+	// 0 = use default (4s).
 	SegmentDuration int `json:"segment_duration"`
 
-	// StoragePath overrides the global DVR root directory for this stream.
-	// "" = use global DVR root dir.
+	// StoragePath overrides the default DVR root directory for this stream.
+	// "" = use "./dvr/{streamCode}".
 	StoragePath string `json:"storage_path"`
 
-	// MaxSizeGB caps the total disk usage for this stream's recordings.
-	// When exceeded, the oldest segments are pruned. 0 = no limit.
+	// MaxSizeGB caps total disk usage. Oldest segments pruned when exceeded.
+	// 0 = no limit.
 	MaxSizeGB float64 `json:"max_size_gb"`
 }
