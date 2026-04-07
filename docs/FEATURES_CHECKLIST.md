@@ -20,7 +20,7 @@ Legend for **Completion**:
 | Dependency injection (`samber/do/v2`) | Complete | All services wired in `cmd/server/main.go` |
 | Structured logging (`slog`, `pkg/logger`) | Complete | `text` / `json` format; configurable level |
 | Graceful shutdown (SIGINT/SIGTERM) | Complete | 10 s timeout, all services shut down in reverse order |
-| Prometheus metrics (`internal/metrics`) | Partial | Module present; full coverage of all subsystems not yet verified |
+| Prometheus metrics (`internal/metrics`) | Complete | Wired in ingestor, manager, transcoder, DVR, coordinator; stream start time, bytes/packets, failovers, restarts, active workers |
 
 ---
 
@@ -39,7 +39,7 @@ Legend for **Completion**:
 | REST API — recordings timeshift.m3u8 | Complete | Dynamic VOD M3U8; `from`, `offset_sec`, `duration` query params |
 | REST API — recordings segment serve | Complete | `GET /recordings/{rid}/{file}` — path traversal protected |
 | REST API — hooks CRUD + test (HTTP) | Complete | HTTP hook test fires real outbound request |
-| REST API — hooks test (Kafka) | Stub | Returns "not implemented" |
+| REST API — hooks test (Kafka) | Complete | `DeliverTestEvent` routes to `deliverKafka`; brokers via `hooks.kafka_brokers` |
 | OpenAPI / Swagger | Complete | Generated via `swag`; served at `/swagger/` |
 | HTTP static delivery — HLS master + segments | Complete | `/{code}/index.m3u8`, `/{code}/*` |
 | HTTP static delivery — DASH MPD + segments | Complete | `/{code}/index.mpd`, `/{code}/*` |
@@ -244,4 +244,4 @@ Legend for **Completion**:
 
 ---
 
-*Updated against codebase state 2026-04-07 (Kafka hooks, full event wiring, FFmpeg auto-restart, exhausted-input detection). Update this file when feature status changes.*
+*Updated against codebase state 2026-04-07 (Kafka hooks, full event wiring, FFmpeg auto-restart, exhausted-input detection, Prometheus metrics fully wired). Update this file when feature status changes.*
