@@ -291,7 +291,7 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Recording ID",
+                        "description": "Recording ID (= stream code)",
                         "name": "rid",
                         "in": "path",
                         "required": true
@@ -316,11 +316,11 @@ const docTemplate = `{
                 "tags": [
                     "recordings"
                 ],
-                "summary": "Delete recording",
+                "summary": "Delete recording metadata",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Recording ID",
+                        "description": "Recording ID (= stream code)",
                         "name": "rid",
                         "in": "path",
                         "required": true
@@ -339,6 +339,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/recordings/{rid}/info": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "DVR recording info",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recording ID (= stream code)",
+                        "name": "rid",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
         "/recordings/{rid}/playlist.m3u8": {
             "get": {
                 "produces": [
@@ -347,11 +382,11 @@ const docTemplate = `{
                 "tags": [
                     "recordings"
                 ],
-                "summary": "Recording VOD playlist",
+                "summary": "Recording M3U8 playlist",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Recording ID",
+                        "description": "Recording ID (= stream code)",
                         "name": "rid",
                         "in": "path",
                         "required": true
@@ -362,6 +397,105 @@ const docTemplate = `{
                         "description": "M3U8 body",
                         "schema": {
                             "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/recordings/{rid}/timeshift.m3u8": {
+            "get": {
+                "produces": [
+                    "text/plain"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Timeshift VOD playlist",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recording ID (= stream code)",
+                        "name": "rid",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Absolute start time (RFC3339)",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Relative start offset in seconds from recording start",
+                        "name": "offset_sec",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Window duration in seconds (default: all remaining)",
+                        "name": "duration",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "M3U8 body",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    }
+                }
+            }
+        },
+        "/recordings/{rid}/{file}": {
+            "get": {
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "recordings"
+                ],
+                "summary": "Serve DVR segment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Recording ID (= stream code)",
+                        "name": "rid",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Segment filename (e.g. 000000.ts)",
+                        "name": "file",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
                         }
                     },
                     "404": {
@@ -881,6 +1015,9 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "disabled": {
+                    "type": "boolean"
+                },
                 "dvr": {
                     "$ref": "#/definitions/domain.StreamDVRConfig"
                 },
@@ -1091,7 +1228,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "target": {
-                    "description": "HTTP URL, NATS subject, or Kafka topic",
+                    "description": "HTTP URL or Kafka topic",
                     "type": "string"
                 },
                 "timeout_sec": {
@@ -1107,12 +1244,10 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "http",
-                "nats",
                 "kafka"
             ],
             "x-enum-varnames": [
                 "HookTypeHTTP",
-                "HookTypeNATS",
                 "HookTypeKafka"
             ]
         },
@@ -1271,11 +1406,9 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "segments": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/domain.Segment"
-                    }
+                "segment_dir": {
+                    "description": "SegmentDir is the absolute path to the directory holding TS files,\nplaylist.m3u8, and index.json.",
+                    "type": "string"
                 },
                 "started_at": {
                     "type": "string"
@@ -1288,10 +1421,6 @@ const docTemplate = `{
                 },
                 "stream_code": {
                     "type": "string"
-                },
-                "total_size_bytes": {
-                    "description": "TotalSizeBytes is the sum of all segment sizes. Updated as segments are flushed.",
-                    "type": "integer"
                 }
             }
         },
@@ -1308,29 +1437,6 @@ const docTemplate = `{
                 "RecordingStatusFailed"
             ]
         },
-        "domain.Segment": {
-            "type": "object",
-            "properties": {
-                "created_at": {
-                    "type": "string"
-                },
-                "duration": {
-                    "type": "string",
-                    "example": "6s"
-                },
-                "index": {
-                    "type": "integer"
-                },
-                "path": {
-                    "description": "relative path under DVR root dir",
-                    "type": "string"
-                },
-                "size": {
-                    "description": "bytes",
-                    "type": "integer"
-                }
-            }
-        },
         "domain.Stream": {
             "type": "object",
             "properties": {
@@ -1343,6 +1449,10 @@ const docTemplate = `{
                 },
                 "description": {
                     "type": "string"
+                },
+                "disabled": {
+                    "description": "Disabled when true excludes the stream from server bootstrap and rejects pipeline Start.",
+                    "type": "boolean"
                 },
                 "dvr": {
                     "description": "DVR overrides the global DVR settings for this specific stream.\nIf nil, the global config is used (when DVR is enabled globally).",
@@ -1431,19 +1541,19 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "max_size_gb": {
-                    "description": "MaxSizeGB caps the total disk usage for this stream's recordings.\nWhen exceeded, the oldest segments are pruned. 0 = no limit.",
+                    "description": "MaxSizeGB caps total disk usage. Oldest segments pruned when exceeded.\n0 = no limit.",
                     "type": "number"
                 },
-                "retention_hours": {
-                    "description": "RetentionHours overrides the global retention window.\n0 = keep forever (or use global setting).",
+                "retention_sec": {
+                    "description": "RetentionSec is the retention window in seconds.\n0 = keep forever.",
                     "type": "integer"
                 },
                 "segment_duration": {
-                    "description": "SegmentDuration overrides the global segment length in seconds.\nMust align with the transcoder KeyframeInterval.\n0 = use global default (typically 6s).",
+                    "description": "SegmentDuration overrides the global segment length in seconds.\n0 = use default (4s).",
                     "type": "integer"
                 },
                 "storage_path": {
-                    "description": "StoragePath overrides the global DVR root directory for this stream.\n\"\" = use global DVR root dir.",
+                    "description": "StoragePath overrides the default DVR root directory for this stream.\n\"\" = use \"./dvr/{streamCode}\".",
                     "type": "string"
                 }
             }
@@ -1490,6 +1600,19 @@ const docTemplate = `{
                 }
             }
         },
+        "domain.TranscodeMode": {
+            "type": "string",
+            "enum": [
+                "passthrough",
+                "remux",
+                "transcode"
+            ],
+            "x-enum-varnames": [
+                "TranscodeModePassthrough",
+                "TranscodeModeRemux",
+                "TranscodeModeFull"
+            ]
+        },
         "domain.TranscoderConfig": {
             "type": "object",
             "properties": {
@@ -1509,6 +1632,14 @@ const docTemplate = `{
                 "global": {
                     "$ref": "#/definitions/domain.TranscoderGlobalConfig"
                 },
+                "mode": {
+                    "description": "Mode controls how the server processes the ingest stream.\npassthrough — skip FFmpeg entirely; raw MPEG-TS packets flow directly to the publisher.\nremux       — skip FFmpeg entirely; ingestor already rewraps to MPEG-TS on ingest.\ntranscode   — default; FFmpeg re-encodes according to Video/Audio config.\nEmpty string is treated as transcode.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.TranscodeMode"
+                        }
+                    ]
+                },
                 "video": {
                     "$ref": "#/definitions/domain.VideoTranscodeConfig"
                 }
@@ -1520,10 +1651,6 @@ const docTemplate = `{
                 "deviceid": {
                     "description": "DeviceID selects hardware device index.",
                     "type": "integer"
-                },
-                "external": {
-                    "description": "External indicates transcoding is handled by an external pipeline.",
-                    "type": "boolean"
                 },
                 "fps": {
                     "description": "FPS sets output framerate. 0 = source/default.",

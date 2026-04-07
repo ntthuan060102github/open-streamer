@@ -78,6 +78,8 @@ definitions:
     properties:
       description:
         type: string
+      disabled:
+        type: boolean
       dvr:
         $ref: '#/definitions/domain.StreamDVRConfig'
       inputs:
@@ -243,7 +245,7 @@ definitions:
         description: HMAC-SHA256 signing secret (HTTP only)
         type: string
       target:
-        description: HTTP URL, NATS subject, or Kafka topic
+        description: HTTP URL or Kafka topic
         type: string
       timeout_sec:
         description: |-
@@ -256,12 +258,10 @@ definitions:
   domain.HookType:
     enum:
     - http
-    - nats
     - kafka
     type: string
     x-enum-varnames:
     - HookTypeHTTP
-    - HookTypeNATS
     - HookTypeKafka
   domain.Input:
     properties:
@@ -404,10 +404,11 @@ definitions:
     properties:
       id:
         type: string
-      segments:
-        items:
-          $ref: '#/definitions/domain.Segment'
-        type: array
+      segment_dir:
+        description: |-
+          SegmentDir is the absolute path to the directory holding TS files,
+          playlist.m3u8, and index.json.
+        type: string
       started_at:
         type: string
       status:
@@ -416,10 +417,6 @@ definitions:
         type: string
       stream_code:
         type: string
-      total_size_bytes:
-        description: TotalSizeBytes is the sum of all segment sizes. Updated as segments
-          are flushed.
-        type: integer
     type: object
   domain.RecordingStatus:
     enum:
@@ -431,22 +428,6 @@ definitions:
     - RecordingStatusRecording
     - RecordingStatusStopped
     - RecordingStatusFailed
-  domain.Segment:
-    properties:
-      created_at:
-        type: string
-      duration:
-        example: 6s
-        type: string
-      index:
-        type: integer
-      path:
-        description: relative path under DVR root dir
-        type: string
-      size:
-        description: bytes
-        type: integer
-    type: object
   domain.Stream:
     properties:
       code:
@@ -456,6 +437,10 @@ definitions:
         type: string
       description:
         type: string
+      disabled:
+        description: Disabled when true excludes the stream from server bootstrap
+          and rejects pipeline Start.
+        type: boolean
       dvr:
         allOf:
         - $ref: '#/definitions/domain.StreamDVRConfig'
@@ -522,24 +507,23 @@ definitions:
         type: boolean
       max_size_gb:
         description: |-
-          MaxSizeGB caps the total disk usage for this stream's recordings.
-          When exceeded, the oldest segments are pruned. 0 = no limit.
+          MaxSizeGB caps total disk usage. Oldest segments pruned when exceeded.
+          0 = no limit.
         type: number
-      retention_hours:
+      retention_sec:
         description: |-
-          RetentionHours overrides the global retention window.
-          0 = keep forever (or use global setting).
+          RetentionSec is the retention window in seconds.
+          0 = keep forever.
         type: integer
       segment_duration:
         description: |-
           SegmentDuration overrides the global segment length in seconds.
-          Must align with the transcoder KeyframeInterval.
-          0 = use global default (typically 6s).
+          0 = use default (4s).
         type: integer
       storage_path:
         description: |-
-          StoragePath overrides the global DVR root directory for this stream.
-          "" = use global DVR root dir.
+          StoragePath overrides the default DVR root directory for this stream.
+          "" = use "./dvr/{streamCode}".
         type: string
     type: object
   domain.StreamStatus:
@@ -578,6 +562,16 @@ definitions:
           0 = match source resolution.
         type: integer
     type: object
+  domain.TranscodeMode:
+    enum:
+    - passthrough
+    - remux
+    - transcode
+    type: string
+    x-enum-varnames:
+    - TranscodeModePassthrough
+    - TranscodeModeRemux
+    - TranscodeModeFull
   domain.TranscoderConfig:
     properties:
       audio:
@@ -593,6 +587,15 @@ definitions:
         type: array
       global:
         $ref: '#/definitions/domain.TranscoderGlobalConfig'
+      mode:
+        allOf:
+        - $ref: '#/definitions/domain.TranscodeMode'
+        description: |-
+          Mode controls how the server processes the ingest stream.
+          passthrough — skip FFmpeg entirely; raw MPEG-TS packets flow directly to the publisher.
+          remux       — skip FFmpeg entirely; ingestor already rewraps to MPEG-TS on ingest.
+          transcode   — default; FFmpeg re-encodes according to Video/Audio config.
+          Empty string is treated as transcode.
       video:
         $ref: '#/definitions/domain.VideoTranscodeConfig'
     type: object
@@ -601,9 +604,6 @@ definitions:
       deviceid:
         description: DeviceID selects hardware device index.
         type: integer
-      external:
-        description: External indicates transcoding is handled by an external pipeline.
-        type: boolean
       fps:
         description: FPS sets output framerate. 0 = source/default.
         type: integer
@@ -940,7 +940,7 @@ paths:
   /recordings/{rid}:
     delete:
       parameters:
-      - description: Recording ID
+      - description: Recording ID (= stream code)
         in: path
         name: rid
         required: true
@@ -952,12 +952,12 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/apidocs.ErrorBody'
-      summary: Delete recording
+      summary: Delete recording metadata
       tags:
       - recordings
     get:
       parameters:
-      - description: Recording ID
+      - description: Recording ID (= stream code)
         in: path
         name: rid
         required: true
@@ -976,10 +976,60 @@ paths:
       summary: Get recording
       tags:
       - recordings
+  /recordings/{rid}/{file}:
+    get:
+      parameters:
+      - description: Recording ID (= stream code)
+        in: path
+        name: rid
+        required: true
+        type: string
+      - description: Segment filename (e.g. 000000.ts)
+        in: path
+        name: file
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Serve DVR segment
+      tags:
+      - recordings
+  /recordings/{rid}/info:
+    get:
+      parameters:
+      - description: Recording ID (= stream code)
+        in: path
+        name: rid
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: DVR recording info
+      tags:
+      - recordings
   /recordings/{rid}/playlist.m3u8:
     get:
       parameters:
-      - description: Recording ID
+      - description: Recording ID (= stream code)
         in: path
         name: rid
         required: true
@@ -995,7 +1045,45 @@ paths:
           description: Not Found
           schema:
             $ref: '#/definitions/apidocs.ErrorBody'
-      summary: Recording VOD playlist
+      summary: Recording M3U8 playlist
+      tags:
+      - recordings
+  /recordings/{rid}/timeshift.m3u8:
+    get:
+      parameters:
+      - description: Recording ID (= stream code)
+        in: path
+        name: rid
+        required: true
+        type: string
+      - description: Absolute start time (RFC3339)
+        in: query
+        name: from
+        type: string
+      - description: Relative start offset in seconds from recording start
+        in: query
+        name: offset_sec
+        type: integer
+      - description: 'Window duration in seconds (default: all remaining)'
+        in: query
+        name: duration
+        type: integer
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: M3U8 body
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Timeshift VOD playlist
       tags:
       - recordings
   /streams:
