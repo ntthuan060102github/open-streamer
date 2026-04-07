@@ -104,7 +104,7 @@ Legend for **Completion**:
 | Extra FFmpeg args passthrough | Complete | `global.extra_args` |
 | Hardware acceleration (NVENC / VAAPI / VideoToolbox / QSV) | Complete | `global.hw_accel` maps to encoder + hwaccel flags |
 | FFmpeg stderr filtering | Complete | Timestamp discontinuity, frame reorder → debug; real errors → warn/error |
-| Passthrough / remux mode (no FFmpeg) | Schema only | `TranscodeMode` enum exists in domain; pipeline always uses FFmpeg for transcoding |
+| Passthrough / remux mode (no FFmpeg) | Complete | `transcoder.mode: passthrough` or `remux` skips FFmpeg; ingestor writes raw MPEG-TS directly to publisher buffer |
 
 ---
 

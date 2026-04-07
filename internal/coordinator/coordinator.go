@@ -203,7 +203,11 @@ func shouldRunTranscoder(stream *domain.Stream) bool {
 	if stream == nil || stream.Transcoder == nil {
 		return false
 	}
-	return !stream.Transcoder.Global.External
+	switch stream.Transcoder.Mode {
+	case domain.TranscodeModePassthrough, domain.TranscodeModeRemux:
+		return false
+	}
+	return true
 }
 
 // transcoderProfilesFromDomain maps stream video settings to FFmpeg ladder profiles.

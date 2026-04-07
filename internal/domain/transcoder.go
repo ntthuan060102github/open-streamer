@@ -122,9 +122,6 @@ type DecoderConfig struct {
 
 // TranscoderGlobalConfig holds global transcoder parameters.
 type TranscoderGlobalConfig struct {
-	// External indicates transcoding is handled by an external pipeline.
-	External bool `json:"external"`
-
 	// HW selects the acceleration backend.
 	HW HWAccel `json:"hw"`
 
@@ -172,6 +169,13 @@ type AudioTranscodeConfig struct {
 
 // TranscoderConfig is the complete transcoding configuration for a stream.
 type TranscoderConfig struct {
+	// Mode controls how the server processes the ingest stream.
+	// passthrough — skip FFmpeg entirely; raw MPEG-TS packets flow directly to the publisher.
+	// remux       — skip FFmpeg entirely; ingestor already rewraps to MPEG-TS on ingest.
+	// transcode   — default; FFmpeg re-encodes according to Video/Audio config.
+	// Empty string is treated as transcode.
+	Mode TranscodeMode `json:"mode,omitempty"`
+
 	Video   VideoTranscodeConfig   `json:"video"`
 	Audio   AudioTranscodeConfig   `json:"audio"`
 	Decoder DecoderConfig          `json:"decoder"`

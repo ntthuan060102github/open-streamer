@@ -83,7 +83,7 @@ func NewFullStream(code domain.StreamCode) *domain.Stream {
 			},
 			Decoder: domain.DecoderConfig{Name: "h264_cuvid"},
 			Global: domain.TranscoderGlobalConfig{
-				External: false,
+	
 				HW:       domain.HWAccelNVENC,
 				FPS:      30,
 				GOP:      60,

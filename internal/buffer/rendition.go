@@ -30,7 +30,11 @@ type RenditionPlayout struct {
 // When video.copy is true or video.profiles is empty, a single passthrough rendition
 // is returned (one worker: copy from raw ingest, no ABR ladder).
 func RenditionsForTranscoder(code domain.StreamCode, tc *domain.TranscoderConfig) []RenditionPlayout {
-	if tc == nil || tc.Global.External {
+	if tc == nil {
+		return nil
+	}
+	switch tc.Mode {
+	case domain.TranscodeModePassthrough, domain.TranscodeModeRemux:
 		return nil
 	}
 	if tc.Video.Copy || len(tc.Video.Profiles) == 0 {
