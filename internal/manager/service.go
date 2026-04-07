@@ -67,6 +67,9 @@ type streamState struct {
 
 	// dead is set by Unregister. All goroutines that touch state must bail immediately on sight.
 	dead bool
+	// exhausted is set when all inputs are degraded and no failover candidate exists.
+	// Cleared when a new input becomes active.
+	exhausted bool
 
 	// monCtx is cancelled when the stream is unregistered.
 	// It is used as the base context for ingestor operations to ensure they
@@ -105,6 +108,24 @@ type Service struct {
 	packetTimeout time.Duration
 	mu            sync.RWMutex
 	streams       map[domain.StreamCode]*streamState
+	onExhausted   func(streamCode domain.StreamCode) // all inputs degraded — no ingest possible
+	onRestored     func(streamCode domain.StreamCode) // at least one input active again after exhaustion
+}
+
+// SetExhaustedCallback registers a function called when all inputs for a stream are
+// degraded and no failover candidate is available.
+func (s *Service) SetExhaustedCallback(fn func(domain.StreamCode)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onExhausted = fn
+}
+
+// SetRestoredCallback registers a function called when a failover succeeds after
+// a period where all inputs were exhausted.
+func (s *Service) SetRestoredCallback(fn func(domain.StreamCode)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRestored = fn
 }
 
 // New creates a Service and registers it with the DI injector.
@@ -403,8 +424,19 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 	}
 	best := selectBest(state)
 	if best == nil {
+		wasExhausted := state.exhausted
+		state.exhausted = true
 		state.mu.Unlock()
+
 		slog.Error("manager: no healthy input available", "stream_code", streamID)
+		if !wasExhausted {
+			s.mu.RLock()
+			cb := s.onExhausted
+			s.mu.RUnlock()
+			if cb != nil {
+				go cb(streamID)
+			}
+		}
 		return
 	}
 	if best.Input.Priority == state.active {
@@ -412,6 +444,7 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		return
 	}
 	prevPriority := state.active
+	wasExhausted := state.exhausted
 	bestInput := best.Input
 	bufID := state.bufferWriteID
 	ctx := state.monCtx
@@ -440,6 +473,7 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		}
 		state.active = bestInput.Priority
 		state.lastSwitchAt = time.Now()
+		state.exhausted = false
 	}
 	state.mu.Unlock()
 
@@ -448,6 +482,15 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		StreamCode: streamID,
 		Payload:    map[string]any{"from": prevPriority, "to": bestInput.Priority},
 	})
+
+	if wasExhausted {
+		s.mu.RLock()
+		cb := s.onRestored
+		s.mu.RUnlock()
+		if cb != nil {
+			go cb(streamID)
+		}
+	}
 }
 
 // runProbe verifies whether a degraded input has recovered.

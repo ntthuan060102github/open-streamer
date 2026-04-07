@@ -22,12 +22,13 @@ import (
 
 // Coordinator starts and stops the full per-stream pipeline.
 type Coordinator struct {
-	buf *buffer.Service
-	mgr *manager.Service
-	tc  *transcoder.Service
-	pub *publisher.Service
-	dvr *dvr.Service
-	bus events.Bus
+	buf        *buffer.Service
+	mgr        *manager.Service
+	tc         *transcoder.Service
+	pub        *publisher.Service
+	dvr        *dvr.Service
+	bus        events.Bus
+	streamRepo store.StreamRepository
 
 	rendMu     sync.Mutex
 	renditions map[domain.StreamCode][]string // ABR rendition slugs per stream (for buffer teardown)
@@ -35,15 +36,20 @@ type Coordinator struct {
 
 // New registers a Coordinator with the DI injector.
 func New(i do.Injector) (*Coordinator, error) {
-	return &Coordinator{
+	c := &Coordinator{
 		buf:        do.MustInvoke[*buffer.Service](i),
 		mgr:        do.MustInvoke[*manager.Service](i),
 		tc:         do.MustInvoke[*transcoder.Service](i),
 		pub:        do.MustInvoke[*publisher.Service](i),
 		dvr:        do.MustInvoke[*dvr.Service](i),
 		bus:        do.MustInvoke[events.Bus](i),
+		streamRepo: do.MustInvoke[store.StreamRepository](i),
 		renditions: make(map[domain.StreamCode][]string),
-	}, nil
+	}
+	c.tc.SetFatalCallback(c.handleTranscoderFatal)
+	c.mgr.SetExhaustedCallback(c.handleAllInputsExhausted)
+	c.mgr.SetRestoredCallback(c.handleInputRestored)
+	return c, nil
 }
 
 // Start creates the buffer, registers the stream with the manager (ingest + failover),
@@ -179,6 +185,69 @@ func (c *Coordinator) Stop(streamID domain.StreamCode) {
 		Type:       domain.EventStreamStopped,
 		StreamCode: streamID,
 	})
+}
+
+// handleAllInputsExhausted is called by the manager when all inputs are degraded.
+// It persists stream status as degraded so operators and hooks are notified.
+func (c *Coordinator) handleAllInputsExhausted(streamCode domain.StreamCode) {
+	slog.Warn("coordinator: all inputs exhausted, marking stream degraded",
+		"stream_code", streamCode,
+	)
+	ctx := context.Background()
+	st, err := c.streamRepo.FindByCode(ctx, streamCode)
+	if err != nil {
+		slog.Warn("coordinator: exhausted — could not load stream", "stream_code", streamCode, "err", err)
+		return
+	}
+	st.Status = domain.StatusDegraded
+	if err := c.streamRepo.Save(ctx, st); err != nil {
+		slog.Warn("coordinator: exhausted — could not persist stream status", "stream_code", streamCode, "err", err)
+	}
+	c.bus.Publish(ctx, domain.Event{
+		Type:       domain.EventInputDegraded,
+		StreamCode: streamCode,
+		Payload:    map[string]any{"reason": "all_inputs_exhausted"},
+	})
+}
+
+// handleInputRestored is called by the manager when failover succeeds after all inputs
+// were previously exhausted. Marks the stream active again.
+func (c *Coordinator) handleInputRestored(streamCode domain.StreamCode) {
+	slog.Info("coordinator: input restored, marking stream active",
+		"stream_code", streamCode,
+	)
+	ctx := context.Background()
+	st, err := c.streamRepo.FindByCode(ctx, streamCode)
+	if err != nil {
+		slog.Warn("coordinator: restored — could not load stream", "stream_code", streamCode, "err", err)
+		return
+	}
+	st.Status = domain.StatusActive
+	if err := c.streamRepo.Save(ctx, st); err != nil {
+		slog.Warn("coordinator: restored — could not persist stream status", "stream_code", streamCode, "err", err)
+	}
+}
+
+// handleTranscoderFatal is called by the transcoder when a profile exceeds MaxRestarts.
+// It stops the full pipeline and marks the stream as stopped in the store.
+func (c *Coordinator) handleTranscoderFatal(streamCode domain.StreamCode) {
+	slog.Error("coordinator: transcoder fatal, stopping stream pipeline",
+		"stream_code", streamCode,
+	)
+	c.Stop(streamCode)
+
+	ctx := context.Background()
+	st, err := c.streamRepo.FindByCode(ctx, streamCode)
+	if err != nil {
+		slog.Warn("coordinator: transcoder fatal — could not load stream to update status",
+			"stream_code", streamCode, "err", err)
+		return
+	}
+	st.Status = domain.StatusStopped
+	if err := c.streamRepo.Save(ctx, st); err != nil {
+		slog.Warn("coordinator: transcoder fatal — could not persist stream status",
+			"stream_code", streamCode, "err", err)
+	}
 }
 
 // BootstrapPersistedStreams loads every stream from the store (except those marked stopped

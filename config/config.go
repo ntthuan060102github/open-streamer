@@ -86,6 +86,10 @@ type TranscoderConfig struct {
 	// MaxWorkers caps the number of concurrent FFmpeg processes.
 	MaxWorkers int    `mapstructure:"max_workers"`
 	FFmpegPath string `mapstructure:"ffmpeg_path"`
+	// MaxRestarts is the maximum number of consecutive FFmpeg crashes allowed per
+	// profile before the transcoder gives up and triggers a fatal callback.
+	// 0 = unlimited retries (not recommended for production).
+	MaxRestarts int `mapstructure:"max_restarts"`
 }
 
 // PublisherConfig controls output delivery; settings are grouped by protocol.
@@ -226,6 +230,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("transcoder.max_workers", 4)
 	v.SetDefault("transcoder.ffmpeg_path", "ffmpeg")
+	v.SetDefault("transcoder.max_restarts", 5)
 
 	v.SetDefault("manager.input_packet_timeout_sec", 30)
 
