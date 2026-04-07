@@ -64,16 +64,16 @@ type rtmpPushPackager struct {
 	aacCD   joyav.CodecData
 
 	// Connection state — reset on each reconnect attempt.
-	conn    *joyrtmp.Conn
-	ready   bool // WriteHeader has been called
+	conn  *joyrtmp.Conn
+	ready bool // WriteHeader has been called
 
 	// Pending frames buffered before conn is ready.
 	pending []rtmpPendingFrame
 
 	// Base DTS for relative timestamps (reset on reconnect).
-	baseDTS    uint64
-	baseDTSSet bool
-	baseADTS   uint64
+	baseDTS     uint64
+	baseDTSSet  bool
+	baseADTS    uint64
 	baseADTSSet bool
 
 	// connErr is set on first write failure; run() checks it to exit the session.
@@ -167,44 +167,36 @@ func (p *rtmpPushPackager) onTSFrame(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts
 		if len(frame) == 0 {
 			return
 		}
-		p.handleVideoFrame(frame, pts, dts, false)
+		p.handleVideoFrame(frame, pts, dts)
 
 	case mpeg2.TS_STREAM_H265:
-		if len(frame) == 0 {
-			return
-		}
-		p.handleVideoFrame(frame, pts, dts, true)
+		// H.265 is not supported by the RTMP spec; skip silently.
+		return
 
 	case mpeg2.TS_STREAM_AAC:
 		p.handleAudioFrame(frame, dts)
+
+	case mpeg2.TS_STREAM_AUDIO_MPEG1, mpeg2.TS_STREAM_AUDIO_MPEG2:
+		// MP3 audio in TS — not supported for RTMP push.
+		return
 
 	default:
 		return
 	}
 }
 
-func (p *rtmpPushPackager) handleVideoFrame(frame []byte, pts, dts uint64, isHEVC bool) {
+func (p *rtmpPushPackager) handleVideoFrame(frame []byte, pts, dts uint64) {
 	// Accumulate SPS/PPS until H.264 codec data is built.
-	if p.h264CD == nil && !isHEVC {
+	if p.h264CD == nil {
 		p.videoPS = append(p.videoPS, frame...)
 		p.tryBuildH264CD()
 	}
 
-	// Build joy4 packet.
-	var avcc []byte
-	var isKey bool
-	if isHEVC {
-		avcc = hevcAnnexBToAVCC(frame)
-		isKey = tsmux.KeyFrameH265(frame)
-		// HEVC push not supported via joy4 — skip until RTMPE/enhanced RTMP is available.
-		return
-	} else {
-		avcc = h264AnnexBToAVCC(frame)
-		isKey = tsmux.KeyFrameH264(frame)
-	}
+	avcc := h264AnnexBToAVCC(frame)
 	if len(avcc) == 0 {
 		return
 	}
+	isKey := tsmux.KeyFrameH264(frame)
 
 	if !p.baseDTSSet {
 		p.baseDTS = dts
@@ -224,7 +216,7 @@ func (p *rtmpPushPackager) handleVideoFrame(frame []byte, pts, dts uint64, isHEV
 		CompositionTime: time.Duration(cto) * time.Millisecond,
 	}
 
-	p.enqueueOrWrite(pkt, isKey)
+	p.enqueueOrWrite(pkt)
 }
 
 func (p *rtmpPushPackager) handleAudioFrame(frame []byte, dts uint64) {
@@ -265,7 +257,7 @@ func (p *rtmpPushPackager) handleAudioFrame(frame []byte, dts uint64) {
 			Data:       append([]byte(nil), rawAAC...),
 			Time:       time.Duration(elapsed) * time.Millisecond,
 		}
-		p.enqueueOrWrite(pkt, false)
+		p.enqueueOrWrite(pkt)
 
 		pos += frameLen
 	}
@@ -273,7 +265,7 @@ func (p *rtmpPushPackager) handleAudioFrame(frame []byte, dts uint64) {
 
 // enqueueOrWrite either buffers the packet (during codec init / before connect)
 // or writes it directly to the open connection.
-func (p *rtmpPushPackager) enqueueOrWrite(pkt joyav.Packet, isVideoKey bool) {
+func (p *rtmpPushPackager) enqueueOrWrite(pkt joyav.Packet) {
 	if !p.ready {
 		// Try to connect now that we may have codec data.
 		if p.h264CD != nil && p.aacCD != nil {
