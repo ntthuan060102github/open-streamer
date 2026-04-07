@@ -115,7 +115,7 @@ Legend for **Completion**:
 | HLS — single rendition | Complete | Native TS segmenter + media playlist |
 | HLS — ABR (master + `track_N` sub-playlists) | Complete | When transcoding ladder is active |
 | HLS — `#EXT-X-DISCONTINUITY` on failover | Complete | Per-variant generation counter; exactly one tag per failover |
-| DASH — single representation (fMP4 + dynamic MPD) | Partial | H.264 + AAC supported; H.265 in TS path ignored with warning |
+| DASH — single representation (fMP4 + dynamic MPD) | Complete | H.264 + H.265 + AAC supported; MP3 skipped |
 | DASH — ABR (root MPD + per-track directories) | Complete | Audio packaged only on best track folder |
 | RTSP (MPEG-TS in RTP, gortsplib) | Complete | Shared listener; `/live/<code>` |
 | RTMP play (gomedia) | Complete | Shared listener; app `live` |

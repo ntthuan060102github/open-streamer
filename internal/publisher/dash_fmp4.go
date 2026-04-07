@@ -7,7 +7,7 @@ package publisher
 //	Buffer → FeedWirePacket → aligned TS → io.Pipe → mpeg2.TSDemuxer
 //	                                                         │
 //	                        ┌────────────────────────────────┤
-//	                        │ onTSFrame (H.264 AU, AAC ADTS) │
+//	                        │ onTSFrame (H.264/H.265 AU, AAC ADTS) │
 //	                        └────────────────────────────────┘
 //	                                         │
 //	                          queue: vAnnex/vDTS/vPTS, aRaw/aPTS
@@ -18,7 +18,7 @@ package publisher
 //	                          seg_v_NNNNN.m4s / seg_a_NNNNN.m4s
 //	                          index.mpd (per-shard or root via abrMaster)
 //
-// Codec support: H.264 + AAC-LC.  H.265 and MP3 are logged and skipped.
+// Codec support: H.264 + H.265 + AAC-LC.  MP3 is logged and skipped.
 //
 // Segment trigger: queued video duration ≥ segSec (in 90 kHz ticks) AND the
 // queue starts with an IDR, OR wall-clock elapsed ≥ segSec (fallback for
@@ -40,6 +40,7 @@ import (
 
 	"github.com/Eyevinn/mp4ff/aac"
 	"github.com/Eyevinn/mp4ff/avc"
+	"github.com/Eyevinn/mp4ff/hevc"
 	"github.com/Eyevinn/mp4ff/mp4"
 	mpeg2 "github.com/yapingcat/gomedia/go-mpeg2"
 
@@ -149,7 +150,8 @@ type dashFMP4Packager struct {
 	width      int
 	height     int
 
-	hevcWarned bool
+	// isHEVC is set once the video stream is identified as H.265.
+	isHEVC bool
 
 	// Segment counters (1-based, match $Number$ in filenames).
 	vSegN uint64
@@ -339,10 +341,24 @@ func (p *dashFMP4Packager) onTSFrame(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts
 		}
 
 	case mpeg2.TS_STREAM_H265:
-		if !p.hevcWarned {
-			p.hevcWarned = true
-			slog.Warn("publisher: DASH fMP4 H.265 not yet supported — H.264+AAC-LC only",
-				"stream_code", p.streamID)
+		if len(frame) == 0 {
+			return
+		}
+		if len(p.vDTS) > 0 && dts+1000 < p.vDTS[len(p.vDTS)-1] {
+			_ = p.flushSegmentLocked()
+		}
+		cp := append([]byte(nil), frame...)
+		p.vAnnex = append(p.vAnnex, cp)
+		p.vDTS = append(p.vDTS, dts)
+		p.vPTS = append(p.vPTS, pts)
+
+		if p.videoInit == nil {
+			p.isHEVC = true
+			p.videoPS = append(p.videoPS, cp...)
+			p.tryInitVideoH265Locked()
+		}
+		if p.segmentStart.IsZero() && p.videoInit != nil {
+			p.segmentStart = time.Now()
 		}
 
 	case mpeg2.TS_STREAM_AAC:
@@ -426,6 +442,44 @@ func (p *dashFMP4Packager) tryInitVideoLocked() {
 	}
 }
 
+// tryInitVideoH265Locked scans videoPS for VPS/SPS/PPS and, when found, writes init_v.mp4.
+// Caller must hold p.mu.
+func (p *dashFMP4Packager) tryInitVideoH265Locked() {
+	if p.videoInit != nil || len(p.videoPS) < 20 {
+		return
+	}
+	psBuf := annexB4To3ForPSExtract(p.videoPS)
+	vpss, spss, ppss := hevc.GetParameterSetsFromByteStream(psBuf)
+	if len(spss) == 0 || len(ppss) == 0 {
+		return
+	}
+
+	init := mp4.CreateEmptyInit()
+	trak := init.AddEmptyTrack(dashVideoTimescale, "video", "und")
+	if err := trak.SetHEVCDescriptor("hvc1", vpss, spss, ppss, nil, true); err != nil {
+		slog.Error("publisher: DASH SetHEVCDescriptor failed",
+			"stream_code", p.streamID, "err", err)
+		return
+	}
+
+	if sps, err := hevc.ParseSPSNALUnit(spss[0]); err == nil && sps != nil {
+		w, h := sps.ImageSize()
+		p.width = int(w)
+		p.height = int(h)
+		p.videoCodec = hevc.CodecString("hvc1", sps)
+	}
+
+	p.videoInit = init
+	p.videoTID = trak.Tkhd.TrackID
+	p.videoPS = nil
+
+	if err := encodeInitToFile(filepath.Join(p.streamDir, "init_v.mp4"), init); err != nil {
+		slog.Error("publisher: DASH write init_v.mp4 (H.265) failed",
+			"stream_code", p.streamID, "err", err)
+		p.videoInit = nil
+	}
+}
+
 // buildAudioInitLocked creates and writes init_a.mp4 from the first ADTS header.
 // Caller must hold p.mu.
 func (p *dashFMP4Packager) buildAudioInitLocked(hdr *aac.ADTSHeader) error {
@@ -459,11 +513,14 @@ func (p *dashFMP4Packager) audioFramesPerSegment() int {
 	return (p.segSec*p.audioSR + 1023) / 1024
 }
 
-// queuedVideoStartsWithIDRLocked returns true when the first queued H.264 AU is an IDR.
+// queuedVideoStartsWithIDRLocked returns true when the first queued AU is an IDR/IRAP.
 // Caller must hold p.mu.
 func (p *dashFMP4Packager) queuedVideoStartsWithIDRLocked() bool {
 	if len(p.vAnnex) == 0 {
 		return false
+	}
+	if p.isHEVC {
+		return tsmux.KeyFrameH265(p.vAnnex[0])
 	}
 	return tsmux.KeyFrameH264(p.vAnnex[0])
 }
@@ -535,7 +592,12 @@ func (p *dashFMP4Packager) writeVideoSegmentLocked() error {
 	var segDur uint64
 
 	for i, au := range p.vAnnex {
-		avcc := h264AnnexBToAVCC(au)
+		var avcc []byte
+		if p.isHEVC {
+			avcc = hevcAnnexBToAVCC(au)
+		} else {
+			avcc = h264AnnexBToAVCC(au)
+		}
 		if len(avcc) == 0 {
 			continue
 		}
@@ -559,7 +621,8 @@ func (p *dashFMP4Packager) writeVideoSegmentLocked() error {
 		}
 
 		flags := mp4.NonSyncSampleFlags
-		if tsmux.KeyFrameH264(au) {
+		isKey := p.isHEVC && tsmux.KeyFrameH265(au) || !p.isHEVC && tsmux.KeyFrameH264(au)
+		if isKey {
 			flags = mp4.SyncSampleFlags
 		}
 
@@ -777,6 +840,64 @@ func h264AnnexBToAVCC(annexB []byte) []byte {
 		out = append(out, nalu...)
 	}
 	return out
+}
+
+// hevcAnnexBToAVCC converts an Annex-B H.265 access unit to length-prefixed NALUs.
+func hevcAnnexBToAVCC(annexB []byte) []byte {
+	if len(annexB) == 0 {
+		return nil
+	}
+	nalus := splitAnnexBNALUs(annexB)
+	if len(nalus) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, len(annexB))
+	for _, nalu := range nalus {
+		n := len(nalu)
+		out = append(out, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		out = append(out, nalu...)
+	}
+	return out
+}
+
+// splitAnnexBNALUs splits Annex-B byte stream on 3- or 4-byte start codes.
+func splitAnnexBNALUs(data []byte) [][]byte {
+	var nalus [][]byte
+	start := -1
+	n := len(data)
+	for i := 0; i < n-3; i++ {
+		if data[i] == 0 && data[i+1] == 0 {
+			if data[i+2] == 1 {
+				if start >= 0 {
+					end := i
+					for end > start && data[end-1] == 0 {
+						end--
+					}
+					if end > start {
+						nalus = append(nalus, data[start:end])
+					}
+				}
+				start = i + 3
+				i += 2
+			} else if data[i+2] == 0 && i+3 < n && data[i+3] == 1 {
+				if start >= 0 {
+					end := i
+					for end > start && data[end-1] == 0 {
+						end--
+					}
+					if end > start {
+						nalus = append(nalus, data[start:end])
+					}
+				}
+				start = i + 4
+				i += 3
+			}
+		}
+	}
+	if start >= 0 && start < n {
+		nalus = append(nalus, data[start:])
+	}
+	return nalus
 }
 
 // annexB4To3ForPSExtract replaces 4-byte Annex-B start codes with 3-byte ones
