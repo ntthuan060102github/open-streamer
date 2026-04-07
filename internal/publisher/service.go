@@ -23,6 +23,12 @@ import (
 	"github.com/samber/do/v2"
 )
 
+// Compile-time assertion: rtspHandler implements the ServerHandler interfaces it claims.
+var (
+	_ gortsplib.ServerHandlerOnDescribe = (*rtspHandler)(nil)
+	_ gortsplib.ServerHandlerOnSetup    = (*rtspHandler)(nil)
+)
+
 // Service manages all output workers for active streams.
 type Service struct {
 	cfg        config.PublisherConfig
@@ -41,9 +47,11 @@ type Service struct {
 	// When transcoding produces an ABR ladder, this is the best rung ($r$...), not the logical stream code.
 	mediaBuffer map[domain.StreamCode]domain.StreamCode
 
-	rtspMounts map[string]*gortsplib.ServerStream // path -> stream (see publisherLiveMountPath)
-	rtmpActive map[domain.StreamCode]struct{}
-	srtActive  map[domain.StreamCode]struct{}
+	rtspMounts   map[string]*gortsplib.ServerStream // path -> stream
+	rtspSrv      *gortsplib.Server                  // set by RunRTSPPlayServer
+	rtspSrvReady chan struct{}                      // closed when server is ready or disabled
+	rtmpActive   map[domain.StreamCode]struct{}
+	srtActive    map[domain.StreamCode]struct{}
 }
 
 // New creates a Service and registers it with the DI injector.
@@ -68,6 +76,7 @@ func New(i do.Injector) (*Service, error) {
 		streamWorkCtx:  make(map[domain.StreamCode]context.Context),
 		mediaBuffer:    make(map[domain.StreamCode]domain.StreamCode),
 		rtspMounts:     make(map[string]*gortsplib.ServerStream),
+		rtspSrvReady:   make(chan struct{}),
 		rtmpActive:     make(map[domain.StreamCode]struct{}),
 		srtActive:      make(map[domain.StreamCode]struct{}),
 	}
@@ -140,6 +149,11 @@ func (s *Service) spawnOutputs(
 	}
 
 	mediaBuf := s.mediaBufferForLocked(code)
+
+	if p.RTSP {
+		go s.serveRTSP(workerCtx, code, mediaBuf)
+	}
+
 	for _, dest := range stream.Push {
 		if !dest.Enabled {
 			continue
