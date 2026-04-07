@@ -14,6 +14,7 @@ require (
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/samber/do/v2 v2.0.0
+	github.com/segmentio/kafka-go v0.4.50
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	github.com/swaggo/swag v1.16.4
@@ -93,7 +94,6 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/samber/go-type-to-string v1.8.0 // indirect
-	github.com/segmentio/kafka-go v0.4.50 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.2 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
