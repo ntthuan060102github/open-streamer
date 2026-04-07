@@ -1147,26 +1147,61 @@ const docTemplate = `{
                 "stream.started",
                 "stream.stopped",
                 "stream.deleted",
+                "input.connected",
+                "input.reconnecting",
                 "input.degraded",
                 "input.failed",
                 "input.failover",
                 "recording.started",
                 "recording.stopped",
                 "recording.failed",
-                "segment.written"
+                "segment.written",
+                "transcoder.started",
+                "transcoder.stopped",
+                "transcoder.error"
+            ],
+            "x-enum-comments": {
+                "EventInputConnected": "source connected successfully",
+                "EventInputDegraded": "error detected by manager",
+                "EventInputFailed": "worker exited / non-retriable",
+                "EventInputFailover": "switched to lower-priority input",
+                "EventInputReconnecting": "transient error, retrying"
+            },
+            "x-enum-descriptions": [
+                "",
+                "",
+                "",
+                "",
+                "source connected successfully",
+                "transient error, retrying",
+                "error detected by manager",
+                "worker exited / non-retriable",
+                "switched to lower-priority input",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                ""
             ],
             "x-enum-varnames": [
                 "EventStreamCreated",
                 "EventStreamStarted",
                 "EventStreamStopped",
                 "EventStreamDeleted",
+                "EventInputConnected",
+                "EventInputReconnecting",
                 "EventInputDegraded",
                 "EventInputFailed",
                 "EventInputFailover",
                 "EventRecordingStarted",
                 "EventRecordingStopped",
                 "EventRecordingFailed",
-                "EventSegmentWritten"
+                "EventSegmentWritten",
+                "EventTranscoderStarted",
+                "EventTranscoderStopped",
+                "EventTranscoderError"
             ]
         },
         "domain.HWAccel": {
