@@ -36,9 +36,20 @@ type Profile struct {
 	KeyframeInterval int // GOP target in seconds (0 = encoder default)
 }
 
-// worker is a logical transcoding job for one stream (may spawn multiple FFmpeg processes).
-type worker struct {
+// profileWorker tracks a single FFmpeg encoder process (one ABR ladder rung).
+type profileWorker struct {
 	cancel context.CancelFunc
+	done   chan struct{} // closed when the goroutine exits
+}
+
+// streamWorker holds all profile encoders for one stream.
+type streamWorker struct {
+	baseCtx    context.Context
+	baseCancel context.CancelFunc // cancels all profiles at once (Stop)
+	rawIngest  domain.StreamCode
+	tc         *domain.TranscoderConfig
+	mu         sync.Mutex
+	profiles   map[int]*profileWorker // key = profile index (0-based)
 }
 
 // Service manages the FFmpeg worker pool.
@@ -49,7 +60,7 @@ type Service struct {
 	m       *metrics.Metrics
 	sem     chan struct{} // bounded semaphore to cap concurrent FFmpeg processes
 	mu      sync.Mutex
-	workers map[domain.StreamCode]*worker
+	workers map[domain.StreamCode]*streamWorker
 	onFatal func(streamCode domain.StreamCode) // called when a profile exceeds MaxRestarts
 }
 
@@ -75,7 +86,7 @@ func New(i do.Injector) (*Service, error) {
 		bus:     bus,
 		m:       m,
 		sem:     make(chan struct{}, cfg.Transcoder.MaxWorkers),
-		workers: make(map[domain.StreamCode]*worker),
+		workers: make(map[domain.StreamCode]*streamWorker),
 	}, nil
 }
 
@@ -98,42 +109,15 @@ func (s *Service) Start(
 		return fmt.Errorf("transcoder: no rendition targets")
 	}
 
-	workerCtx, cancel := context.WithCancel(ctx)
-	s.workers[logStreamCode] = &worker{cancel: cancel}
-
-	go s.runStreamJob(workerCtx, logStreamCode, rawIngestID, tc, targets)
-	return nil
-}
-
-// Stop cancels all FFmpeg encoders for a stream.
-func (s *Service) Stop(streamID domain.StreamCode) {
-	s.mu.Lock()
-	if w, ok := s.workers[streamID]; ok {
-		w.cancel()
-		delete(s.workers, streamID)
+	baseCtx, baseCancel := context.WithCancel(ctx)
+	sw := &streamWorker{
+		baseCtx:    baseCtx,
+		baseCancel: baseCancel,
+		rawIngest:  rawIngestID,
+		tc:         tc,
+		profiles:   make(map[int]*profileWorker, len(targets)),
 	}
-	s.mu.Unlock()
-}
-
-func (s *Service) runStreamJob(
-	ctx context.Context,
-	logStreamCode domain.StreamCode,
-	rawIngestID domain.StreamCode,
-	tc *domain.TranscoderConfig,
-	targets []RenditionTarget,
-) {
-	defer func() { //nolint:contextcheck // ctx is cancelled at this point; publish must outlive it
-		s.mu.Lock()
-		delete(s.workers, logStreamCode)
-		s.mu.Unlock()
-		s.m.TranscoderWorkersActive.WithLabelValues(string(logStreamCode)).Set(0)
-		s.m.TranscoderQualitiesActive.WithLabelValues(string(logStreamCode)).Set(0)
-		s.bus.Publish(context.Background(), domain.Event{
-			Type:       domain.EventTranscoderStopped,
-			StreamCode: logStreamCode,
-			Payload:    map[string]any{"profiles": len(targets)},
-		})
-	}()
+	s.workers[logStreamCode] = sw
 
 	slog.Info("transcoder: stream job started",
 		"stream_code", logStreamCode,
@@ -149,15 +133,125 @@ func (s *Service) runStreamJob(
 		Payload:    map[string]any{"profiles": len(targets), "raw_ingest_id": string(rawIngestID)},
 	})
 
-	var wg sync.WaitGroup
 	for i, t := range targets {
-		wg.Add(1)
-		go func(profileIndex int, t RenditionTarget) {
-			defer wg.Done()
-			s.runProfileEncoder(ctx, logStreamCode, rawIngestID, t.BufferID, tc, profileIndex, t.Profile)
-		}(i, t)
+		s.spawnProfile(logStreamCode, sw, i, t)
 	}
-	wg.Wait()
+	return nil
+}
+
+// Stop cancels all FFmpeg encoders for a stream and waits for them to exit.
+func (s *Service) Stop(streamID domain.StreamCode) {
+	s.mu.Lock()
+	sw, ok := s.workers[streamID]
+	if !ok {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.workers, streamID)
+	s.mu.Unlock()
+
+	sw.baseCancel()
+
+	// Wait for all profile goroutines to finish.
+	sw.mu.Lock()
+	profiles := make(map[int]*profileWorker, len(sw.profiles))
+	for k, v := range sw.profiles {
+		profiles[k] = v
+	}
+	sw.mu.Unlock()
+	for _, pw := range profiles {
+		<-pw.done
+	}
+
+	s.m.TranscoderWorkersActive.WithLabelValues(string(streamID)).Set(0)
+	s.m.TranscoderQualitiesActive.WithLabelValues(string(streamID)).Set(0)
+	//nolint:contextcheck // baseCtx is cancelled; publish must outlive it
+	s.bus.Publish(context.Background(), domain.Event{
+		Type:       domain.EventTranscoderStopped,
+		StreamCode: streamID,
+	})
+}
+
+// StopProfile stops a single FFmpeg encoder for one profile index.
+func (s *Service) StopProfile(streamID domain.StreamCode, profileIndex int) {
+	s.mu.Lock()
+	sw, ok := s.workers[streamID]
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	sw.mu.Lock()
+	pw, ok := sw.profiles[profileIndex]
+	if !ok {
+		sw.mu.Unlock()
+		return
+	}
+	delete(sw.profiles, profileIndex)
+	sw.mu.Unlock()
+
+	pw.cancel()
+	<-pw.done
+
+	slog.Info("transcoder: profile stopped",
+		"stream_code", streamID,
+		"profile", buffer.VideoTrackSlug(profileIndex),
+	)
+	s.updateMetrics(streamID, sw)
+}
+
+// StartProfile starts a single FFmpeg encoder for one profile index on an existing stream worker.
+func (s *Service) StartProfile(streamID domain.StreamCode, profileIndex int, target RenditionTarget) error {
+	s.mu.Lock()
+	sw, ok := s.workers[streamID]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("transcoder: stream %s not running", streamID)
+	}
+
+	sw.mu.Lock()
+	if _, exists := sw.profiles[profileIndex]; exists {
+		sw.mu.Unlock()
+		return fmt.Errorf("transcoder: profile %d already running for stream %s", profileIndex, streamID)
+	}
+	sw.mu.Unlock()
+
+	s.spawnProfile(streamID, sw, profileIndex, target)
+
+	slog.Info("transcoder: profile started",
+		"stream_code", streamID,
+		"profile", buffer.VideoTrackSlug(profileIndex),
+		"write_to", target.BufferID,
+	)
+	s.updateMetrics(streamID, sw)
+	return nil
+}
+
+// spawnProfile creates a per-profile context and launches the encoder goroutine.
+func (s *Service) spawnProfile(streamID domain.StreamCode, sw *streamWorker, profileIndex int, target RenditionTarget) {
+	profileCtx, profileCancel := context.WithCancel(sw.baseCtx)
+	pw := &profileWorker{
+		cancel: profileCancel,
+		done:   make(chan struct{}),
+	}
+
+	sw.mu.Lock()
+	sw.profiles[profileIndex] = pw
+	sw.mu.Unlock()
+
+	go func() {
+		defer close(pw.done)
+		s.runProfileEncoder(profileCtx, streamID, sw.rawIngest, target.BufferID, sw.tc, profileIndex, target.Profile)
+	}()
+}
+
+// updateMetrics refreshes the active worker/quality gauge for a stream.
+func (s *Service) updateMetrics(streamID domain.StreamCode, sw *streamWorker) {
+	sw.mu.Lock()
+	n := float64(len(sw.profiles))
+	sw.mu.Unlock()
+	s.m.TranscoderWorkersActive.WithLabelValues(string(streamID)).Set(n)
+	s.m.TranscoderQualitiesActive.WithLabelValues(string(streamID)).Set(n)
 }
 
 func (s *Service) logStderr(streamID domain.StreamCode, profile string, r io.Reader) {
