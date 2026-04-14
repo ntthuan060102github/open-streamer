@@ -110,21 +110,18 @@ func (h *StreamHandler) Put(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wasRunning := exists && h.coordinator.IsRunning(code)
-	if wasRunning {
-		h.coordinator.Stop(code)
-	}
 
+	// Save first so the pipeline continues with the old config if persistence fails.
 	if err := h.streamRepo.Save(r.Context(), body); err != nil {
-		if wasRunning && !cur.Disabled {
-			_ = h.coordinator.Start(r.Context(), cur)
-		}
 		writeError(w, http.StatusInternalServerError, "SAVE_FAILED", "failed to save stream")
 		return
 	}
 
-	if wasRunning && !body.Disabled {
-		if err := h.coordinator.Start(r.Context(), body); err != nil {
-			writeError(w, http.StatusInternalServerError, "RESTART_FAILED", err.Error())
+	if wasRunning {
+		// Hot-reload only the components that changed. Update() stops the pipeline
+		// internally when the stream transitions to Disabled.
+		if err := h.coordinator.Update(r.Context(), cur, body); err != nil {
+			writeError(w, http.StatusInternalServerError, "UPDATE_FAILED", err.Error())
 			return
 		}
 	}

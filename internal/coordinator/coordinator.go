@@ -195,6 +195,231 @@ func (c *Coordinator) Stop(streamID domain.StreamCode) {
 	})
 }
 
+// Update hot-reloads only the components that changed between old and new stream configs.
+// The caller must persist the new config to the store BEFORE calling Update.
+// Returns early with c.Stop() when the stream transitions to Disabled.
+func (c *Coordinator) Update(ctx context.Context, old, new *domain.Stream) error {
+	if old == nil || new == nil {
+		return fmt.Errorf("coordinator: Update requires both old and new stream")
+	}
+
+	diff := ComputeDiff(old, new)
+
+	if diff.NowDisabled {
+		c.Stop(new.Code)
+		return nil
+	}
+
+	// Transcoder topology changes (nil↔non-nil, mode change, video.copy change)
+	// require rebuilding the whole buffer layout → full pipeline reload.
+	if diff.TranscoderTopologyChanged {
+		return c.reloadTranscoderFull(ctx, old, new)
+	}
+
+	// Per-profile transcoder changes: stop/start only affected FFmpeg processes.
+	if diff.TranscoderChanged && diff.ProfilesDiff != nil {
+		if err := c.reloadProfiles(ctx, new, diff.ProfilesDiff); err != nil {
+			return fmt.Errorf("coordinator: reload profiles: %w", err)
+		}
+	}
+
+	if diff.InputsChanged {
+		c.mgr.UpdateInputs(new.Code, diff.AddedInputs, diff.RemovedInputs, diff.UpdatedInputs)
+	}
+
+	// If profile count changed, the master playlist layout changed → publisher restart.
+	// If protocols or push destinations changed, publisher also needs restart.
+	needPubRestart := diff.ProtocolsChanged || diff.PushChanged ||
+		(diff.ProfilesDiff != nil && diff.ProfilesDiff.HasAddedOrRemoved())
+	if needPubRestart {
+		if err := c.reloadPublisher(ctx, new); err != nil {
+			return fmt.Errorf("coordinator: reload publisher: %w", err)
+		}
+	}
+
+	if diff.DVRChanged {
+		c.reloadDVR(ctx, new)
+	} else if diff.TranscoderTopologyChanged {
+		// Already handled in reloadTranscoderFull
+	} else if diff.ProfilesDiff != nil && diff.ProfilesDiff.HasAddedOrRemoved() {
+		// Best rendition may have changed (profile added/removed); re-evaluate DVR buffer.
+		c.reloadDVRIfBufferChanged(ctx, old, new)
+	}
+
+	return nil
+}
+
+// reloadTranscoderFull rebuilds the entire pipeline when transcoder topology changes.
+// This is the fallback for changes that affect buffer layout (nil↔non-nil, mode change).
+func (c *Coordinator) reloadTranscoderFull(ctx context.Context, old, new *domain.Stream) error {
+	slog.Info("coordinator: full transcoder reload", "stream_code", new.Code)
+
+	if c.dvr.IsRecording(new.Code) {
+		if err := c.dvr.StopRecording(ctx, new.Code); err != nil {
+			slog.Warn("coordinator: dvr stop during reload failed", "stream_code", new.Code, "err", err)
+		}
+	}
+	c.pub.Stop(new.Code)
+	c.tc.Stop(new.Code)
+
+	// Tear down old rendition buffers.
+	c.rendMu.Lock()
+	oldSlugs := c.renditions[new.Code]
+	delete(c.renditions, new.Code)
+	c.rendMu.Unlock()
+	for _, slug := range oldSlugs {
+		c.buf.Delete(buffer.RenditionBufferID(new.Code, slug))
+	}
+
+	// Rebuild buffers based on new config.
+	oldIngestID := new.Code
+	if shouldRunTranscoder(old) {
+		oldIngestID = buffer.RawIngestBufferID(new.Code)
+	}
+
+	newIngestID := new.Code
+	var transcoderTargets []transcoder.RenditionTarget
+	var renditionSlugs []string
+
+	if shouldRunTranscoder(new) {
+		newIngestID = buffer.RawIngestBufferID(new.Code)
+		if oldIngestID != newIngestID {
+			c.buf.Create(newIngestID)
+		}
+		profiles := transcoderProfilesFromDomain(&new.Transcoder.Video)
+		for i := range profiles {
+			slug := buffer.VideoTrackSlug(i)
+			bid := buffer.RenditionBufferID(new.Code, slug)
+			c.buf.Create(bid)
+			renditionSlugs = append(renditionSlugs, slug)
+			transcoderTargets = append(transcoderTargets, transcoder.RenditionTarget{
+				BufferID: bid,
+				Profile:  profiles[i],
+			})
+		}
+	} else if oldIngestID != newIngestID {
+		// Old had raw buffer, new doesn't → delete it.
+		c.buf.Delete(oldIngestID)
+	}
+
+	// Swap buffer write target on the active ingestor.
+	c.mgr.UpdateBufferWriteID(new.Code, newIngestID)
+
+	if len(transcoderTargets) > 0 {
+		if err := c.tc.Start(ctx, new.Code, newIngestID, new.Transcoder, transcoderTargets); err != nil {
+			return fmt.Errorf("transcoder start: %w", err)
+		}
+		c.rendMu.Lock()
+		c.renditions[new.Code] = renditionSlugs
+		c.rendMu.Unlock()
+	}
+
+	if err := c.pub.Start(ctx, new); err != nil {
+		return fmt.Errorf("publisher start: %w", err)
+	}
+
+	c.reloadDVR(ctx, new)
+	return nil
+}
+
+// reloadProfiles applies per-profile transcoder changes without touching unchanged profiles.
+// Updated profiles: stop+start the corresponding FFmpeg process.
+// Added profiles: create rendition buffer + start FFmpeg process.
+// Removed profiles: stop FFmpeg process + delete rendition buffer.
+func (c *Coordinator) reloadProfiles(ctx context.Context, new *domain.Stream, pd *ProfilesDiff) error {
+	newProfiles := transcoderProfilesFromDomain(&new.Transcoder.Video)
+
+	// Removed: stop encoders and delete their buffers.
+	for _, ch := range pd.Removed {
+		c.tc.StopProfile(new.Code, ch.Index)
+		slug := buffer.VideoTrackSlug(ch.Index)
+		c.buf.Delete(buffer.RenditionBufferID(new.Code, slug))
+
+		c.rendMu.Lock()
+		slugs := c.renditions[new.Code]
+		for i, s := range slugs {
+			if s == slug {
+				c.renditions[new.Code] = append(slugs[:i], slugs[i+1:]...)
+				break
+			}
+		}
+		c.rendMu.Unlock()
+	}
+
+	// Updated: stop + restart each changed encoder.
+	for _, ch := range pd.Updated {
+		if ch.Index >= len(newProfiles) {
+			continue
+		}
+		c.tc.StopProfile(new.Code, ch.Index)
+		slug := buffer.VideoTrackSlug(ch.Index)
+		bid := buffer.RenditionBufferID(new.Code, slug)
+		if err := c.tc.StartProfile(new.Code, ch.Index, transcoder.RenditionTarget{
+			BufferID: bid,
+			Profile:  newProfiles[ch.Index],
+		}); err != nil {
+			return fmt.Errorf("restart profile %d: %w", ch.Index, err)
+		}
+	}
+
+	// Added: create buffer + start new encoder.
+	for _, ch := range pd.Added {
+		if ch.Index >= len(newProfiles) {
+			continue
+		}
+		slug := buffer.VideoTrackSlug(ch.Index)
+		bid := buffer.RenditionBufferID(new.Code, slug)
+		c.buf.Create(bid)
+		if err := c.tc.StartProfile(new.Code, ch.Index, transcoder.RenditionTarget{
+			BufferID: bid,
+			Profile:  newProfiles[ch.Index],
+		}); err != nil {
+			c.buf.Delete(bid)
+			return fmt.Errorf("start added profile %d: %w", ch.Index, err)
+		}
+
+		c.rendMu.Lock()
+		c.renditions[new.Code] = append(c.renditions[new.Code], slug)
+		c.rendMu.Unlock()
+	}
+
+	return nil
+}
+
+// reloadPublisher stops and restarts the publisher with new config.
+func (c *Coordinator) reloadPublisher(ctx context.Context, new *domain.Stream) error {
+	c.pub.Stop(new.Code)
+	if err := c.pub.Start(ctx, new); err != nil {
+		return fmt.Errorf("publisher start: %w", err)
+	}
+	return nil
+}
+
+// reloadDVR stops any active recording and starts a new one when DVR is enabled.
+func (c *Coordinator) reloadDVR(ctx context.Context, new *domain.Stream) {
+	if c.dvr.IsRecording(new.Code) {
+		if err := c.dvr.StopRecording(ctx, new.Code); err != nil {
+			slog.Warn("coordinator: dvr stop failed", "stream_code", new.Code, "err", err)
+		}
+	}
+	if new.DVR != nil && new.DVR.Enabled {
+		mediaBuf := buffer.PlaybackBufferID(new.Code, new.Transcoder)
+		if _, err := c.dvr.StartRecording(ctx, new.Code, mediaBuf, new.DVR); err != nil {
+			slog.Warn("coordinator: dvr start failed", "stream_code", new.Code, "err", err)
+		}
+	}
+}
+
+// reloadDVRIfBufferChanged reloads DVR only when the playback buffer changed
+// (e.g. best rendition shifted when a higher-resolution profile was added/removed).
+func (c *Coordinator) reloadDVRIfBufferChanged(ctx context.Context, old, new *domain.Stream) {
+	oldBuf := buffer.PlaybackBufferID(old.Code, old.Transcoder)
+	newBuf := buffer.PlaybackBufferID(new.Code, new.Transcoder)
+	if oldBuf != newBuf {
+		c.reloadDVR(ctx, new)
+	}
+}
+
 // handleAllInputsExhausted is called by the manager when all inputs are degraded.
 // It persists stream status as degraded so operators and hooks are notified.
 func (c *Coordinator) handleAllInputsExhausted(streamCode domain.StreamCode) {
