@@ -34,6 +34,7 @@ Legend for **Completion**:
 | Recording repository | Complete | All 3 drivers; DVR writes recording metadata on every segment flush |
 | Hook repository | Complete | Full CRUD + test endpoint |
 | REST API — streams CRUD / start / stop / status | Complete | Chi router under `/streams` |
+| REST API — `PUT /streams/{code}` hot-reload | Complete | Calls `coordinator.Update`; only changed components are restarted (see Coordinator section) |
 | REST API — recordings (start / stop / list / get / delete / info) | Complete | Full lifecycle + `info` endpoint (dvr_range, gaps, size) |
 | REST API — recordings playlist.m3u8 | Complete | Reads `playlist.m3u8` directly from `SegmentDir` |
 | REST API — recordings timeshift.m3u8 | Complete | Dynamic VOD M3U8; `from`, `offset_sec`, `duration` query params |
@@ -89,6 +90,8 @@ Legend for **Completion**:
 | Seamless failover (Go-level, no FFmpeg restart) | Complete | Old ingestor stops writing; new one starts; no buffer flush |
 | Failover events (`input.degraded`, `input.failover`) | Complete | Published to event bus; triggers HLS discontinuity counter |
 | All-inputs-exhausted detection | Complete | Stream status → `degraded` in store; auto-recovers to `active` when probe succeeds |
+| Live input update (`UpdateInputs`) | Complete | Add/remove/update inputs without stopping the pipeline; active input removal triggers immediate failover |
+| Live buffer write target update (`UpdateBufferWriteID`) | Complete | Called by coordinator on transcoder topology change; restarts active ingestor with new target |
 
 ---
 
@@ -98,6 +101,7 @@ Legend for **Completion**:
 | --------- | ------------ | ------- |
 | FFmpeg subprocess (stdin TS → stdout TS) | Complete | `exec.CommandContext`; killed with context |
 | Multiple profiles = multiple FFmpeg processes | Complete | One encoder per `track_N`; shared raw ingest buffer |
+| Per-profile independent context (`profileWorker`) | Complete | Each FFmpeg process has its own cancel func; stop/start one profile without affecting others |
 | Bounded worker pool | Complete | Semaphore; `transcoder.max_workers` (default 4) |
 | Video ladder config (`VideoProfile` slice) | Complete | Stable IDs: `track_1`, `track_2`, … |
 | Audio encoding config | Complete | AAC/MP3/Opus/AC3/copy |
@@ -108,6 +112,8 @@ Legend for **Completion**:
 | Passthrough / remux mode (no FFmpeg) | Complete | `transcoder.mode: passthrough` or `remux` skips FFmpeg; ingestor writes raw MPEG-TS directly to publisher buffer |
 | FFmpeg crash auto-restart with backoff | Complete | Per-profile retry: 2 s → 4 s → … → 30 s cap; publishes `transcoder.error {attempt, fatal}` |
 | Transcoder fatal → stream stopped | Complete | After `transcoder.max_restarts` (default 5) failures: pipeline torn down, stream status → `stopped` |
+| `StopProfile(streamID, idx)` | Complete | Cancels one `profileWorker` context; only that FFmpeg process exits |
+| `StartProfile(streamID, idx, target)` | Complete | Acquires semaphore slot, spawns new `profileWorker` with fresh context |
 
 ---
 
@@ -124,6 +130,11 @@ Legend for **Completion**:
 | RTMP play (gomedia) | Complete | Shared port with ingest (:1935) via `PlayFunc` callback; optional dedicated port via `publisher.rtmp.port`; clients use `rtmp://host:port/live/<code>` |
 | SRT listen (gosrt) | Complete | gosrt.Server listener; per-client buffer subscriber; raw MPEG-TS output; clients use `srt://host:port?streamid=live/<code>` |
 | RTMP push out (re-stream to platform) | Complete | `rtmp://` destinations; auto-reconnect with backoff; RTMPS return clear error |
+| Per-protocol independent context | Complete | Each output goroutine (`"hls"`, `"dash"`, `"rtsp"`, `"push:<url>"`) has its own cancel func inside `streamState.protocols` |
+| `UpdateProtocols(old, new)` | Complete | Only stops/starts protocols whose ON↔OFF state changed; connected RTSP/SRT viewers unaffected |
+| `RestartHLSDASH(stream)` | Complete | Restarts only HLS + DASH goroutines when ABR ladder count changes; RTSP/RTMP/SRT unaffected |
+| `UpdateABRMasterMeta(code, updates)` | Complete | Rewrites HLS master playlist in-place (no goroutine restart) when a profile's bitrate/resolution changes |
+| ABR master playlist override (`SetRepOverride`) | Complete | Override persists across segment flushes; master rewritten within 50 ms |
 
 ---
 
@@ -136,6 +147,14 @@ Legend for **Completion**:
 | Auto-stop DVR when stream stops | Complete | `Coordinator.Stop` calls `dvr.StopRecording` before teardown |
 | Stop pipeline / teardown all buffers | Complete | Main + `$raw$` + `$r$…` rendition buffers all cleaned up |
 | Bootstrap persisted streams on startup | Complete | Skips stopped, disabled, and zero-input streams |
+| `Update(ctx, old, new)` hot-reload | Complete | Diff-based; routes to the minimal set of service calls; no pipeline disruption for unchanged components |
+| Diff engine (`ComputeDiff`) | Complete | 5 independent change categories: inputs, transcoder topology, profiles, protocols/push, DVR |
+| Per-profile granular reload | Complete | Changed profile: `StopProfile` + `StartProfile`; added: `buf.Create` + `StartProfile`; removed: `StopProfile` + `buf.Delete` |
+| ABR ladder add/remove → `RestartHLSDASH` | Complete | Only HLS + DASH goroutines restart when ladder count changes |
+| ABR profile update → `UpdateABRMasterMeta` | Complete | Master playlist rewritten in-place; no FFmpeg restart for unchanged profiles |
+| Topology change → `reloadTranscoderFull` | Complete | Full pipeline rebuild when transcoder nil↔non-nil or mode changes |
+| DVR hot-reload | Complete | `reloadDVR` toggles recording on/off; restarts with new mediaBuf if best rendition changed |
+| Narrow service interfaces (`deps.go`) | Complete | `mgrDep`, `tcDep`, `pubDep`, `dvrDep`; enables spy-based integration testing |
 
 ---
 
@@ -195,6 +214,8 @@ Legend for **Completion**:
 | Unit tests — transcoder args construction | Complete | buildScaleFilter, normalizeVideoEncoder, gopFrames, audioEncodeArgs, MaxBitrate/Framerate/CodecProfile |
 | Unit tests — publisher HLS segmenter | Complete | windowTailEntries, hlsCodecString, manifest generation, discontinuity, context cancel |
 | Unit tests — dvr playlist parsing | Complete | parsePlaylist (single/multi/disc/skip), loadIndex/saveIndex round-trip, atomic write |
+| Unit tests — coordinator diff engine | Complete | `TestComputeDiff_*` in `internal/coordinator/diff_test.go`; covers all 5 change categories |
+| Integration tests — coordinator.Update routing | Complete | 14 test cases in `internal/coordinator/update_test.go`; spy implementations of all 4 service interfaces |
 | CI (GitHub Actions) | Complete | `build`, `test`, `lint` (allow-fail), `govulncheck` jobs |
 | golangci-lint (`.golangci.yml`) | Complete | 0 issues |
 | gofumpt formatting | Complete | Enforced via CI formatter step |
@@ -240,7 +261,8 @@ Legend for **Completion**:
 - **HLS and DASH dirs must differ** when both publishers are active (`publisher.hls.dir` ≠ `publisher.dash.dir`).
 - **DVR has no global enable/disable.** Each stream opt-in via `stream.dvr.enabled = true`.
 - **Failover timestamp jumps** produce `#EXT-X-DISCONTINUITY` in HLS and are logged at debug level from FFmpeg stderr.
+- **`PUT /streams/{code}` is non-disruptive** when the stream is running — only changed components are restarted.
 
 ---
 
-*Updated against codebase state 2026-04-11 (Kafka hooks, full event wiring, FFmpeg auto-restart, exhausted-input detection, Prometheus metrics fully wired). Update this file when feature status changes.*
+*Updated 2026-04-15. Reflects hot-reload (coordinator.Update + diff engine), per-profile transcoder lifecycle, per-protocol publisher lifecycle, and integration test coverage.*

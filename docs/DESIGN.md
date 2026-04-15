@@ -92,7 +92,7 @@ Each consumer calls `buf.Subscribe(bufferID)` to get a `*Subscriber` with a priv
 
 ### Responsibility
 
-Wires the full per-stream pipeline in the correct order on `Start()` and tears it down cleanly on `Stop()`.
+Wires the full per-stream pipeline in the correct order on `Start()` and tears it down cleanly on `Stop()`. Also orchestrates surgical hot-reload via `Update()` — only the components that changed are restarted.
 
 ### Start Sequence
 
@@ -117,6 +117,59 @@ The `mediaBufID` passed to Publisher and DVR depends on whether transcoding is a
 - **With transcoding**: `mediaBufID = PlaybackBufferID(code, transcoder)` = best rendition buffer (e.g. `$r$<code>$track_1`)
 
 DVR always records from `mediaBufID` — the best available quality after transcoding, not the raw ingest.
+
+### Hot-Reload: `Update(ctx, old, new)`
+
+`Update` computes a `StreamDiff` between the old and new configuration, then applies only the changes:
+
+```
+1. NowDisabled?               → coordinator.Stop(), return
+
+2. TranscoderTopologyChanged? → reloadTranscoderFull()
+   (nil↔non-nil, mode change)   stops DVR + publisher + transcoder,
+                                  rebuilds buffers, restarts all
+                                  return
+
+3. TranscoderChanged + ProfilesDiff?
+   → per-profile granular reload (see Transcoder section)
+   → if profiles added/removed: publisher.RestartHLSDASH()
+   → if profiles updated only:  publisher.UpdateABRMasterMeta()
+
+4. InputsChanged?  → mgr.UpdateInputs(added, removed, updated)
+
+5. ProtocolsChanged || PushChanged? → publisher.UpdateProtocols(old, new)
+
+6. DVRChanged?     → reloadDVR()
+```
+
+Each category is independent: updating inputs does not touch the transcoder; toggling a protocol does not restart RTSP viewers already connected.
+
+### Diff Engine (`coordinator/diff.go`)
+
+`ComputeDiff(old, new *domain.Stream) StreamDiff` classifies changes into five independent categories:
+
+| Category | Flag | Trigger |
+|----------|------|---------|
+| Inputs | `InputsChanged` | URL/priority/config change, add, or remove |
+| Transcoder topology | `TranscoderTopologyChanged` | nil↔non-nil, mode change (`passthrough`↔full), `video.copy` toggle |
+| Transcoder profiles | `ProfilesDiff` | Per-profile resolution/bitrate/codec change, add, remove |
+| Protocols / Push | `ProtocolsChanged`, `PushChanged` | HLS/DASH/RTSP toggle, push destination add/remove/edit |
+| DVR | `DVRChanged` | `enabled` flag, retention, segment duration |
+
+`TranscoderTopologyChanged` takes priority over `ProfilesDiff` — when topology changes the entire pipeline must be rebuilt because the buffer namespace changes.
+
+### Dependency Interfaces (`coordinator/deps.go`)
+
+The coordinator talks to each service through a narrow interface:
+
+```go
+type mgrDep interface { IsRegistered, Register, Unregister, UpdateInputs, UpdateBufferWriteID, ... }
+type tcDep  interface { Start, Stop, StopProfile, StartProfile, SetFatalCallback }
+type pubDep interface { Start, Stop, UpdateProtocols, RestartHLSDASH, UpdateABRMasterMeta }
+type dvrDep interface { IsRecording, StartRecording, StopRecording }
+```
+
+This enables full unit-test coverage via spy implementations without starting real ingestors, FFmpeg processes, or RTSP servers (see `internal/coordinator/update_test.go`).
 
 ---
 
@@ -238,6 +291,14 @@ FFmpeg is never restarted. The transcoder continues reading from `$raw$<code>` u
 
 When an input enters `StatusDegraded`, the manager periodically runs `runProbe(input)` — a lightweight connectivity check. If it succeeds, the input is promoted back to `StatusIdle` and `tryFailover` may switch back to it if it has higher priority than the current active input (after a minimum `failbackMinActiveDuration` to prevent thrashing).
 
+### Live Input Updates (`UpdateInputs`)
+
+`UpdateInputs(streamID, added, removed, updated []domain.Input)` applies live changes without stopping the pipeline:
+
+1. **Removed** inputs: deleted from the health map; if the removed input was active, `tryFailover` is called immediately.
+2. **Added** inputs: inserted as `StatusIdle`; `tryFailover` runs so a higher-priority new input can take over.
+3. **Updated** inputs: the `Input` config is patched in-place; if the active input was updated, its ingestor is restarted with the new config.
+
 ---
 
 ## 6. Transcoder
@@ -267,6 +328,36 @@ stdout reader goroutine → TSDemuxPacketReader → $r$<code>$track_N
 
 Two goroutines per FFmpeg process: one reads stdout (transcoded TS), one drains stderr (for log filtering). Both must run simultaneously to prevent pipe deadlock.
 
+### Internal Data Structures
+
+Each active stream is represented by a `streamWorker`:
+
+```go
+type streamWorker struct {
+    baseCtx    context.Context
+    baseCancel context.CancelFunc      // cancelling stops ALL profiles
+    profiles   map[int]*profileWorker  // key = profile index (0-based)
+    rawIngest  domain.StreamCode
+    tc         *domain.TranscoderConfig
+}
+
+type profileWorker struct {
+    cancel  context.CancelFunc
+    profile domain.VideoProfile
+    target  RenditionTarget
+}
+```
+
+Each `profileWorker` has its own context derived from `baseCtx`. This allows individual profiles to be stopped and restarted independently without affecting other profiles or the ingestor.
+
+### Per-Profile Lifecycle
+
+`StopProfile(streamID, profileIndex)` cancels the context of a single `profileWorker`, sending SIGTERM to just that FFmpeg process.
+
+`StartProfile(streamID, profileIndex, target)` acquires a semaphore slot, creates a new `profileWorker` with a fresh child context, and starts the FFmpeg goroutine.
+
+These two methods are used by the coordinator for surgical per-profile updates — when only one rendition's resolution or bitrate changes, only that FFmpeg process is restarted.
+
 ### Hardware Acceleration
 
 The `global.hw_accel` field maps to FFmpeg flags:
@@ -295,6 +386,47 @@ If FFmpeg exits unexpectedly (non-zero exit), the worker restarts with exponenti
 
 Reads from Buffer Hub and delivers live video to clients via HLS, DASH, RTSP, RTMP-serve, and SRT-listen. All output goroutines are independent — one format failing does not affect others.
 
+### Per-Protocol Lifecycle
+
+Each protocol goroutine has its own child context derived from a per-stream `baseCtx`:
+
+```go
+type streamState struct {
+    baseCtx    context.Context
+    baseCancel context.CancelFunc      // cancels ALL protocols when stream stops
+    mediaBuf   domain.StreamCode       // buffer the protocols read from
+    protocols  map[string]context.CancelFunc  // "hls", "dash", "rtsp", "push:<url>"
+    hlsMaster  *hlsABRMaster           // non-nil when ABR HLS is running
+}
+```
+
+Protocol keys:
+- `"hls"` — HLS segmenter (single-rendition or ABR)
+- `"dash"` — DASH fMP4 packager
+- `"rtsp"` — RTSP gortsplib mount
+- `"push:<url>"` — RTMP push-out goroutine per destination
+
+`stopProtocol(streamID, key)` cancels exactly one goroutine. `spawnProtocolLocked(ss, key, fn)` starts a new goroutine for the key, cancelling any existing one first.
+
+### `UpdateProtocols(ctx, old, new)`
+
+Called when protocol flags or push destinations change. Only acts on ON↔OFF transitions:
+
+- `old.HLS && !new.HLS` → `stopProtocol("hls")`
+- `!old.HLS && new.HLS` → `spawnProtocolLocked("hls", ...)`
+- Same logic for DASH and RTSP.
+- Push destinations: diff by URL — stop removed/disabled, start new/re-enabled.
+
+RTSP/RTMP/SRT viewers already connected are **not** affected when unrelated protocols toggle.
+
+### `RestartHLSDASH(ctx, stream)`
+
+Called when the ABR ladder count changes (profile added or removed). Restarts only the `"hls"` and `"dash"` goroutines so the master playlist and per-shard segmenters reflect the new rendition set. RTSP, RTMP play, and SRT goroutines are unaffected.
+
+### `UpdateABRMasterMeta(streamCode, updates []ABRRepMeta)`
+
+Called when a profile's bitrate or resolution changes but the ladder count stays the same. Routes to the live `hlsABRMaster` instance via `ss.hlsMaster` and calls `SetRepOverride` for each changed shard. The master playlist is rewritten within 50ms with the new metadata — no goroutine restart required.
+
 ### HLS Segmenter
 
 The HLS segmenter maintains an `hlsSegmenter` struct per stream:
@@ -309,6 +441,14 @@ The HLS segmenter maintains an `hlsSegmenter` struct per stream:
 
 `#EXT-X-DISCONTINUITY` is emitted when `discNext == true`. The failover generation counter is a `uint64` incremented by the Stream Manager on every input switch — allowing multiple simultaneous variants to each detect the change exactly once.
 
+### ABR Master Playlist (`hlsABRMaster`)
+
+`hlsABRMaster` coordinates writing the root `index.m3u8`:
+
+- Each per-rendition segmenter calls `onShardUpdated(slug, bwBps, width, height)` after every segment flush.
+- The master debounces and rewrites `index.m3u8` at most every 100ms.
+- `overrides sync.Map` holds externally-set metadata (from `SetRepOverride`). Override values take precedence over what segmenters report, so the master reflects the new profile immediately even before the first new segment arrives from the updated FFmpeg process.
+
 ### DASH Packager (fMP4)
 
 The DASH packager uses a `tsBuffer` (buffered pipe) feeding into a `mpeg2.TSDemuxer`:
@@ -319,10 +459,6 @@ The DASH packager uses a `tsBuffer` (buffered pipe) feeding into a `mpeg2.TSDemu
 4. Dynamic MPD updated after each segment.
 
 H.265 in the TS path is currently not supported by the DASH packager and logged as a warning.
-
-### ABR Master Playlist
-
-For streams with multiple transcoding profiles, the HLS master playlist (`index.m3u8`) lists each rendition's sub-playlist (`track_1/media.m3u8`, `track_2/media.m3u8`, …) with bandwidth and resolution hints. Players select the appropriate rendition based on available bandwidth.
 
 ### RTSP / RTMP / SRT Serve
 
@@ -557,6 +693,15 @@ Route groups:
 - `/hooks/{hid}` — hook CRUD + test
 - `/{code}/*` — HLS/DASH static file serving (via `mediaserve.Mount`)
 
+### `PUT /streams/{code}` — Hot-Reload
+
+When a stream is already running, `PUT /streams/{code}` performs a **hot-reload** rather than a full stop/start:
+
+1. Persist the new config to the store first (pipeline keeps running with old config if save fails).
+2. Call `coordinator.Update(ctx, old, new)` — which applies only the diff.
+
+This means changing a push destination does not interrupt HLS viewers; toggling DASH does not restart the RTSP server; updating one transcoding profile does not restart FFmpeg processes for other profiles.
+
 ### Response Envelope
 
 All JSON responses use a consistent structure:
@@ -618,4 +763,4 @@ Graceful shutdown calls `injector.Shutdown()`, which invokes `HealthCheck` / `Sh
 
 ---
 
-*Updated 2026-04-11. Keep this document in sync when changing subsystem behaviour.*
+*Updated 2026-04-15. Keep this document in sync when changing subsystem behaviour.*

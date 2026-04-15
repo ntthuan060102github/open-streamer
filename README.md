@@ -43,6 +43,7 @@ A high-availability live media server written in pure Go. Open Streamer ingests 
 - **RTSP / RTMP / SRT serve** — shared listeners; streams selected by path (`/live/<code>`), RTMP app, or SRT streamid
 - **DVR recording** — persistent per-stream recording (ID = stream code); resumes after restart with `#EXT-X-DISCONTINUITY` markers; configurable segment duration, retention window, and max disk size
 - **Timeshift** — dynamic VOD M3U8 from `playlist.m3u8` by absolute time (`from=RFC3339`) or relative offset (`offset_sec=N`)
+- **Hot-reload stream config** — `PUT /streams/{code}` applies only the diff; adding a push destination does not interrupt HLS viewers; changing one ABR profile restarts only that FFmpeg process; toggling DASH does not affect RTSP subscribers
 - **Push-to-platform** — re-streams to multiple destinations (YouTube, Facebook, Twitch, CDN relay) per stream
 - **Webhook & Kafka hooks** — lifecycle events with retry, timeout, and optional HMAC signing; Kafka delivery via `segmentio/kafka-go`
 - **Prometheus metrics** — bitrate, FPS, failover count, transcoder restarts, buffer depth, stream uptime
@@ -290,6 +291,40 @@ For S3-compatible storage (MinIO, Cloudflare R2):
   "url": "s3://bucket/key?region=auto&endpoint=https://account.r2.cloudflarestorage.com",
   "auth": { "username": "ACCESS_KEY", "password": "SECRET_KEY" }
 }
+```
+
+### Hot-reload — non-disruptive config updates
+
+When a stream is running, `PUT /streams/{code}` applies only the parts that changed. The server computes a diff between the old and new config and routes each change to the appropriate service:
+
+| What changed | Effect | What is NOT disrupted |
+|---|---|---|
+| Input URL / priority added or removed | Manager updates routing; active input may failover | Transcoder, Publisher, DVR |
+| One ABR profile bitrate/resolution | Only that FFmpeg process is restarted | All other profiles, HLS/DASH/RTSP viewers |
+| ABR profile added | New FFmpeg process started; HLS+DASH restart to update master playlist | RTSP/RTMP/SRT viewers |
+| ABR profile removed | That FFmpeg process stopped; HLS+DASH restart | RTSP/RTMP/SRT viewers |
+| HLS / DASH / RTSP toggled | Only that protocol goroutine started or stopped | All other protocols |
+| Push destination added/removed | Only that push goroutine started or stopped | HLS, DASH, RTSP, other push destinations |
+| DVR enabled/disabled | Recording started or stopped | Ingest, transcoder, publisher |
+| Transcoder nil → non-nil (or mode change) | Full pipeline rebuild (unavoidable — buffer topology changes) | — |
+| `disabled: true` | Full pipeline stop | — |
+
+**Example — update one ABR profile without stopping the stream:**
+
+```bash
+# Change track_2 from 720p/2Mbps to 480p/800kbps — only that FFmpeg process restarts
+curl -X PUT http://localhost:8080/streams/channel-1 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "transcoder": {
+      "video": {
+        "profiles": [
+          { "width": 1920, "height": 1080, "bitrate": 4000, "codec": "h264" },
+          { "width": 854,  "height": 480,  "bitrate": 800,  "codec": "h264" }
+        ]
+      }
+    }
+  }'
 ```
 
 ### Hardware acceleration
