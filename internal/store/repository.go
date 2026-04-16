@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
@@ -40,4 +41,11 @@ type HookRepository interface {
 	FindByID(ctx context.Context, id domain.HookID) (*domain.Hook, error)
 	List(ctx context.Context) ([]*domain.Hook, error)
 	Delete(ctx context.Context, id domain.HookID) error
+}
+
+// SettingsRepository persists key-value settings as raw JSON documents.
+// The "global" key stores the runtime GlobalConfig.
+type SettingsRepository interface {
+	Get(ctx context.Context, key string) (json.RawMessage, error)
+	Set(ctx context.Context, key string, value json.RawMessage) error
 }

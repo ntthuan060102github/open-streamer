@@ -29,8 +29,8 @@ type StreamHandler struct {
 // overlays runtime-computed fields so clients always see the live state.
 type streamResponse struct {
 	*domain.Stream
-	Status         domain.StreamStatus  `json:"status"`
-	PipelineActive bool                 `json:"pipeline_active"`
+	Status         domain.StreamStatus    `json:"status"`
+	PipelineActive bool                   `json:"pipeline_active"`
 	Runtime        *manager.RuntimeStatus `json:"runtime,omitempty"`
 }
 
@@ -318,4 +318,3 @@ func (h *StreamHandler) SwitchInput(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "switched"}})
 }
-

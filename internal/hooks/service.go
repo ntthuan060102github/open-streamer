@@ -41,12 +41,12 @@ type Service struct {
 
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
-	cfg := do.MustInvoke[*config.Config](i)
+	cfg := do.MustInvoke[config.HooksConfig](i)
 	hookRepo := do.MustInvoke[store.HookRepository](i)
 	bus := do.MustInvoke[events.Bus](i)
 
 	svc := &Service{
-		cfg:          cfg.Hooks,
+		cfg:          cfg,
 		hookRepo:     hookRepo,
 		bus:          bus,
 		kafkaWriters: make(map[string]*kafka.Writer),

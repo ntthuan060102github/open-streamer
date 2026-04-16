@@ -22,51 +22,47 @@ import (
 
 // Server is the HTTP API server.
 type Server struct {
-	cfg     config.ServerConfig
 	hlsDir  string
 	dashDir string
-	router  *chi.Mux
-	http    *http.Server
+
+	// Handler references stored for router rebuilding on config change.
+	streamH    *handler.StreamHandler
+	recordingH *handler.RecordingHandler
+	hookH      *handler.HookHandler
+	configH    *handler.ConfigHandler
+
+	router *chi.Mux
+	http   *http.Server
 }
 
 // New creates a Server and registers it with the DI injector.
+// The server is constructed but not started — call StartWithConfig to begin accepting connections.
 func New(i do.Injector) (*Server, error) {
-	cfg := do.MustInvoke[*config.Config](i)
-	streamHandler := do.MustInvoke[*handler.StreamHandler](i)
-	recordingHandler := do.MustInvoke[*handler.RecordingHandler](i)
-	hookHandler := do.MustInvoke[*handler.HookHandler](i)
-	configHandler := do.MustInvoke[*handler.ConfigHandler](i)
+	pub := do.MustInvoke[config.PublisherConfig](i)
 
-	dashDir := strings.TrimSpace(cfg.Publisher.DASH.Dir)
+	dashDir := strings.TrimSpace(pub.DASH.Dir)
 	if dashDir == "" {
 		dashDir = "./dash"
 	}
 
 	s := &Server{
-		cfg:     cfg.Server,
-		hlsDir:  cfg.Publisher.HLS.Dir,
-		dashDir: dashDir,
-	}
-	s.router = s.buildRouter(streamHandler, recordingHandler, hookHandler, configHandler)
-	s.http = &http.Server{
-		Addr:    cfg.Server.HTTPAddr,
-		Handler: s.router,
+		hlsDir:     pub.HLS.Dir,
+		dashDir:    dashDir,
+		streamH:    do.MustInvoke[*handler.StreamHandler](i),
+		recordingH: do.MustInvoke[*handler.RecordingHandler](i),
+		hookH:      do.MustInvoke[*handler.HookHandler](i),
+		configH:    do.MustInvoke[*handler.ConfigHandler](i),
 	}
 	return s, nil
 }
 
-func (s *Server) buildRouter(
-	stream *handler.StreamHandler,
-	recording *handler.RecordingHandler,
-	hook *handler.HookHandler,
-	cfg *handler.ConfigHandler,
-) *chi.Mux {
+func (s *Server) buildRouter(serverCfg *config.ServerConfig) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	if s.cfg.CORS.Enabled {
-		r.Use(cors.Handler(corsOptions(s.cfg.CORS)))
+	if serverCfg.CORS.Enabled {
+		r.Use(cors.Handler(corsOptions(serverCfg.CORS)))
 	}
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Logger)
@@ -74,7 +70,8 @@ func (s *Server) buildRouter(
 
 	r.Get("/healthz", healthz)
 	r.Get("/readyz", readyz)
-	r.Get("/config", cfg.GetConfig)
+	r.Get("/config", s.configH.GetConfig)
+	r.Post("/config", s.configH.UpdateConfig)
 
 	r.Get("/swagger/doc.json", serveSwaggerJSON)
 	r.Get("/swagger", http.RedirectHandler("/swagger/", http.StatusMovedPermanently).ServeHTTP)
@@ -83,34 +80,34 @@ func (s *Server) buildRouter(
 	mediaserve.Mount(r, s.hlsDir, s.dashDir)
 
 	r.Route("/streams", func(r chi.Router) {
-		r.Get("/", stream.List)
+		r.Get("/", s.streamH.List)
 		r.Route("/{code}", func(r chi.Router) {
-			r.Get("/", stream.Get)
-			r.Post("/", stream.Put)
-			r.Delete("/", stream.Delete)
-			r.Post("/restart", stream.Restart)
-			r.Post("/inputs/switch", stream.SwitchInput)
+			r.Get("/", s.streamH.Get)
+			r.Post("/", s.streamH.Put)
+			r.Delete("/", s.streamH.Delete)
+			r.Post("/restart", s.streamH.Restart)
+			r.Post("/inputs/switch", s.streamH.SwitchInput)
 
-			r.Get("/recordings", recording.ListByStream)
+			r.Get("/recordings", s.recordingH.ListByStream)
 		})
 	})
 
 	r.Route("/recordings/{rid}", func(r chi.Router) {
-		r.Get("/", recording.Get)
-		r.Get("/info", recording.Info)
-		r.Get("/playlist.m3u8", recording.Playlist)
-		r.Get("/timeshift.m3u8", recording.Timeshift)
-		r.Get("/{file}", recording.ServeSegment)
+		r.Get("/", s.recordingH.Get)
+		r.Get("/info", s.recordingH.Info)
+		r.Get("/playlist.m3u8", s.recordingH.Playlist)
+		r.Get("/timeshift.m3u8", s.recordingH.Timeshift)
+		r.Get("/{file}", s.recordingH.ServeSegment)
 	})
 
 	r.Route("/hooks", func(r chi.Router) {
-		r.Get("/", hook.List)
-		r.Post("/", hook.Create)
+		r.Get("/", s.hookH.List)
+		r.Post("/", s.hookH.Create)
 		r.Route("/{hid}", func(r chi.Router) {
-			r.Get("/", hook.Get)
-			r.Put("/", hook.Update)
-			r.Delete("/", hook.Delete)
-			r.Post("/test", hook.Test)
+			r.Get("/", s.hookH.Get)
+			r.Put("/", s.hookH.Update)
+			r.Delete("/", s.hookH.Delete)
+			r.Post("/test", s.hookH.Test)
 		})
 	})
 
@@ -152,8 +149,16 @@ func corsOptions(cfg config.CORSConfig) cors.Options {
 	return opts
 }
 
-// Start begins accepting HTTP connections. Blocks until ctx is cancelled.
-func (s *Server) Start(ctx context.Context) error {
+// StartWithConfig builds the router from the given ServerConfig and begins accepting
+// HTTP connections. Blocks until ctx is cancelled.
+// Called by the RuntimeManager each time the HTTP service is (re)started.
+func (s *Server) StartWithConfig(ctx context.Context, cfg *config.ServerConfig) error {
+	s.router = s.buildRouter(cfg)
+	s.http = &http.Server{
+		Addr:    cfg.HTTPAddr,
+		Handler: s.router,
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -163,7 +168,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 
-	slog.Info("api: HTTP server listening", "addr", s.cfg.HTTPAddr)
+	slog.Info("api: HTTP server listening", "addr", cfg.HTTPAddr)
 	if err := s.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("api: server: %w", err)
 	}

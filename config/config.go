@@ -8,24 +8,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// defaultPublisherListenHost is the default bind address for RTSP/RTMP/SRT publisher listeners.
-const defaultPublisherListenHost = "0.0.0.0"
-
-// Config is the root configuration for the entire application.
-// Each module receives only its own sub-config.
-type Config struct {
-	Server     ServerConfig
-	Storage    StorageConfig
-	Ingestor   IngestorConfig
-	Buffer     BufferConfig
-	Transcoder TranscoderConfig
-	Publisher  PublisherConfig
-	Manager    ManagerConfig
-	Hooks      HooksConfig
-	Metrics    MetricsConfig
-	Log        LogConfig
-}
-
 // ManagerConfig controls Stream Manager failover and input health checks.
 type ManagerConfig struct {
 	// InputPacketTimeoutSec is the maximum gap without a successful read on the
@@ -39,7 +21,6 @@ type ManagerConfig struct {
 // ServerConfig holds HTTP/gRPC server settings.
 type ServerConfig struct {
 	HTTPAddr string     `mapstructure:"http_addr"`
-	GRPCAddr string     `mapstructure:"grpc_addr"`
 	CORS     CORSConfig `mapstructure:"cors"`
 }
 
@@ -66,18 +47,14 @@ type CORSConfig struct {
 
 // StorageConfig selects the storage backend and its connection details.
 type StorageConfig struct {
-	// Driver selects the backend: "json" | "sql" | "mongo"
+	// Driver selects the backend: "json" | "yaml"
 	Driver string `mapstructure:"driver"`
 
 	// JSON backend
 	JSONDir string `mapstructure:"json_dir"`
 
-	// SQL backend (Postgres / MySQL)
-	SQLDSN string `mapstructure:"sql_dsn"`
-
-	// MongoDB backend
-	MongoURI      string `mapstructure:"mongo_uri"`
-	MongoDatabase string `mapstructure:"mongo_database"`
+	// YAML backend
+	YAMLDir string `mapstructure:"yaml_dir"`
 }
 
 // IngestorConfig controls server-level ingestion infrastructure.
@@ -204,16 +181,18 @@ type LogConfig struct {
 	Format string `mapstructure:"format"` // text | json
 }
 
-// Load reads configuration from environment variables and an optional config file.
-// Environment variables take precedence; keys use OPEN_STREAMER_ prefix.
-func Load() (*Config, error) {
+// LoadStorage reads only the StorageConfig from environment variables and an optional
+// config file. All other config sections are managed by GlobalConfig in the store.
+func LoadStorage() (StorageConfig, error) {
 	v := viper.New()
 
 	v.SetEnvPrefix("OPEN_STREAMER")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	setDefaults(v)
+	v.SetDefault("storage.driver", "yaml")
+	v.SetDefault("storage.json_dir", "./data")
+	v.SetDefault("storage.yaml_dir", "./data")
 
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
@@ -222,74 +201,16 @@ func Load() (*Config, error) {
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("config: read: %w", err)
+			return StorageConfig{}, fmt.Errorf("config: read: %w", err)
 		}
 	}
 
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("config: unmarshal: %w", err)
+	var wrapper struct {
+		Storage StorageConfig `mapstructure:"storage"`
+	}
+	if err := v.Unmarshal(&wrapper); err != nil {
+		return StorageConfig{}, fmt.Errorf("config: unmarshal: %w", err)
 	}
 
-	return &cfg, nil
-}
-
-func setDefaults(v *viper.Viper) {
-	v.SetDefault("server.http_addr", ":8080")
-	v.SetDefault("server.grpc_addr", ":9090")
-	v.SetDefault("server.cors.enabled", true)
-	v.SetDefault("server.cors.allowed_origins", []string{"*"})
-	v.SetDefault("server.cors.allow_credentials", false)
-	v.SetDefault("server.cors.max_age", 300)
-
-	v.SetDefault("storage.driver", "json")
-	v.SetDefault("storage.json_dir", "./test_data")
-	v.SetDefault("storage.mongo_database", "open_streamer")
-
-	v.SetDefault("buffer.capacity", 1000)
-
-	v.SetDefault("ingestor.rtmp_enabled", true)
-	v.SetDefault("ingestor.rtmp_addr", ":1935")
-	v.SetDefault("ingestor.srt_enabled", true)
-	v.SetDefault("ingestor.srt_addr", ":9999")
-	v.SetDefault("ingestor.hls_max_segment_buffer", 8)
-
-	v.SetDefault("transcoder.max_workers", 4)
-	v.SetDefault("transcoder.ffmpeg_path", "ffmpeg")
-	v.SetDefault("transcoder.max_restarts", 5)
-
-	v.SetDefault("manager.input_packet_timeout_sec", 30)
-
-	v.SetDefault("publisher.hls.dir", "./out/hls")
-	v.SetDefault("publisher.hls.base_url", "http://localhost:8080/hls")
-	v.SetDefault("publisher.hls.live_ephemeral", true)
-	v.SetDefault("publisher.hls.live_segment_sec", 4)
-	v.SetDefault("publisher.hls.live_window", 10)
-	v.SetDefault("publisher.hls.live_history", 20)
-
-	v.SetDefault("publisher.dash.dir", "./out/dash")
-	v.SetDefault("publisher.dash.live_ephemeral", true)
-	v.SetDefault("publisher.dash.live_segment_sec", 4)
-	v.SetDefault("publisher.dash.live_window", 10)
-	v.SetDefault("publisher.dash.live_history", 20)
-
-	v.SetDefault("publisher.rtsp.listen_host", defaultPublisherListenHost)
-	v.SetDefault("publisher.rtsp.port_min", 18554)
-	v.SetDefault("publisher.rtsp.port_max", 18653)
-	v.SetDefault("publisher.rtsp.transport", "tcp")
-
-	v.SetDefault("publisher.rtmp.listen_host", defaultPublisherListenHost)
-	v.SetDefault("publisher.rtmp.port", 0) // 0 = disabled; set to e.g. 1936 to enable
-
-	v.SetDefault("publisher.srt.listen_host", defaultPublisherListenHost)
-	v.SetDefault("publisher.srt.port", 0) // 0 = disabled; set to e.g. 10000 to enable
-	v.SetDefault("publisher.srt.latency_ms", 120)
-
-	v.SetDefault("hooks.worker_count", 4)
-
-	v.SetDefault("metrics.addr", ":9091")
-	v.SetDefault("metrics.path", "/metrics")
-
-	v.SetDefault("log.level", "info")
-	v.SetDefault("log.format", "text")
+	return wrapper.Storage, nil
 }

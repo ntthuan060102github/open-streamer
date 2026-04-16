@@ -74,9 +74,9 @@ type Service struct {
 
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
-	cfg := do.MustInvoke[*config.Config](i)
+	cfg := do.MustInvoke[config.BufferConfig](i)
 	return &Service{
-		cfg:     cfg.Buffer,
+		cfg:     cfg,
 		buffers: make(map[domain.StreamCode]*ringBuffer),
 	}, nil
 }

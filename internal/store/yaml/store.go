@@ -1,17 +1,19 @@
-// Package json provides a single-file JSON implementation of the store repositories.
-// All data (streams, recordings, hooks, global config) is stored in one file
-// with top-level keys, e.g.:
+// Package yaml provides a single-file YAML implementation of the store repositories.
+// All data (streams, recordings, hooks, global settings) is stored in one file
+// with top-level keys:
 //
-//	{
-//	  "streams":    { "<code>": {...}, ... },
-//	  "recordings": { "<id>":   {...}, ... },
-//	  "hooks":      { "<id>":   {...}, ... },
-//	  "global":     {}
-//	}
+//	streams:
+//	  <code>: { ... }
+//	recordings:
+//	  <id>: { ... }
+//	hooks:
+//	  <id>: { ... }
+//	global:
+//	  <key>: <raw JSON string>
 //
 // Writes are atomic: data is marshalled to a .tmp file then renamed into place.
 // Intended for development and lightweight single-node deployments.
-package json
+package yaml
 
 import (
 	"context"
@@ -24,21 +26,21 @@ import (
 
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/store"
+	"gopkg.in/yaml.v3"
 )
 
 // dbFile is the name of the single data file inside the configured directory.
-const dbFile = "open_streamer.json"
+const dbFile = "open_streamer.yaml"
 
 // db is the top-level structure persisted to disk.
-// Additional top-level keys (e.g. "global") can be added here as the product grows.
 type db struct {
-	Streams    map[string]*domain.Stream    `json:"streams"`
-	Recordings map[string]*domain.Recording `json:"recordings"`
-	Hooks      map[string]*domain.Hook      `json:"hooks"`
-	Global     map[string]json.RawMessage   `json:"global,omitempty"`
+	Streams    map[string]*domain.Stream    `yaml:"streams,omitempty"`
+	Recordings map[string]*domain.Recording `yaml:"recordings,omitempty"`
+	Hooks      map[string]*domain.Hook      `yaml:"hooks,omitempty"`
+	Global     map[string]string            `yaml:"global,omitempty"` // raw JSON strings
 }
 
-// Store is a JSON-backed implementation of all repositories.
+// Store is a YAML-backed implementation of all repositories.
 type Store struct {
 	file string
 	mu   sync.RWMutex
@@ -48,7 +50,7 @@ type Store struct {
 // The directory is created if it does not exist.
 func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("json store: mkdir %s: %w", dir, err)
+		return nil, fmt.Errorf("yaml store: mkdir %s: %w", dir, err)
 	}
 	return &Store{file: filepath.Join(dir, dbFile)}, nil
 }
@@ -75,11 +77,11 @@ func (s *Store) readDB() (db, error) {
 		return emptyDB(), nil
 	}
 	if err != nil {
-		return db{}, fmt.Errorf("json store: read: %w", err)
+		return db{}, fmt.Errorf("yaml store: read: %w", err)
 	}
 	var d db
-	if err := json.Unmarshal(data, &d); err != nil {
-		return db{}, fmt.Errorf("json store: unmarshal: %w", err)
+	if err := yaml.Unmarshal(data, &d); err != nil {
+		return db{}, fmt.Errorf("yaml store: unmarshal: %w", err)
 	}
 	if d.Streams == nil {
 		d.Streams = make(map[string]*domain.Stream)
@@ -96,16 +98,16 @@ func (s *Store) readDB() (db, error) {
 // writeDB marshals and atomically writes the data file.
 // Caller must hold s.mu.Lock.
 func (s *Store) writeDB(d db) error {
-	data, err := json.MarshalIndent(d, "", "  ")
+	data, err := yaml.Marshal(d)
 	if err != nil {
-		return fmt.Errorf("json store: marshal: %w", err)
+		return fmt.Errorf("yaml store: marshal: %w", err)
 	}
 	tmp := s.file + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return fmt.Errorf("json store: write tmp: %w", err)
+		return fmt.Errorf("yaml store: write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, s.file); err != nil {
-		return fmt.Errorf("json store: rename: %w", err)
+		return fmt.Errorf("yaml store: rename: %w", err)
 	}
 	return nil
 }
@@ -291,6 +293,35 @@ func (r *hookRepo) List(_ context.Context) ([]*domain.Hook, error) {
 func (r *hookRepo) Delete(_ context.Context, id domain.HookID) error {
 	return r.s.modify(func(d *db) error {
 		delete(d.Hooks, string(id))
+		return nil
+	})
+}
+
+// --- SettingsRepository ---
+
+type settingsRepo struct{ s *Store }
+
+// Get implements store.SettingsRepository.
+func (r *settingsRepo) Get(_ context.Context, key string) (json.RawMessage, error) {
+	var result json.RawMessage
+	err := r.s.readAll(func(d db) error {
+		v, ok := d.Global[key]
+		if !ok {
+			return fmt.Errorf("settings %s: %w", key, store.ErrNotFound)
+		}
+		result = json.RawMessage(v)
+		return nil
+	})
+	return result, err
+}
+
+// Set implements store.SettingsRepository.
+func (r *settingsRepo) Set(_ context.Context, key string, value json.RawMessage) error {
+	return r.s.modify(func(d *db) error {
+		if d.Global == nil {
+			d.Global = make(map[string]string)
+		}
+		d.Global[key] = string(value)
 		return nil
 	})
 }

@@ -93,18 +93,18 @@ type Service struct {
 
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
-	cfg := do.MustInvoke[*config.Config](i)
+	pub := do.MustInvoke[config.PublisherConfig](i)
+	tc := do.MustInvoke[config.TranscoderConfig](i)
 	buf := do.MustInvoke[*buffer.Service](i)
 	bus := do.MustInvoke[events.Bus](i)
-	pub := &cfg.Publisher
 
-	ffmpegPath := cfg.Transcoder.FFmpegPath
+	ffmpegPath := tc.FFmpegPath
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
 
 	svc := &Service{
-		cfg:            *pub,
+		cfg:            pub,
 		buf:            buf,
 		bus:            bus,
 		ffmpegPath:     ffmpegPath,

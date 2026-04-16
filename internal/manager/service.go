@@ -142,11 +142,11 @@ func (s *Service) SetRestoredCallback(fn func(domain.StreamCode)) {
 
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
-	cfg := do.MustInvoke[*config.Config](i)
+	cfg := do.MustInvoke[config.ManagerConfig](i)
 	bus := do.MustInvoke[events.Bus](i)
 	ing := do.MustInvoke[*ingestor.Service](i)
 	m := do.MustInvoke[*metrics.Metrics](i)
-	sec := cfg.Manager.InputPacketTimeoutSec
+	sec := cfg.InputPacketTimeoutSec
 	if sec <= 0 {
 		sec = 30
 	}

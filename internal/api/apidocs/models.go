@@ -73,6 +73,23 @@ type ConfigData struct {
 	WatermarkPositions []domain.WatermarkPosition `json:"watermarkPositions"`
 }
 
+// ConfigUpdateResponse wraps the POST /config response.
+type ConfigUpdateResponse struct {
+	GlobalConfig *domain.GlobalConfig `json:"globalConfig"`
+	Ports        ConfigPorts          `json:"ports"`
+}
+
+// ConfigPorts exposes listener port configuration so the UI can build output URLs.
+type ConfigPorts struct {
+	HTTPAddr string `json:"http_addr"`
+	RTSPPort int    `json:"rtsp_port"`
+	RTMPPort int    `json:"rtmp_port"`
+	SRTPort  int    `json:"srt_port"`
+}
+
+// ErrorResponse wraps an error body for swagger documentation.
+type ErrorResponse = ErrorBody
+
 // StreamActionData is returned by POST .../restart.
 type StreamActionData struct {
 	Data StreamActionInner `json:"data"`

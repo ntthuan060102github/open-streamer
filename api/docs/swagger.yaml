@@ -31,7 +31,35 @@ definitions:
           $ref: '#/definitions/domain.WatermarkType'
         type: array
     type: object
+  apidocs.ConfigPorts:
+    properties:
+      http_addr:
+        type: string
+      rtmp_port:
+        type: integer
+      rtsp_port:
+        type: integer
+      srt_port:
+        type: integer
+    type: object
+  apidocs.ConfigUpdateResponse:
+    properties:
+      globalConfig:
+        $ref: '#/definitions/domain.GlobalConfig'
+      ports:
+        $ref: '#/definitions/apidocs.ConfigPorts'
+    type: object
   apidocs.ErrorBody:
+    properties:
+      error:
+        properties:
+          code:
+            type: string
+          message:
+            type: string
+        type: object
+    type: object
+  apidocs.ErrorResponse:
     properties:
       error:
         properties:
@@ -220,6 +248,214 @@ definitions:
       active_input_priority:
         type: integer
     type: object
+  config.BufferConfig:
+    properties:
+      capacity:
+        description: Capacity is the number of MPEG-TS packets per stream buffer.
+        type: integer
+    type: object
+  config.CORSConfig:
+    properties:
+      allowCredentials:
+        description: |-
+          AllowCredentials sets Access-Control-Allow-Credentials. Must be false
+          when AllowedOrigins contains "*".
+        type: boolean
+      allowedHeaders:
+        description: AllowedHeaders lists Access-Control-Allow-Headers; empty uses
+          a common API default set.
+        items:
+          type: string
+        type: array
+      allowedMethods:
+        description: AllowedMethods lists Access-Control-Allow-Methods; empty uses
+          a REST default set.
+        items:
+          type: string
+        type: array
+      allowedOrigins:
+        description: |-
+          AllowedOrigins lists values for Access-Control-Allow-Origin. Use "*"
+          for any origin (cannot be used together with AllowCredentials).
+        items:
+          type: string
+        type: array
+      enabled:
+        description: Enabled turns CORS middleware on for the HTTP listener.
+        type: boolean
+      exposedHeaders:
+        description: ExposedHeaders lists Access-Control-Expose-Headers.
+        items:
+          type: string
+        type: array
+      maxAge:
+        description: MaxAge is the preflight cache duration in seconds (Access-Control-Max-Age).
+        type: integer
+    type: object
+  config.HooksConfig:
+    properties:
+      kafkaBrokers:
+        description: |-
+          KafkaBrokers is the list of Kafka broker addresses used by all Kafka-type hooks.
+          Example: ["localhost:9092", "broker2:9092"].
+          Empty = Kafka hooks are not available.
+        items:
+          type: string
+        type: array
+      workerCount:
+        description: WorkerCount is the number of concurrent hook delivery goroutines.
+        type: integer
+    type: object
+  config.IngestorConfig:
+    properties:
+      hlsmaxSegmentBuffer:
+        description: |-
+          HLSMaxSegmentBuffer caps the number of pre-fetched HLS segments held in memory.
+          This is a server-wide memory guard, not a per-stream policy.
+        type: integer
+      rtmpaddr:
+        description: e.g. ":1935"
+        type: string
+      rtmpenabled:
+        description: RTMP push server — external encoders connect to us on this address.
+        type: boolean
+      srtaddr:
+        description: e.g. ":9999"
+        type: string
+      srtenabled:
+        description: SRT push server — external encoders connect to our SRT listener.
+        type: boolean
+    type: object
+  config.LogConfig:
+    properties:
+      format:
+        description: text | json
+        type: string
+      level:
+        description: debug | info | warn | error
+        type: string
+    type: object
+  config.ManagerConfig:
+    properties:
+      inputPacketTimeoutSec:
+        description: |-
+          InputPacketTimeoutSec is the maximum gap without a successful read on the
+          active input before it is marked failed. Pull protocols that deliver in
+          bursts (e.g. HLS: one segment per Read) need this at least as large as the
+          typical interval between reads (segment duration + playlist poll), or a
+          healthy primary will be falsely failed over to a lower priority.
+        type: integer
+    type: object
+  config.MetricsConfig:
+    properties:
+      addr:
+        type: string
+      path:
+        type: string
+    type: object
+  config.PublisherConfig:
+    properties:
+      dash:
+        $ref: '#/definitions/config.PublisherDASHConfig'
+      hls:
+        $ref: '#/definitions/config.PublisherHLSConfig'
+      rtmp:
+        $ref: '#/definitions/config.PublisherRTMPServeConfig'
+      rtsp:
+        $ref: '#/definitions/config.PublisherRTSPConfig'
+      srt:
+        $ref: '#/definitions/config.PublisherSRTListenerConfig'
+    type: object
+  config.PublisherDASHConfig:
+    properties:
+      dir:
+        type: string
+      liveEphemeral:
+        description: Live* mirror HLS packaging semantics for the DASH muxer.
+        type: boolean
+      liveHistory:
+        type: integer
+      liveSegmentSec:
+        type: integer
+      liveWindow:
+        type: integer
+    type: object
+  config.PublisherHLSConfig:
+    properties:
+      baseURL:
+        type: string
+      dir:
+        type: string
+      liveEphemeral:
+        description: LiveEphemeral enables bounded retention (sliding manifest, delete
+          old segments).
+        type: boolean
+      liveHistory:
+        description: LiveHistory is extra segments kept on disk after they leave the
+          manifest.
+        type: integer
+      liveSegmentSec:
+        description: LiveSegmentSec is segment duration in seconds.
+        type: integer
+      liveWindow:
+        description: LiveWindow is the sliding window size (segments) in the playlist.
+        type: integer
+    type: object
+  config.PublisherRTMPServeConfig:
+    properties:
+      listenHost:
+        type: string
+      port:
+        description: Port is the single RTMP listen port. 0 = disabled.
+        type: integer
+    type: object
+  config.PublisherRTSPConfig:
+    properties:
+      listenHost:
+        description: ListenHost is the bind address (empty = 0.0.0.0).
+        type: string
+      portMax:
+        type: integer
+      portMin:
+        description: PortMin is the single RTSP listen port (PortMax is unused for
+          publisher RTSP).
+        type: integer
+      transport:
+        description: Transport is "tcp" (default) or "udp" for the RTSP muxer.
+        type: string
+    type: object
+  config.PublisherSRTListenerConfig:
+    properties:
+      latencyMS:
+        description: LatencyMS is the SRT latency in milliseconds for listener URLs.
+        type: integer
+      listenHost:
+        type: string
+      port:
+        description: Port is the single SRT listen port. 0 = disabled.
+        type: integer
+    type: object
+  config.ServerConfig:
+    properties:
+      cors:
+        $ref: '#/definitions/config.CORSConfig'
+      httpaddr:
+        type: string
+    type: object
+  config.TranscoderConfig:
+    properties:
+      ffmpegPath:
+        type: string
+      maxRestarts:
+        description: |-
+          MaxRestarts is the maximum number of consecutive FFmpeg crashes allowed per
+          profile before the transcoder gives up and triggers a fatal callback.
+          0 = unlimited retries (not recommended for production).
+        type: integer
+      maxWorkers:
+        description: MaxWorkers caps the number of concurrent FFmpeg processes.
+        type: integer
+    type: object
   domain.AudioCodec:
     enum:
     - aac
@@ -337,6 +573,27 @@ definitions:
     - EventTranscoderStarted
     - EventTranscoderStopped
     - EventTranscoderError
+  domain.GlobalConfig:
+    properties:
+      buffer:
+        $ref: '#/definitions/config.BufferConfig'
+      hooks:
+        $ref: '#/definitions/config.HooksConfig'
+      ingestor:
+        $ref: '#/definitions/config.IngestorConfig'
+      log:
+        $ref: '#/definitions/config.LogConfig'
+      manager:
+        $ref: '#/definitions/config.ManagerConfig'
+      metrics:
+        $ref: '#/definitions/config.MetricsConfig'
+      publisher:
+        $ref: '#/definitions/config.PublisherConfig'
+      server:
+        $ref: '#/definitions/config.ServerConfig'
+      transcoder:
+        $ref: '#/definitions/config.TranscoderConfig'
+    type: object
   domain.HWAccel:
     enum:
     - none
@@ -842,7 +1099,7 @@ paths:
   /config:
     get:
       description: Returns available hardware accelerators (OS-detected), static enum
-        lists, and publisher listener ports.
+        lists, publisher listener ports, and the current runtime GlobalConfig.
       produces:
       - application/json
       responses:
@@ -851,6 +1108,36 @@ paths:
           schema:
             $ref: '#/definitions/apidocs.ConfigData'
       summary: Get server configuration.
+      tags:
+      - system
+    post:
+      consumes:
+      - application/json
+      description: Merges the request body into the current GlobalConfig and applies
+        it — services are started or stopped to match.
+      parameters:
+      - description: Partial configuration to merge
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.GlobalConfig'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.ConfigUpdateResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorResponse'
+      summary: Partially update server configuration.
       tags:
       - system
   /healthz:

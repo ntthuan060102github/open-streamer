@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/config": {
             "get": {
-                "description": "Returns available hardware accelerators (OS-detected), static enum lists, and publisher listener ports.",
+                "description": "Returns available hardware accelerators (OS-detected), static enum lists, publisher listener ports, and the current runtime GlobalConfig.",
                 "produces": [
                     "application/json"
                 ],
@@ -30,6 +30,50 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/apidocs.ConfigData"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Merges the request body into the current GlobalConfig and applies it — services are started or stopped to match.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Partially update server configuration.",
+                "parameters": [
+                    {
+                        "description": "Partial configuration to merge",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/domain.GlobalConfig"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ConfigUpdateResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorResponse"
                         }
                     }
                 }
@@ -846,7 +890,51 @@ const docTemplate = `{
                 }
             }
         },
+        "apidocs.ConfigPorts": {
+            "type": "object",
+            "properties": {
+                "http_addr": {
+                    "type": "string"
+                },
+                "rtmp_port": {
+                    "type": "integer"
+                },
+                "rtsp_port": {
+                    "type": "integer"
+                },
+                "srt_port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "apidocs.ConfigUpdateResponse": {
+            "type": "object",
+            "properties": {
+                "globalConfig": {
+                    "$ref": "#/definitions/domain.GlobalConfig"
+                },
+                "ports": {
+                    "$ref": "#/definitions/apidocs.ConfigPorts"
+                }
+            }
+        },
         "apidocs.ErrorBody": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string"
+                        },
+                        "message": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "apidocs.ErrorResponse": {
             "type": "object",
             "properties": {
                 "error": {
@@ -1124,6 +1212,277 @@ const docTemplate = `{
                 }
             }
         },
+        "config.BufferConfig": {
+            "type": "object",
+            "properties": {
+                "capacity": {
+                    "description": "Capacity is the number of MPEG-TS packets per stream buffer.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.CORSConfig": {
+            "type": "object",
+            "properties": {
+                "allowCredentials": {
+                    "description": "AllowCredentials sets Access-Control-Allow-Credentials. Must be false\nwhen AllowedOrigins contains \"*\".",
+                    "type": "boolean"
+                },
+                "allowedHeaders": {
+                    "description": "AllowedHeaders lists Access-Control-Allow-Headers; empty uses a common API default set.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowedMethods": {
+                    "description": "AllowedMethods lists Access-Control-Allow-Methods; empty uses a REST default set.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "allowedOrigins": {
+                    "description": "AllowedOrigins lists values for Access-Control-Allow-Origin. Use \"*\"\nfor any origin (cannot be used together with AllowCredentials).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "enabled": {
+                    "description": "Enabled turns CORS middleware on for the HTTP listener.",
+                    "type": "boolean"
+                },
+                "exposedHeaders": {
+                    "description": "ExposedHeaders lists Access-Control-Expose-Headers.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "maxAge": {
+                    "description": "MaxAge is the preflight cache duration in seconds (Access-Control-Max-Age).",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.HooksConfig": {
+            "type": "object",
+            "properties": {
+                "kafkaBrokers": {
+                    "description": "KafkaBrokers is the list of Kafka broker addresses used by all Kafka-type hooks.\nExample: [\"localhost:9092\", \"broker2:9092\"].\nEmpty = Kafka hooks are not available.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "workerCount": {
+                    "description": "WorkerCount is the number of concurrent hook delivery goroutines.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.IngestorConfig": {
+            "type": "object",
+            "properties": {
+                "hlsmaxSegmentBuffer": {
+                    "description": "HLSMaxSegmentBuffer caps the number of pre-fetched HLS segments held in memory.\nThis is a server-wide memory guard, not a per-stream policy.",
+                    "type": "integer"
+                },
+                "rtmpaddr": {
+                    "description": "e.g. \":1935\"",
+                    "type": "string"
+                },
+                "rtmpenabled": {
+                    "description": "RTMP push server — external encoders connect to us on this address.",
+                    "type": "boolean"
+                },
+                "srtaddr": {
+                    "description": "e.g. \":9999\"",
+                    "type": "string"
+                },
+                "srtenabled": {
+                    "description": "SRT push server — external encoders connect to our SRT listener.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "config.LogConfig": {
+            "type": "object",
+            "properties": {
+                "format": {
+                    "description": "text | json",
+                    "type": "string"
+                },
+                "level": {
+                    "description": "debug | info | warn | error",
+                    "type": "string"
+                }
+            }
+        },
+        "config.ManagerConfig": {
+            "type": "object",
+            "properties": {
+                "inputPacketTimeoutSec": {
+                    "description": "InputPacketTimeoutSec is the maximum gap without a successful read on the\nactive input before it is marked failed. Pull protocols that deliver in\nbursts (e.g. HLS: one segment per Read) need this at least as large as the\ntypical interval between reads (segment duration + playlist poll), or a\nhealthy primary will be falsely failed over to a lower priority.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.MetricsConfig": {
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "config.PublisherConfig": {
+            "type": "object",
+            "properties": {
+                "dash": {
+                    "$ref": "#/definitions/config.PublisherDASHConfig"
+                },
+                "hls": {
+                    "$ref": "#/definitions/config.PublisherHLSConfig"
+                },
+                "rtmp": {
+                    "$ref": "#/definitions/config.PublisherRTMPServeConfig"
+                },
+                "rtsp": {
+                    "$ref": "#/definitions/config.PublisherRTSPConfig"
+                },
+                "srt": {
+                    "$ref": "#/definitions/config.PublisherSRTListenerConfig"
+                }
+            }
+        },
+        "config.PublisherDASHConfig": {
+            "type": "object",
+            "properties": {
+                "dir": {
+                    "type": "string"
+                },
+                "liveEphemeral": {
+                    "description": "Live* mirror HLS packaging semantics for the DASH muxer.",
+                    "type": "boolean"
+                },
+                "liveHistory": {
+                    "type": "integer"
+                },
+                "liveSegmentSec": {
+                    "type": "integer"
+                },
+                "liveWindow": {
+                    "type": "integer"
+                }
+            }
+        },
+        "config.PublisherHLSConfig": {
+            "type": "object",
+            "properties": {
+                "baseURL": {
+                    "type": "string"
+                },
+                "dir": {
+                    "type": "string"
+                },
+                "liveEphemeral": {
+                    "description": "LiveEphemeral enables bounded retention (sliding manifest, delete old segments).",
+                    "type": "boolean"
+                },
+                "liveHistory": {
+                    "description": "LiveHistory is extra segments kept on disk after they leave the manifest.",
+                    "type": "integer"
+                },
+                "liveSegmentSec": {
+                    "description": "LiveSegmentSec is segment duration in seconds.",
+                    "type": "integer"
+                },
+                "liveWindow": {
+                    "description": "LiveWindow is the sliding window size (segments) in the playlist.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.PublisherRTMPServeConfig": {
+            "type": "object",
+            "properties": {
+                "listenHost": {
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Port is the single RTMP listen port. 0 = disabled.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.PublisherRTSPConfig": {
+            "type": "object",
+            "properties": {
+                "listenHost": {
+                    "description": "ListenHost is the bind address (empty = 0.0.0.0).",
+                    "type": "string"
+                },
+                "portMax": {
+                    "type": "integer"
+                },
+                "portMin": {
+                    "description": "PortMin is the single RTSP listen port (PortMax is unused for publisher RTSP).",
+                    "type": "integer"
+                },
+                "transport": {
+                    "description": "Transport is \"tcp\" (default) or \"udp\" for the RTSP muxer.",
+                    "type": "string"
+                }
+            }
+        },
+        "config.PublisherSRTListenerConfig": {
+            "type": "object",
+            "properties": {
+                "latencyMS": {
+                    "description": "LatencyMS is the SRT latency in milliseconds for listener URLs.",
+                    "type": "integer"
+                },
+                "listenHost": {
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Port is the single SRT listen port. 0 = disabled.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.ServerConfig": {
+            "type": "object",
+            "properties": {
+                "cors": {
+                    "$ref": "#/definitions/config.CORSConfig"
+                },
+                "httpaddr": {
+                    "type": "string"
+                }
+            }
+        },
+        "config.TranscoderConfig": {
+            "type": "object",
+            "properties": {
+                "ffmpegPath": {
+                    "type": "string"
+                },
+                "maxRestarts": {
+                    "description": "MaxRestarts is the maximum number of consecutive FFmpeg crashes allowed per\nprofile before the transcoder gives up and triggers a fatal callback.\n0 = unlimited retries (not recommended for production).",
+                    "type": "integer"
+                },
+                "maxWorkers": {
+                    "description": "MaxWorkers caps the number of concurrent FFmpeg processes.",
+                    "type": "integer"
+                }
+            }
+        },
         "domain.AudioCodec": {
             "type": "string",
             "enum": [
@@ -1259,6 +1618,38 @@ const docTemplate = `{
                 "EventTranscoderStopped",
                 "EventTranscoderError"
             ]
+        },
+        "domain.GlobalConfig": {
+            "type": "object",
+            "properties": {
+                "buffer": {
+                    "$ref": "#/definitions/config.BufferConfig"
+                },
+                "hooks": {
+                    "$ref": "#/definitions/config.HooksConfig"
+                },
+                "ingestor": {
+                    "$ref": "#/definitions/config.IngestorConfig"
+                },
+                "log": {
+                    "$ref": "#/definitions/config.LogConfig"
+                },
+                "manager": {
+                    "$ref": "#/definitions/config.ManagerConfig"
+                },
+                "metrics": {
+                    "$ref": "#/definitions/config.MetricsConfig"
+                },
+                "publisher": {
+                    "$ref": "#/definitions/config.PublisherConfig"
+                },
+                "server": {
+                    "$ref": "#/definitions/config.ServerConfig"
+                },
+                "transcoder": {
+                    "$ref": "#/definitions/config.TranscoderConfig"
+                }
+            }
         },
         "domain.HWAccel": {
             "type": "string",

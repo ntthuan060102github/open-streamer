@@ -57,13 +57,13 @@ type Service struct {
 
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
-	cfg := do.MustInvoke[*config.Config](i)
+	cfg := do.MustInvoke[config.IngestorConfig](i)
 	buf := do.MustInvoke[*buffer.Service](i)
 	bus := do.MustInvoke[events.Bus](i)
 	m := do.MustInvoke[*metrics.Metrics](i)
 
 	return &Service{
-		cfg:      cfg.Ingestor,
+		cfg:      cfg,
 		buf:      buf,
 		bus:      bus,
 		m:        m,

@@ -75,17 +75,17 @@ func (s *Service) SetFatalCallback(fn func(streamCode domain.StreamCode)) {
 
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
-	cfg := do.MustInvoke[*config.Config](i)
+	cfg := do.MustInvoke[config.TranscoderConfig](i)
 	buf := do.MustInvoke[*buffer.Service](i)
 	bus := do.MustInvoke[events.Bus](i)
 	m := do.MustInvoke[*metrics.Metrics](i)
 
 	return &Service{
-		cfg:     cfg.Transcoder,
+		cfg:     cfg,
 		buf:     buf,
 		bus:     bus,
 		m:       m,
-		sem:     make(chan struct{}, cfg.Transcoder.MaxWorkers),
+		sem:     make(chan struct{}, cfg.MaxWorkers),
 		workers: make(map[domain.StreamCode]*streamWorker),
 	}, nil
 }
