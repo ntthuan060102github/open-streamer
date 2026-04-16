@@ -751,7 +751,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/streams/{code}/start": {
+        "/streams/{code}/restart": {
             "post": {
                 "produces": [
                     "application/json"
@@ -759,7 +759,7 @@ const docTemplate = `{
                 "tags": [
                     "streams"
                 ],
-                "summary": "Start stream pipeline",
+                "summary": "Restart stream pipeline",
                 "parameters": [
                     {
                         "type": "string",
@@ -774,6 +774,12 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/apidocs.StreamActionData"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
                         }
                     },
                     "404": {
