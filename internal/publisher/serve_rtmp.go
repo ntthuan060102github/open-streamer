@@ -184,7 +184,8 @@ func runRTMPPlayPipeline(
 					return
 				}
 				if pkt.AV != nil && pkt.AV.Discontinuity {
-					tsCarry = tsCarry[:0]
+					avMux = nil
+					tsCarry = nil
 				}
 				tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
 					tsCarry = append(tsCarry, b...)

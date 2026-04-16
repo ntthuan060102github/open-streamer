@@ -206,7 +206,8 @@ func (p *dashFMP4Packager) run(ctx context.Context, sub *buffer.Subscriber) {
 				// discard them so the pipe never receives a hybrid 188-byte packet that
 				// mixes data from two independent TS streams.
 				if pkt.AV != nil && pkt.AV.Discontinuity {
-					tsCarry = tsCarry[:0]
+					avMux = nil
+					tsCarry = nil
 				}
 				tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
 					tsCarry = append(tsCarry, b...)

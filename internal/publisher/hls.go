@@ -185,6 +185,13 @@ func (p *hlsSegmenter) run(ctx context.Context, sub *buffer.Subscriber) {
 			}
 			if pkt.AV != nil {
 				p.handleAVPacket(pkt.AV, segDur)
+				// On source switch, discard stale muxer state so the new source
+				// gets fresh PAT/PMT tables and clean continuity counters.
+				// FeedWirePacket lazily allocates a new FromAV on the next call.
+				if pkt.AV.Discontinuity {
+					avMux = nil
+					tsCarry = nil
+				}
 			}
 			tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
 				alignedFeed(b, &tsCarry, func(pkt188 []byte) bool {

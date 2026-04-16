@@ -148,7 +148,8 @@ func (s *Service) srtHandleSubscribe(ctx context.Context, conn srt.Conn) {
 				return
 			}
 			if pkt.AV != nil && pkt.AV.Discontinuity {
-				tsCarry = tsCarry[:0]
+				avMux = nil
+				tsCarry = nil
 			}
 			var writeErr error
 			tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {

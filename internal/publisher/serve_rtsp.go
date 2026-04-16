@@ -180,7 +180,8 @@ func runRTSPPipeline(
 					return
 				}
 				if pkt.AV != nil && pkt.AV.Discontinuity {
-					tsCarry = tsCarry[:0]
+					avMux = nil
+					tsCarry = nil
 				}
 				tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
 					tsmux.DrainTS188Aligned(&tsCarry, b, func(aligned []byte) {

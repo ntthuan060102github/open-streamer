@@ -134,7 +134,8 @@ func (p *rtmpPushPackager) feedLoop(ctx context.Context, sub *buffer.Subscriber,
 				return
 			}
 			if pkt.AV != nil && pkt.AV.Discontinuity {
-				tsCarry = tsCarry[:0]
+				avMux = nil
+				tsCarry = nil
 			}
 			tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
 				alignedFeed(b, &tsCarry, func(pkt188 []byte) bool {
