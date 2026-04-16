@@ -57,6 +57,11 @@ type StreamList struct {
 	Total int              `json:"total"`
 }
 
+// InputSwitchRequest is the request body for POST /streams/{code}/inputs/switch.
+type InputSwitchRequest struct {
+	Priority int `json:"priority"`
+}
+
 // ConfigData wraps the GET /config response.
 type ConfigData struct {
 	HWAccels           []domain.HWAccel           `json:"hwAccels"`

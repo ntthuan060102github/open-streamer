@@ -67,6 +67,11 @@ definitions:
       status:
         type: string
     type: object
+  apidocs.InputSwitchRequest:
+    properties:
+      priority:
+        type: integer
+    type: object
   apidocs.RecordingData:
     properties:
       data:
@@ -1261,6 +1266,42 @@ paths:
           schema:
             $ref: '#/definitions/apidocs.ErrorBody'
       summary: Create or update stream
+      tags:
+      - streams
+  /streams/{code}/inputs/switch:
+    post:
+      parameters:
+      - description: Stream code
+        in: path
+        name: code
+        required: true
+        type: string
+      - description: Target input priority
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/apidocs.InputSwitchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.StreamActionData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Manual input switch
       tags:
       - streams
   /streams/{code}/recordings:

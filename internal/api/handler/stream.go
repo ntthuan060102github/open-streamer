@@ -275,6 +275,38 @@ func (h *StreamHandler) Start(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "started"}})
 }
 
+// SwitchInput forces the active ingest source to the given input priority at runtime.
+// The switch is temporary — it reverts automatically when the selected input degrades permanently.
+// Switching to a different priority replaces any previous manual override.
+//
+// @Summary     Manual input switch
+// @Tags        streams
+// @Produce     json
+// @Param       code  path  string                    true  "Stream code"
+// @Param       body  body  apidocs.InputSwitchRequest true  "Target input priority"
+// @Success     200   {object} apidocs.StreamActionData
+// @Failure     400   {object} apidocs.ErrorBody
+// @Failure     404   {object} apidocs.ErrorBody
+// @Failure     500   {object} apidocs.ErrorBody
+// @Router      /streams/{code}/inputs/switch [post].
+func (h *StreamHandler) SwitchInput(w http.ResponseWriter, r *http.Request) {
+	code := domain.StreamCode(chi.URLParam(r, "code"))
+
+	var body struct {
+		Priority int `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", err.Error())
+		return
+	}
+
+	if err := h.manager.SwitchInput(code, body.Priority); err != nil {
+		writeError(w, http.StatusBadRequest, "SWITCH_FAILED", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]string{"status": "switched"}})
+}
+
 // Stop tears down the stream pipeline.
 // @Summary Stop stream pipeline
 // @Tags streams

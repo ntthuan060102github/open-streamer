@@ -88,6 +88,7 @@ func (s *Server) buildRouter(
 			r.Delete("/", stream.Delete)
 			r.Post("/start", stream.Start)
 			r.Post("/stop", stream.Stop)
+			r.Post("/inputs/switch", stream.SwitchInput)
 			r.Get("/status", stream.Status)
 
 			r.Get("/recordings", recording.ListByStream)

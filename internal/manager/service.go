@@ -25,6 +25,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -67,6 +68,11 @@ type streamState struct {
 	probing       map[int]bool      // true while a probe goroutine is in-flight for that priority
 	lastSwitchAt  time.Time         // time of the most recent active-input switch
 
+	// overridePriority is set by a manual SwitchInput call.
+	// selectBest treats this input as highest-priority (always wins if healthy).
+	// Cleared automatically when the overridden input degrades permanently.
+	overridePriority *int
+
 	// dead is set by Unregister. All goroutines that touch state must bail immediately on sight.
 	dead bool
 	// exhausted is set when all inputs are degraded and no failover candidate exists.
@@ -82,8 +88,9 @@ type streamState struct {
 
 // RuntimeStatus is a JSON-safe snapshot of manager state for one stream.
 type RuntimeStatus struct {
-	ActiveInputPriority int                   `json:"active_input_priority"`
-	Inputs              []InputHealthSnapshot `json:"inputs"`
+	ActiveInputPriority   int                   `json:"active_input_priority"`
+	OverrideInputPriority *int                  `json:"override_input_priority,omitempty"`
+	Inputs                []InputHealthSnapshot `json:"inputs"`
 }
 
 // InputHealthSnapshot is a serialisable copy of one input's health.
@@ -246,8 +253,9 @@ func (s *Service) RuntimeStatus(streamID domain.StreamCode) (RuntimeStatus, bool
 	defer state.mu.Unlock()
 
 	out := RuntimeStatus{
-		ActiveInputPriority: state.active,
-		Inputs:              make([]InputHealthSnapshot, 0, len(state.inputs)),
+		ActiveInputPriority:   state.active,
+		OverrideInputPriority: state.overridePriority,
+		Inputs:                make([]InputHealthSnapshot, 0, len(state.inputs)),
 	}
 	for _, h := range state.inputs {
 		out.Inputs = append(out.Inputs, InputHealthSnapshot{
@@ -433,20 +441,9 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		return
 	}
 	best := selectBest(state)
+	clearOverrideIfNeeded(streamID, state, best)
 	if best == nil {
-		wasExhausted := state.exhausted
-		state.exhausted = true
-		state.mu.Unlock()
-
-		slog.Error("manager: no healthy input available", "stream_code", streamID)
-		if !wasExhausted {
-			s.mu.RLock()
-			cb := s.onExhausted
-			s.mu.RUnlock()
-			if cb != nil {
-				go cb(streamID)
-			}
-		}
+		s.handleExhausted(streamID, state)
 		return
 	}
 	if best.Input.Priority == state.active {
@@ -475,17 +472,7 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		return
 	}
 
-	state.mu.Lock()
-	if !state.dead && state.active == prevPriority {
-		if prevH := state.inputs[prevPriority]; prevH != nil && prevH.Status == domain.StatusActive {
-			// Only downgrade Active → Idle; never override StatusDegraded that triggered the switch.
-			prevH.Status = domain.StatusIdle
-		}
-		state.active = bestInput.Priority
-		state.lastSwitchAt = time.Now()
-		state.exhausted = false
-	}
-	state.mu.Unlock()
+	commitSwitch(state, prevPriority, bestInput)
 
 	s.m.ManagerFailoversTotal.WithLabelValues(string(streamID)).Inc()
 	s.bus.Publish(ctx, domain.Event{
@@ -493,15 +480,71 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		StreamCode: streamID,
 		Payload:    map[string]any{"from": prevPriority, "to": bestInput.Priority},
 	})
+	s.notifyRestored(wasExhausted, streamID)
+}
 
+// handleExhausted marks the stream as having no healthy inputs and fires the callback once.
+// Caller must hold state.mu; releases it before returning.
+func (s *Service) handleExhausted(streamID domain.StreamCode, state *streamState) {
+	wasExhausted := state.exhausted
+	state.exhausted = true
+	state.mu.Unlock()
+
+	slog.Error("manager: no healthy input available", "stream_code", streamID)
 	if wasExhausted {
-		s.mu.RLock()
-		cb := s.onRestored
-		s.mu.RUnlock()
-		if cb != nil {
-			go cb(streamID)
-		}
+		return
 	}
+	s.mu.RLock()
+	cb := s.onExhausted
+	s.mu.RUnlock()
+	if cb != nil {
+		go cb(streamID)
+	}
+}
+
+// commitSwitch atomically updates streamState after a successful ingestor start.
+func commitSwitch(state *streamState, prevPriority int, bestInput domain.Input) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.dead || state.active != prevPriority {
+		return
+	}
+	if prevH := state.inputs[prevPriority]; prevH != nil && prevH.Status == domain.StatusActive {
+		// Only downgrade Active → Idle; never override StatusDegraded that triggered the switch.
+		prevH.Status = domain.StatusIdle
+	}
+	state.active = bestInput.Priority
+	state.lastSwitchAt = time.Now()
+	state.exhausted = false
+}
+
+// notifyRestored fires the onRestored callback when the stream recovers from exhaustion.
+func (s *Service) notifyRestored(wasExhausted bool, streamID domain.StreamCode) {
+	if !wasExhausted {
+		return
+	}
+	s.mu.RLock()
+	cb := s.onRestored
+	s.mu.RUnlock()
+	if cb != nil {
+		go cb(streamID)
+	}
+}
+
+// clearOverrideIfNeeded clears the manual input override when the overridden input is no longer
+// the selected best (meaning it has degraded permanently). Caller must hold state.mu.
+func clearOverrideIfNeeded(streamID domain.StreamCode, state *streamState, best *InputHealth) {
+	if state.overridePriority == nil {
+		return
+	}
+	if best != nil && best.Input.Priority == *state.overridePriority {
+		return
+	}
+	slog.Info("manager: manual input override cleared due to permanent failure",
+		"stream_code", streamID,
+		"override_priority", *state.overridePriority,
+	)
+	state.overridePriority = nil
 }
 
 // runProbe verifies whether a degraded input has recovered.
@@ -542,6 +585,43 @@ func (s *Service) runProbe(streamID domain.StreamCode, state *streamState, task 
 	if task.priority < currentActive && sinceSwitch >= failbackSwitchCooldown {
 		s.tryFailover(streamID, state)
 	}
+}
+
+// SwitchInput forces the stream to use the given input priority regardless of its
+// configured priority value. The override persists until the input degrades permanently,
+// at which point the manager reverts to normal priority-based selection.
+// Switching to a different priority replaces any previous override.
+func (s *Service) SwitchInput(streamID domain.StreamCode, priority int) error {
+	s.mu.RLock()
+	state, ok := s.streams[streamID]
+	s.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("manager: stream %s is not active", streamID)
+	}
+
+	state.mu.Lock()
+	if state.dead {
+		state.mu.Unlock()
+		return fmt.Errorf("manager: stream %s is not active", streamID)
+	}
+	h, exists := state.inputs[priority]
+	if !exists {
+		state.mu.Unlock()
+		return fmt.Errorf("manager: input priority %d not found in stream %s", priority, streamID)
+	}
+	if h.Status == domain.StatusDegraded || h.Status == domain.StatusStopped {
+		state.mu.Unlock()
+		return fmt.Errorf("manager: input priority %d is degraded and cannot be switched to", priority)
+	}
+	state.overridePriority = &priority
+	state.mu.Unlock()
+
+	slog.Info("manager: manual input switch requested",
+		"stream_code", streamID,
+		"priority", priority,
+	)
+	s.tryFailover(streamID, state)
+	return nil
 }
 
 // UpdateInputs patches the live input routing table while the monitor is running.
@@ -654,9 +734,16 @@ func (s *Service) UpdateBufferWriteID(streamID domain.StreamCode, newBufID domai
 	}
 }
 
-// selectBest returns the highest-priority (lowest Priority value) input that is
-// not degraded or stopped. Caller must hold state.mu.
+// selectBest returns the input to activate next. Caller must hold state.mu.
+// If a manual override is set and the overridden input is healthy, it always wins
+// regardless of its actual priority value. Otherwise the lowest priority value wins.
 func selectBest(state *streamState) *InputHealth {
+	if state.overridePriority != nil {
+		if h, ok := state.inputs[*state.overridePriority]; ok &&
+			h.Status != domain.StatusDegraded && h.Status != domain.StatusStopped {
+			return h
+		}
+	}
 	var best *InputHealth
 	for _, h := range state.inputs {
 		if h.Status == domain.StatusDegraded || h.Status == domain.StatusStopped {
