@@ -875,12 +875,6 @@ const docTemplate = `{
                             "$ref": "#/definitions/apidocs.StreamActionData"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/apidocs.ErrorBody"
-                        }
-                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -1518,14 +1512,6 @@ const docTemplate = `{
                         "$ref": "#/definitions/domain.PushDestination"
                     }
                 },
-                "status": {
-                    "description": "Status is the runtime lifecycle state (not persisted between restarts).",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/domain.StreamStatus"
-                        }
-                    ]
-                },
                 "stream_key": {
                     "description": "StreamKey is used to authenticate RTMP/SRT push ingest.",
                     "type": "string"
@@ -1588,21 +1574,6 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
-        },
-        "domain.StreamStatus": {
-            "type": "string",
-            "enum": [
-                "idle",
-                "active",
-                "degraded",
-                "stopped"
-            ],
-            "x-enum-varnames": [
-                "StatusIdle",
-                "StatusActive",
-                "StatusDegraded",
-                "StatusStopped"
-            ]
         },
         "domain.ThumbnailConfig": {
             "type": "object",
