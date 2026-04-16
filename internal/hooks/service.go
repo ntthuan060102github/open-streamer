@@ -127,7 +127,7 @@ func (s *Service) dispatch(ctx context.Context, event domain.Event) error {
 		if !h.Enabled {
 			continue
 		}
-		if !s.matches(h, event.Type) {
+		if !s.matches(h, event) {
 			continue
 		}
 
@@ -143,16 +143,20 @@ func (s *Service) dispatch(ctx context.Context, event domain.Event) error {
 	return nil
 }
 
-func (s *Service) matches(h *domain.Hook, et domain.EventType) bool {
-	if len(h.EventTypes) == 0 {
-		return true
-	}
-	for _, t := range h.EventTypes {
-		if t == et {
-			return true
+func (s *Service) matches(h *domain.Hook, event domain.Event) bool {
+	if len(h.EventTypes) > 0 {
+		found := false
+		for _, t := range h.EventTypes {
+			if t == event.Type {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
 		}
 	}
-	return false
+	return h.StreamCodes.Matches(event.StreamCode)
 }
 
 func (s *Service) deliverWithRetry(ctx context.Context, h *domain.Hook, event domain.Event) error {

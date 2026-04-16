@@ -1406,7 +1406,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "event_types": {
-                    "description": "EventTypes filters which events trigger delivery. nil = all events.",
+                    "description": "EventTypes filters which events trigger delivery. Empty = all events.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.EventType"
@@ -1425,6 +1425,14 @@ const docTemplate = `{
                 "secret": {
                     "description": "HMAC-SHA256 signing secret (HTTP only)",
                     "type": "string"
+                },
+                "stream_codes": {
+                    "description": "StreamCodes filters delivery by stream code.\nOnly and Except are mutually exclusive; Only takes precedence when both are set.\nOmitting the field (nil) means all streams are included.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.StreamCodeFilter"
+                        }
+                    ]
                 },
                 "target": {
                     "description": "HTTP URL or Kafka topic",
@@ -1631,6 +1639,25 @@ const docTemplate = `{
                 "RecordingStatusStopped",
                 "RecordingStatusFailed"
             ]
+        },
+        "domain.StreamCodeFilter": {
+            "type": "object",
+            "properties": {
+                "except": {
+                    "description": "Except delivers events for all streams except those in this list.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "only": {
+                    "description": "Only delivers events only for streams in this list.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
         },
         "domain.StreamDVRConfig": {
             "type": "object",
