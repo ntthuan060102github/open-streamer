@@ -64,18 +64,18 @@ type InputSwitchRequest struct {
 
 // ConfigData wraps the GET /config response.
 type ConfigData struct {
-	HWAccels           []domain.HWAccel           `json:"hwAccels"`
-	VideoCodecs        []domain.VideoCodec        `json:"videoCodecs"`
-	AudioCodecs        []domain.AudioCodec        `json:"audioCodecs"`
-	OutputProtocols    []string                   `json:"outputProtocols"`
-	StreamStatuses     []domain.StreamStatus      `json:"streamStatuses"`
-	WatermarkTypes     []domain.WatermarkType     `json:"watermarkTypes"`
-	WatermarkPositions []domain.WatermarkPosition `json:"watermarkPositions"`
+	HWAccels           []domain.HWAccel           `json:"hw_accels"`
+	VideoCodecs        []domain.VideoCodec        `json:"video_codecs"`
+	AudioCodecs        []domain.AudioCodec        `json:"audio_codecs"`
+	OutputProtocols    []string                   `json:"output_protocols"`
+	StreamStatuses     []domain.StreamStatus      `json:"stream_statuses"`
+	WatermarkTypes     []domain.WatermarkType     `json:"watermark_types"`
+	WatermarkPositions []domain.WatermarkPosition `json:"watermark_positions"`
 }
 
 // ConfigUpdateResponse wraps the POST /config response.
 type ConfigUpdateResponse struct {
-	GlobalConfig *domain.GlobalConfig `json:"globalConfig"`
+	GlobalConfig *domain.GlobalConfig `json:"global_config"`
 	Ports        ConfigPorts          `json:"ports"`
 }
 

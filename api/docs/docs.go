@@ -846,43 +846,43 @@ const docTemplate = `{
         "apidocs.ConfigData": {
             "type": "object",
             "properties": {
-                "audioCodecs": {
+                "audio_codecs": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.AudioCodec"
                     }
                 },
-                "hwAccels": {
+                "hw_accels": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.HWAccel"
                     }
                 },
-                "outputProtocols": {
+                "output_protocols": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
                 },
-                "streamStatuses": {
+                "stream_statuses": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.StreamStatus"
                     }
                 },
-                "videoCodecs": {
+                "video_codecs": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.VideoCodec"
                     }
                 },
-                "watermarkPositions": {
+                "watermark_positions": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.WatermarkPosition"
                     }
                 },
-                "watermarkTypes": {
+                "watermark_types": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.WatermarkType"
@@ -910,7 +910,7 @@ const docTemplate = `{
         "apidocs.ConfigUpdateResponse": {
             "type": "object",
             "properties": {
-                "globalConfig": {
+                "global_config": {
                     "$ref": "#/definitions/domain.GlobalConfig"
                 },
                 "ports": {
@@ -1329,17 +1329,6 @@ const docTemplate = `{
                 }
             }
         },
-        "config.MetricsConfig": {
-            "type": "object",
-            "properties": {
-                "addr": {
-                    "type": "string"
-                },
-                "path": {
-                    "type": "string"
-                }
-            }
-        },
         "config.PublisherConfig": {
             "type": "object",
             "properties": {
@@ -1636,9 +1625,6 @@ const docTemplate = `{
                 },
                 "manager": {
                     "$ref": "#/definitions/config.ManagerConfig"
-                },
-                "metrics": {
-                    "$ref": "#/definitions/config.MetricsConfig"
                 },
                 "publisher": {
                     "$ref": "#/definitions/config.PublisherConfig"
@@ -2237,12 +2223,12 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0",
+	Version:          "",
 	Host:             "",
-	BasePath:         "/",
+	BasePath:         "",
 	Schemes:          []string{},
-	Title:            "Open Streamer API",
-	Description:      "REST API for live stream configuration, ingest/publish lifecycle, DVR recordings, and event hooks.",
+	Title:            "",
+	Description:      "",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

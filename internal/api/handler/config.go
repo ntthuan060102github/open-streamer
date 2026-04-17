@@ -26,15 +26,15 @@ type publisherPorts struct {
 
 // configResponse is the payload returned by GET /config.
 type configResponse struct {
-	HWAccels           []domain.HWAccel           `json:"hwAccels"`
-	VideoCodecs        []domain.VideoCodec        `json:"videoCodecs"`
-	AudioCodecs        []domain.AudioCodec        `json:"audioCodecs"`
-	OutputProtocols    []string                   `json:"outputProtocols"`
-	StreamStatuses     []domain.StreamStatus      `json:"streamStatuses"`
-	WatermarkTypes     []domain.WatermarkType     `json:"watermarkTypes"`
-	WatermarkPositions []domain.WatermarkPosition `json:"watermarkPositions"`
+	HWAccels           []domain.HWAccel           `json:"hw_accels"`
+	VideoCodecs        []domain.VideoCodec        `json:"video_codecs"`
+	AudioCodecs        []domain.AudioCodec        `json:"audio_codecs"`
+	OutputProtocols    []string                   `json:"output_protocols"`
+	StreamStatuses     []domain.StreamStatus      `json:"stream_statuses"`
+	WatermarkTypes     []domain.WatermarkType     `json:"watermark_types"`
+	WatermarkPositions []domain.WatermarkPosition `json:"watermark_positions"`
 	Ports              publisherPorts             `json:"ports"`
-	GlobalConfig       *domain.GlobalConfig       `json:"globalConfig"`
+	GlobalConfig       *domain.GlobalConfig       `json:"global_config"`
 }
 
 // ConfigHandler serves the GET/POST /config endpoints.
@@ -160,7 +160,7 @@ func (h *ConfigHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// Return the freshly applied config.
 	gcfg := h.rtm.CurrentConfig()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"globalConfig": gcfg,
-		"ports":        portsFromConfig(gcfg),
+		"global_config": gcfg,
+		"ports":         portsFromConfig(gcfg),
 	})
 }

@@ -1,32 +1,31 @@
-basePath: /
 definitions:
   apidocs.ConfigData:
     properties:
-      audioCodecs:
+      audio_codecs:
         items:
           $ref: '#/definitions/domain.AudioCodec'
         type: array
-      hwAccels:
+      hw_accels:
         items:
           $ref: '#/definitions/domain.HWAccel'
         type: array
-      outputProtocols:
+      output_protocols:
         items:
           type: string
         type: array
-      streamStatuses:
+      stream_statuses:
         items:
           $ref: '#/definitions/domain.StreamStatus'
         type: array
-      videoCodecs:
+      video_codecs:
         items:
           $ref: '#/definitions/domain.VideoCodec'
         type: array
-      watermarkPositions:
+      watermark_positions:
         items:
           $ref: '#/definitions/domain.WatermarkPosition'
         type: array
-      watermarkTypes:
+      watermark_types:
         items:
           $ref: '#/definitions/domain.WatermarkType'
         type: array
@@ -44,7 +43,7 @@ definitions:
     type: object
   apidocs.ConfigUpdateResponse:
     properties:
-      globalConfig:
+      global_config:
         $ref: '#/definitions/domain.GlobalConfig'
       ports:
         $ref: '#/definitions/apidocs.ConfigPorts'
@@ -346,13 +345,6 @@ definitions:
           healthy primary will be falsely failed over to a lower priority.
         type: integer
     type: object
-  config.MetricsConfig:
-    properties:
-      addr:
-        type: string
-      path:
-        type: string
-    type: object
   config.PublisherConfig:
     properties:
       dash:
@@ -585,8 +577,6 @@ definitions:
         $ref: '#/definitions/config.LogConfig'
       manager:
         $ref: '#/definitions/config.ManagerConfig'
-      metrics:
-        $ref: '#/definitions/config.MetricsConfig'
       publisher:
         $ref: '#/definitions/config.PublisherConfig'
       server:
@@ -1091,10 +1081,6 @@ definitions:
     - WatermarkTypeImage
 info:
   contact: {}
-  description: REST API for live stream configuration, ingest/publish lifecycle, DVR
-    recordings, and event hooks.
-  title: Open Streamer API
-  version: "1.0"
 paths:
   /config:
     get:
