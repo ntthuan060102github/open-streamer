@@ -30,17 +30,16 @@ func (rb *ringBuffer) write(pkt Packet) {
 	if pkt.empty() {
 		return
 	}
+	// Hold the lock during fan-out so a concurrent unsubscribe can't close
+	// a subscriber channel while we're sending to it. Sends use `select default`
+	// so the writer still never blocks on slow consumers.
 	rb.mu.Lock()
-	subs := rb.subs
-	rb.mu.Unlock()
-
-	for _, s := range subs {
-		// Independent copy per subscriber (consumers must not share backing slices).
+	defer rb.mu.Unlock()
+	for _, s := range rb.subs {
 		pc := clonePacket(pkt)
 		select {
 		case s.ch <- pc:
 		default:
-			// slow consumer: drop packet rather than block the writer
 		}
 	}
 }

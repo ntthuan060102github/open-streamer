@@ -230,9 +230,11 @@ func (c *Coordinator) IsRunning(streamID domain.StreamCode) bool {
 }
 
 // Stop tears down publisher, transcoder, manager (ingest), and the buffer.
-func (c *Coordinator) Stop(streamID domain.StreamCode) {
+// ctx is used for the DVR stop and the EventStreamStopped publish; cleanup
+// of in-memory state always proceeds even if ctx is cancelled.
+func (c *Coordinator) Stop(ctx context.Context, streamID domain.StreamCode) {
 	if c.dvr.IsRecording(streamID) {
-		if err := c.dvr.StopRecording(context.Background(), streamID); err != nil {
+		if err := c.dvr.StopRecording(ctx, streamID); err != nil {
 			slog.Warn("coordinator: dvr stop failed", "stream_code", streamID, "err", err)
 		}
 	}
@@ -257,7 +259,7 @@ func (c *Coordinator) Stop(streamID domain.StreamCode) {
 
 	c.setStatus(streamID, domain.StatusActive)
 
-	c.bus.Publish(context.Background(), domain.Event{
+	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStopped,
 		StreamCode: streamID,
 	})
@@ -274,8 +276,7 @@ func (c *Coordinator) Update(ctx context.Context, old, new *domain.Stream) error
 	diff := ComputeDiff(old, new)
 
 	if diff.NowDisabled {
-		//nolint:contextcheck // Stop uses background context for cleanup publishing; by design
-		c.Stop(new.Code)
+		c.Stop(ctx, new.Code)
 		return nil
 	}
 
@@ -535,7 +536,7 @@ func (c *Coordinator) handleInputRestored(streamCode domain.StreamCode) {
 // It stops the full pipeline; status transitions to StatusStopped automatically via Stop().
 func (c *Coordinator) handleTranscoderFatal(streamCode domain.StreamCode) {
 	slog.Error("coordinator: transcoder fatal, stopping stream pipeline", "stream_code", streamCode)
-	c.Stop(streamCode)
+	c.Stop(context.Background(), streamCode)
 }
 
 // BootstrapPersistedStreams starts the pipeline for every non-disabled stream that

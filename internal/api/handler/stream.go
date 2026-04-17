@@ -240,7 +240,7 @@ func decodeStreamBody(
 // @Router /streams/{code} [delete].
 func (h *StreamHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	code := domain.StreamCode(chi.URLParam(r, "code"))
-	h.coordinator.Stop(code)
+	h.coordinator.Stop(r.Context(), code)
 	if err := h.streamRepo.Delete(r.Context(), code); err != nil {
 		writeError(w, http.StatusInternalServerError, "DELETE_FAILED", "failed to delete stream")
 		return
@@ -278,7 +278,7 @@ func (h *StreamHandler) Restart(w http.ResponseWriter, r *http.Request) {
 
 	// Stop is blocking: waits for all goroutines to finish and cleans up on-disk
 	// segments before returning. Safe to call even when the pipeline is not running.
-	h.coordinator.Stop(code)
+	h.coordinator.Stop(r.Context(), code)
 
 	if err := h.coordinator.Start(r.Context(), stream); err != nil {
 		writeError(w, http.StatusInternalServerError, "START_FAILED", err.Error())
