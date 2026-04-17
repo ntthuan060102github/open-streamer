@@ -11,12 +11,9 @@ package pull
 //	FLV     (.flv)             — demux via gomedia/go-flv → re-mux to TS;
 //	                             real-time paced using frame DTS.
 //
-// URL formats accepted:
-//
-//	file:///absolute/path/to/source.ts
-//	file:///absolute/path/to/source.ts?loop=true
-//	/absolute/path/to/source.ts          (bare POSIX path)
-//	relative/path/to/source.ts           (relative to CWD)
+// FileReader operates on a resolved absolute filesystem path; URL parsing and
+// VOD-mount resolution belong to internal/vod (called from internal/ingestor
+// before constructing this reader).
 //
 // When loop=true the file is rewound and replayed after EOF, simulating
 // a continuous live source.
@@ -26,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,8 +32,6 @@ import (
 	goflv "github.com/yapingcat/gomedia/go-flv"
 	gomp4 "github.com/yapingcat/gomedia/go-mp4"
 	gompeg2 "github.com/yapingcat/gomedia/go-mpeg2"
-
-	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 )
 
 const (
@@ -62,9 +56,10 @@ type FileReader struct {
 }
 
 // NewFileReader constructs a FileReader without opening the file.
-// Accepts file:// URLs and bare filesystem paths.
-func NewFileReader(input domain.Input) *FileReader {
-	path, loop := parseFileURL(input.URL)
+// path must be a resolved absolute filesystem path. The caller (typically
+// internal/ingestor.NewPacketReader) is responsible for resolving any
+// file:// URL through the VOD registry first.
+func NewFileReader(path string, loop bool) *FileReader {
 	return &FileReader{path: path, loop: loop}
 }
 
@@ -131,19 +126,6 @@ func (r *FileReader) Close() error {
 	err := r.handler.close()
 	r.handler = nil
 	return err
-}
-
-// ─── URL helpers ─────────────────────────────────────────────────────────────
-
-// parseFileURL returns the filesystem path and loop flag from an input URL.
-// Accepts file:///path?loop=true and bare POSIX / relative paths.
-func parseFileURL(rawURL string) (path string, loop bool) {
-	if strings.HasPrefix(rawURL, "file://") {
-		if u, err := url.Parse(rawURL); err == nil {
-			return u.Path, u.Query().Get("loop") == "true"
-		}
-	}
-	return rawURL, false
 }
 
 // ─── MPEG-TS passthrough ─────────────────────────────────────────────────────

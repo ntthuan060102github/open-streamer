@@ -32,6 +32,7 @@ import (
 	jsonstore "github.com/ntt0601zcoder/open-streamer/internal/store/json"
 	yamlstore "github.com/ntt0601zcoder/open-streamer/internal/store/yaml"
 	"github.com/ntt0601zcoder/open-streamer/internal/transcoder"
+	"github.com/ntt0601zcoder/open-streamer/internal/vod"
 	"github.com/ntt0601zcoder/open-streamer/pkg/logger"
 	"github.com/samber/do/v2"
 )
@@ -94,7 +95,13 @@ func run() error {
 	configH := do.MustInvoke[*handler.ConfigHandler](injector)
 	configH.SetRuntimeManager(rtm)
 
-	// 8. Start all configured services.
+	// 8. Hydrate VOD registry from the store so ingestor workers started in
+	//    bootstrap can resolve file:// URLs against the user's mount table.
+	if err := hydrateVODRegistry(ctx, injector); err != nil {
+		return fmt.Errorf("hydrate vod registry: %w", err)
+	}
+
+	// 9. Start all configured services.
 	rtm.BootstrapWith(gcfg)
 	slog.Info("server: all services started")
 
@@ -125,6 +132,7 @@ func wireStorage(i *do.RootScope, cfg config.StorageConfig) error {
 		do.ProvideValue(i, s.Recordings())
 		do.ProvideValue(i, s.Hooks())
 		do.ProvideValue(i, s.GlobalConfig())
+		do.ProvideValue(i, s.VOD())
 
 	default: // "yaml" or empty
 		s, err := yamlstore.New(cfg.YAMLDir)
@@ -135,6 +143,7 @@ func wireStorage(i *do.RootScope, cfg config.StorageConfig) error {
 		do.ProvideValue(i, s.Recordings())
 		do.ProvideValue(i, s.Hooks())
 		do.ProvideValue(i, s.GlobalConfig())
+		do.ProvideValue(i, s.VOD())
 	}
 
 	slog.Info("server: storage backend ready", "driver", cfg.Driver)
@@ -174,6 +183,7 @@ func wireServices(i *do.RootScope) {
 
 	// Core services
 	do.Provide(i, buffer.New)
+	do.Provide(i, func(do.Injector) (*vod.Registry, error) { return vod.NewRegistry(), nil })
 	do.Provide(i, ingestor.New)
 	do.Provide(i, manager.New)
 	do.Provide(i, transcoder.New)
@@ -188,7 +198,23 @@ func wireServices(i *do.RootScope) {
 	do.Provide(i, handler.NewRecordingHandler)
 	do.Provide(i, handler.NewHookHandler)
 	do.Provide(i, handler.NewConfigHandler)
+	do.Provide(i, handler.NewVODHandler)
 	do.Provide(i, api.New)
+}
+
+// hydrateVODRegistry reads the persisted VOD mount table and seeds the
+// in-memory registry. Without this, file:// URLs would fail to resolve until
+// the operator first edited the mount table at runtime.
+func hydrateVODRegistry(ctx context.Context, i do.Injector) error {
+	repo := do.MustInvoke[store.VODMountRepository](i)
+	registry := do.MustInvoke[*vod.Registry](i)
+	mounts, err := repo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list vod mounts: %w", err)
+	}
+	registry.Sync(mounts)
+	slog.Info("server: vod registry hydrated", "mounts", len(mounts))
+	return nil
 }
 
 // loadGlobalConfig reads the GlobalConfig from the store.

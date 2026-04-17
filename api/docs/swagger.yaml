@@ -244,6 +244,36 @@ definitions:
       active_input_priority:
         type: integer
     type: object
+  apidocs.VODFileData:
+    properties:
+      data:
+        $ref: '#/definitions/vod.FileEntry'
+    type: object
+  apidocs.VODFileList:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/vod.FileEntry'
+        type: array
+      path:
+        type: string
+      total:
+        type: integer
+    type: object
+  apidocs.VODMountData:
+    properties:
+      data:
+        $ref: '#/definitions/domain.VODMount'
+    type: object
+  apidocs.VODMountList:
+    properties:
+      data:
+        items:
+          $ref: '#/definitions/domain.VODMount'
+        type: array
+      total:
+        type: integer
+    type: object
   config.BufferConfig:
     properties:
       capacity:
@@ -933,6 +963,15 @@ definitions:
         - $ref: '#/definitions/domain.HWAccel'
         description: HW selects the acceleration backend.
     type: object
+  domain.VODMount:
+    properties:
+      comment:
+        type: string
+      name:
+        type: string
+      storage:
+        type: string
+    type: object
   domain.VideoCodec:
     enum:
     - h264
@@ -1076,6 +1115,24 @@ definitions:
     x-enum-varnames:
     - WatermarkTypeText
     - WatermarkTypeImage
+  vod.FileEntry:
+    properties:
+      ingest_url:
+        type: string
+      is_dir:
+        type: boolean
+      mod_time_unix:
+        type: integer
+      name:
+        type: string
+      path:
+        description: path relative to the mount root, with forward slashes
+        type: string
+      play_url:
+        type: string
+      size:
+        type: integer
+    type: object
 info:
   contact: {}
   description: REST API for live stream configuration, ingest/publish lifecycle, DVR
@@ -1683,4 +1740,278 @@ paths:
       summary: Restart stream pipeline
       tags:
       - streams
+  /vod:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.VODMountList'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: List VOD mounts
+      tags:
+      - vod
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: VOD mount
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.VODMount'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/apidocs.VODMountData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Create VOD mount
+      tags:
+      - vod
+  /vod/{name}:
+    delete:
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Delete VOD mount
+      tags:
+      - vod
+    get:
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.VODMountData'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Get VOD mount
+      tags:
+      - vod
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: VOD mount
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/domain.VODMount'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.VODMountData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Update VOD mount
+      tags:
+      - vod
+  /vod/{name}/files:
+    get:
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Subdirectory (relative, no leading slash)
+        in: query
+        name: path
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/apidocs.VODFileList'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: List files in a VOD mount
+      tags:
+      - vod
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: Subdirectory (relative, no leading slash)
+        in: query
+        name: path
+        type: string
+      - description: Video file (mp4, mkv, mov, …)
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/apidocs.VODFileData'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Upload a file to a VOD mount
+      tags:
+      - vod
+  /vod/{name}/files/{path}:
+    delete:
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: File path inside the mount (forward-slash separated)
+        in: path
+        name: path
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Delete a file from a VOD mount
+      tags:
+      - vod
+  /vod/{name}/raw/{path}:
+    get:
+      description: Returns the raw bytes of a file inside a VOD mount. Supports HTTP
+        Range requests so an HTML5 video player can seek.
+      parameters:
+      - description: Mount name
+        in: path
+        name: name
+        required: true
+        type: string
+      - description: File path inside the mount (forward-slash separated)
+        in: path
+        name: path
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "206":
+          description: Partial Content
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+      summary: Stream a VOD file over HTTP
+      tags:
+      - vod
 swagger: "2.0"

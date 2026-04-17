@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/ingestor/pull"
 )
 
@@ -25,7 +24,7 @@ func TestFileReader_ReadsFile(t *testing.T) {
 	want := []byte("hello open-streamer file content")
 	f := writeTempFile(t, want)
 
-	r := pull.NewFileReader(domain.Input{URL: "file://" + f})
+	r := pull.NewFileReader(f, false)
 	require.NoError(t, r.Open(context.Background()))
 	defer func() { _ = r.Close() }()
 
@@ -33,23 +32,10 @@ func TestFileReader_ReadsFile(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestFileReader_BarePath(t *testing.T) {
-	t.Parallel()
-
-	want := []byte("bare path content")
-	f := writeTempFile(t, want)
-
-	r := pull.NewFileReader(domain.Input{URL: f}) // no file:// prefix
-	require.NoError(t, r.Open(context.Background()))
-	defer func() { _ = r.Close() }()
-
-	assert.Equal(t, want, readAll(t, r))
-}
-
 func TestFileReader_Open_NotFound(t *testing.T) {
 	t.Parallel()
 
-	r := pull.NewFileReader(domain.Input{URL: "/nonexistent/path/file.ts"})
+	r := pull.NewFileReader("/nonexistent/path/file.ts", false)
 	err := r.Open(context.Background())
 	require.Error(t, err)
 }
@@ -57,7 +43,7 @@ func TestFileReader_Open_NotFound(t *testing.T) {
 func TestFileReader_Close_IdempotentBeforeOpen(t *testing.T) {
 	t.Parallel()
 
-	r := pull.NewFileReader(domain.Input{URL: "/tmp/doesnt-matter"})
+	r := pull.NewFileReader("/tmp/doesnt-matter", false)
 	assert.NoError(t, r.Close())
 }
 
@@ -65,7 +51,7 @@ func TestFileReader_ReturnsEOFAtEnd(t *testing.T) {
 	t.Parallel()
 
 	f := writeTempFile(t, []byte("data"))
-	r := pull.NewFileReader(domain.Input{URL: f})
+	r := pull.NewFileReader(f, false)
 	require.NoError(t, r.Open(context.Background()))
 	defer func() { _ = r.Close() }()
 

@@ -9,6 +9,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/hwdetect"
 	"github.com/ntt0601zcoder/open-streamer/internal/store"
+	"github.com/ntt0601zcoder/open-streamer/internal/vod"
 	"github.com/samber/do/v2"
 )
 
@@ -58,6 +59,8 @@ type ConfigHandler struct {
 	rtm        RuntimeConfigManager
 	streamRepo store.StreamRepository
 	hookRepo   store.HookRepository
+	vodRepo    store.VODMountRepository
+	vods       *vod.Registry
 	coord      streamLifecycle
 }
 
@@ -68,6 +71,8 @@ func NewConfigHandler(i do.Injector) (*ConfigHandler, error) {
 	return &ConfigHandler{
 		streamRepo: do.MustInvoke[store.StreamRepository](i),
 		hookRepo:   do.MustInvoke[store.HookRepository](i),
+		vodRepo:    do.MustInvoke[store.VODMountRepository](i),
+		vods:       do.MustInvoke[*vod.Registry](i),
 		coord:      do.MustInvoke[*coordinator.Coordinator](i),
 	}, nil
 }

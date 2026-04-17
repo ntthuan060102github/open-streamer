@@ -31,6 +31,7 @@ type fullConfig struct {
 	GlobalConfig *domain.GlobalConfig `yaml:"global_config"`
 	Streams      []*domain.Stream     `yaml:"streams"`
 	Hooks        []*domain.Hook       `yaml:"hooks"`
+	VOD          []*domain.VODMount   `yaml:"vod"`
 }
 
 // fieldError describes a single validation failure.
@@ -62,11 +63,17 @@ func (h *ConfigHandler) GetConfigYAML(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "LIST_HOOKS_FAILED", err.Error())
 		return
 	}
+	vodMounts, err := h.vodRepo.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "LIST_VOD_FAILED", err.Error())
+		return
+	}
 
 	full := fullConfig{
 		GlobalConfig: h.rtm.CurrentConfig(),
 		Streams:      streams,
 		Hooks:        hooks,
+		VOD:          vodMounts,
 	}
 	out, err := yaml.Marshal(full)
 	if err != nil {
@@ -153,6 +160,11 @@ func (h *ConfigHandler) ReplaceConfigYAML(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if err := h.applyVOD(r.Context(), newCfg.VOD); err != nil {
+		writeError(w, http.StatusInternalServerError, "APPLY_VOD_FAILED", err.Error())
+		return
+	}
+
 	if err := h.applyStreams(r.Context(), newCfg.Streams); err != nil {
 		writeError(w, http.StatusInternalServerError, "APPLY_STREAMS_FAILED", err.Error())
 		return
@@ -161,10 +173,12 @@ func (h *ConfigHandler) ReplaceConfigYAML(w http.ResponseWriter, r *http.Request
 	current := h.rtm.CurrentConfig()
 	streamsAfter, _ := h.streamRepo.List(r.Context(), store.StreamFilter{})
 	hooksAfter, _ := h.hookRepo.List(r.Context())
+	vodAfter, _ := h.vodRepo.List(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_config": current,
 		"streams":       streamsAfter,
 		"hooks":         hooksAfter,
+		"vod":           vodAfter,
 		"ports":         portsFromConfig(current),
 	})
 }
@@ -207,6 +221,51 @@ func (h *ConfigHandler) applyHooks(ctx context.Context, desired []*domain.Hook) 
 			return fmt.Errorf("save hook %q: %w", hk.ID, err)
 		}
 	}
+	return nil
+}
+
+// applyVOD diffs the desired VOD mount list against the store and performs
+// save/delete to converge. After the store is updated the in-memory registry
+// is resynced so the next ingest start sees the new layout.
+func (h *ConfigHandler) applyVOD(ctx context.Context, desired []*domain.VODMount) error {
+	existing, err := h.vodRepo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list vod mounts: %w", err)
+	}
+
+	desiredByName := make(map[domain.VODName]*domain.VODMount, len(desired))
+	for _, m := range desired {
+		if m == nil {
+			continue
+		}
+		desiredByName[m.Name] = m
+	}
+
+	for _, old := range existing {
+		if old == nil {
+			continue
+		}
+		if _, keep := desiredByName[old.Name]; !keep {
+			if err := h.vodRepo.Delete(ctx, old.Name); err != nil {
+				return fmt.Errorf("delete vod mount %q: %w", old.Name, err)
+			}
+		}
+	}
+
+	for _, m := range desired {
+		if m == nil {
+			continue
+		}
+		if err := h.vodRepo.Save(ctx, m); err != nil {
+			return fmt.Errorf("save vod mount %q: %w", m.Name, err)
+		}
+	}
+
+	mounts, err := h.vodRepo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("reload vod mounts: %w", err)
+	}
+	h.vods.Sync(mounts)
 	return nil
 }
 
@@ -305,6 +364,36 @@ func validateFullConfig(c *fullConfig) []fieldError {
 	}
 	errs = append(errs, validateStreams(c.Streams)...)
 	errs = append(errs, validateHooks(c.Hooks)...)
+	errs = append(errs, validateVOD(c.VOD)...)
+	return errs
+}
+
+// validateVOD checks each mount individually plus enforces unique names.
+// Storage paths must be absolute; the registry skips invalid entries silently
+// at sync time, so we surface them up-front during YAML validation instead.
+func validateVOD(mounts []*domain.VODMount) []fieldError {
+	errs := make([]fieldError, 0, len(mounts))
+	seen := make(map[domain.VODName]int, len(mounts))
+	for i, m := range mounts {
+		base := fmt.Sprintf("vod[%d]", i)
+		if m == nil {
+			errs = append(errs, fieldError{Path: base, Message: "vod mount entry is null"})
+			continue
+		}
+		if err := domain.ValidateVODName(string(m.Name)); err != nil {
+			errs = append(errs, fieldError{Path: base + ".name", Message: err.Error()})
+		} else if prev, dup := seen[m.Name]; dup {
+			errs = append(errs, fieldError{
+				Path:    base + ".name",
+				Message: fmt.Sprintf("duplicate vod mount name %q (also at index %d)", m.Name, prev),
+			})
+		} else {
+			seen[m.Name] = i
+		}
+		if err := m.ValidateStorage(); err != nil {
+			errs = append(errs, fieldError{Path: base + ".storage", Message: err.Error()})
+		}
+	}
 	return errs
 }
 

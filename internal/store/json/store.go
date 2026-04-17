@@ -35,6 +35,7 @@ type db struct {
 	Streams    map[string]*domain.Stream    `json:"streams"`
 	Recordings map[string]*domain.Recording `json:"recordings"`
 	Hooks      map[string]*domain.Hook      `json:"hooks"`
+	VOD        map[string]*domain.VODMount  `json:"vod,omitempty"`
 	Global     *domain.GlobalConfig         `json:"global,omitempty"`
 }
 
@@ -65,6 +66,9 @@ func (s *Store) Hooks() store.HookRepository { return &hookRepo{s} }
 // GlobalConfig returns a GlobalConfigRepository backed by this Store.
 func (s *Store) GlobalConfig() store.GlobalConfigRepository { return &globalConfigRepo{s} }
 
+// VOD returns a VODMountRepository backed by this Store.
+func (s *Store) VOD() store.VODMountRepository { return &vodMountRepo{s} }
+
 // --- internal helpers ---
 
 // readDB reads and deserialises the data file. Nil maps are initialised.
@@ -89,6 +93,9 @@ func (s *Store) readDB() (db, error) {
 	}
 	if d.Hooks == nil {
 		d.Hooks = make(map[string]*domain.Hook)
+	}
+	if d.VOD == nil {
+		d.VOD = make(map[string]*domain.VODMount)
 	}
 	return d, nil
 }
@@ -140,6 +147,7 @@ func emptyDB() db {
 		Streams:    make(map[string]*domain.Stream),
 		Recordings: make(map[string]*domain.Recording),
 		Hooks:      make(map[string]*domain.Hook),
+		VOD:        make(map[string]*domain.VODMount),
 	}
 }
 
@@ -291,6 +299,62 @@ func (r *hookRepo) List(_ context.Context) ([]*domain.Hook, error) {
 func (r *hookRepo) Delete(_ context.Context, id domain.HookID) error {
 	return r.s.modify(func(d *db) error {
 		delete(d.Hooks, string(id))
+		return nil
+	})
+}
+
+// --- VODMountRepository ---
+
+type vodMountRepo struct{ s *Store }
+
+// Save implements store.VODMountRepository.
+func (r *vodMountRepo) Save(_ context.Context, mount *domain.VODMount) error {
+	return r.s.modify(func(d *db) error {
+		d.VOD[string(mount.Name)] = mount
+		return nil
+	})
+}
+
+// FindByName implements store.VODMountRepository.
+func (r *vodMountRepo) FindByName(_ context.Context, name domain.VODName) (*domain.VODMount, error) {
+	var result *domain.VODMount
+	err := r.s.readAll(func(d db) error {
+		m, ok := d.VOD[string(name)]
+		if !ok {
+			return fmt.Errorf("vod mount %s: %w", name, store.ErrNotFound)
+		}
+		result = m
+		return nil
+	})
+	return result, err
+}
+
+// List implements store.VODMountRepository.
+func (r *vodMountRepo) List(_ context.Context) ([]*domain.VODMount, error) {
+	var result []*domain.VODMount
+	err := r.s.readAll(func(d db) error {
+		result = make([]*domain.VODMount, 0, len(d.VOD))
+		for _, m := range d.VOD {
+			result = append(result, m)
+		}
+		slices.SortFunc(result, func(a, b *domain.VODMount) int {
+			if a.Name < b.Name {
+				return -1
+			}
+			if a.Name > b.Name {
+				return 1
+			}
+			return 0
+		})
+		return nil
+	})
+	return result, err
+}
+
+// Delete implements store.VODMountRepository.
+func (r *vodMountRepo) Delete(_ context.Context, name domain.VODName) error {
+	return r.s.modify(func(d *db) error {
+		delete(d.VOD, string(name))
 		return nil
 	})
 }

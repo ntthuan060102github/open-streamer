@@ -47,3 +47,12 @@ type GlobalConfigRepository interface {
 	Get(ctx context.Context) (*domain.GlobalConfig, error)
 	Set(ctx context.Context, cfg *domain.GlobalConfig) error
 }
+
+// VODMountRepository persists VOD mount registrations (name → host storage path).
+// File contents are never indexed — only the mount table itself is stored here.
+type VODMountRepository interface {
+	Save(ctx context.Context, mount *domain.VODMount) error
+	FindByName(ctx context.Context, name domain.VODName) (*domain.VODMount, error)
+	List(ctx context.Context) ([]*domain.VODMount, error)
+	Delete(ctx context.Context, name domain.VODName) error
+}

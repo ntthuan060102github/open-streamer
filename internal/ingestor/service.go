@@ -24,6 +24,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
 	"github.com/ntt0601zcoder/open-streamer/internal/ingestor/push"
 	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
+	"github.com/ntt0601zcoder/open-streamer/internal/vod"
 	"github.com/ntt0601zcoder/open-streamer/pkg/protocol"
 	"github.com/samber/do/v2"
 )
@@ -46,6 +47,7 @@ type Service struct {
 	bus          events.Bus
 	m            *metrics.Metrics
 	registry     *Registry
+	vods         *vod.Registry
 	onPacket     func(streamID domain.StreamCode, inputPriority int)
 	onInputError func(streamID domain.StreamCode, inputPriority int, err error)
 
@@ -61,12 +63,14 @@ func New(i do.Injector) (*Service, error) {
 	buf := do.MustInvoke[*buffer.Service](i)
 	bus := do.MustInvoke[events.Bus](i)
 	m := do.MustInvoke[*metrics.Metrics](i)
+	vods := do.MustInvoke[*vod.Registry](i)
 
 	return &Service{
 		cfg:      cfg,
 		buf:      buf,
 		bus:      bus,
 		m:        m,
+		vods:     vods,
 		registry: NewRegistry(),
 		workers:  make(map[domain.StreamCode]*pullWorkerEntry),
 	}, nil
@@ -157,7 +161,7 @@ func (s *Service) Probe(ctx context.Context, input domain.Input) error {
 	if protocol.IsPushListen(input.URL) {
 		return fmt.Errorf("ingestor: probe unsupported for push-listen input %q", input.URL)
 	}
-	reader, err := NewPacketReader(input, s.cfg)
+	reader, err := NewPacketReader(input, s.cfg, s.vods)
 	if err != nil {
 		return err
 	}
@@ -199,7 +203,7 @@ func (s *Service) Stop(streamID domain.StreamCode) {
 // ---- private ----
 
 func (s *Service) startPullWorker(ctx context.Context, streamID domain.StreamCode, input domain.Input, bufferWriteID domain.StreamCode) error {
-	reader, err := NewPacketReader(input, s.cfg)
+	reader, err := NewPacketReader(input, s.cfg, s.vods)
 	if err != nil {
 		return fmt.Errorf("ingestor: create packet reader: %w", err)
 	}

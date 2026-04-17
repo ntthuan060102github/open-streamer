@@ -1,7 +1,10 @@
 // Package apidocs holds OpenAPI response/request shapes referenced from swag comments.
 package apidocs
 
-import "github.com/ntt0601zcoder/open-streamer/internal/domain"
+import (
+	"github.com/ntt0601zcoder/open-streamer/internal/domain"
+	"github.com/ntt0601zcoder/open-streamer/internal/vod"
+)
 
 // ErrorBody matches handler writeError JSON shape.
 type ErrorBody struct {
@@ -136,4 +139,27 @@ type HookTestInner struct {
 // HookTestData is returned by POST .../test.
 type HookTestData struct {
 	Data HookTestInner `json:"data"`
+}
+
+// VODMountData wraps a single VOD mount.
+type VODMountData struct {
+	Data *domain.VODMount `json:"data"`
+}
+
+// VODMountList wraps listed VOD mounts.
+type VODMountList struct {
+	Data  []*domain.VODMount `json:"data"`
+	Total int                `json:"total"`
+}
+
+// VODFileList wraps a directory listing inside a VOD mount.
+type VODFileList struct {
+	Data  []vod.FileEntry `json:"data"`
+	Total int             `json:"total"`
+	Path  string          `json:"path"`
+}
+
+// VODFileData wraps a single uploaded VOD file.
+type VODFileData struct {
+	Data vod.FileEntry `json:"data"`
 }

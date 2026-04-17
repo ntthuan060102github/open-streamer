@@ -15,6 +15,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/store"
+	"github.com/ntt0601zcoder/open-streamer/internal/vod"
 )
 
 const (
@@ -133,6 +134,56 @@ func (c *fakeCoord) IsRunning(code domain.StreamCode) bool {
 	return c.running[code]
 }
 
+// fakeVODRepo is an in-memory store.VODMountRepository for tests.
+type fakeVODRepo struct {
+	items   map[domain.VODName]*domain.VODMount
+	listErr error
+	saveErr error
+	delErr  error
+}
+
+func newFakeVODRepo(seed ...*domain.VODMount) *fakeVODRepo {
+	r := &fakeVODRepo{items: make(map[domain.VODName]*domain.VODMount)}
+	for _, m := range seed {
+		r.items[m.Name] = m
+	}
+	return r
+}
+
+func (r *fakeVODRepo) Save(_ context.Context, m *domain.VODMount) error {
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	r.items[m.Name] = m
+	return nil
+}
+
+func (r *fakeVODRepo) FindByName(_ context.Context, name domain.VODName) (*domain.VODMount, error) {
+	if m, ok := r.items[name]; ok {
+		return m, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (r *fakeVODRepo) List(_ context.Context) ([]*domain.VODMount, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	out := make([]*domain.VODMount, 0, len(r.items))
+	for _, m := range r.items {
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+func (r *fakeVODRepo) Delete(_ context.Context, name domain.VODName) error {
+	if r.delErr != nil {
+		return r.delErr
+	}
+	delete(r.items, name)
+	return nil
+}
+
 // newTestHandler wires the fakes into a ConfigHandler the way the production
 // DI wiring would, so each test starts from a clean slate.
 func newTestHandler(
@@ -145,6 +196,8 @@ func newTestHandler(
 		rtm:        rtm,
 		streamRepo: streamRepo,
 		hookRepo:   hookRepo,
+		vodRepo:    newFakeVODRepo(),
+		vods:       vod.NewRegistry(),
 		coord:      coord,
 	}
 }

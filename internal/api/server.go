@@ -32,6 +32,7 @@ type Server struct {
 	recordingH *handler.RecordingHandler
 	hookH      *handler.HookHandler
 	configH    *handler.ConfigHandler
+	vodH       *handler.VODHandler
 
 	router *chi.Mux
 	http   *http.Server
@@ -54,6 +55,7 @@ func New(i do.Injector) (*Server, error) {
 		recordingH: do.MustInvoke[*handler.RecordingHandler](i),
 		hookH:      do.MustInvoke[*handler.HookHandler](i),
 		configH:    do.MustInvoke[*handler.ConfigHandler](i),
+		vodH:       do.MustInvoke[*handler.VODHandler](i),
 	}
 	return s, nil
 }
@@ -113,6 +115,20 @@ func (s *Server) buildRouter(serverCfg *config.ServerConfig) *chi.Mux {
 			r.Put("/", s.hookH.Update)
 			r.Delete("/", s.hookH.Delete)
 			r.Post("/test", s.hookH.Test)
+		})
+	})
+
+	r.Route("/vod", func(r chi.Router) {
+		r.Get("/", s.vodH.List)
+		r.Post("/", s.vodH.Create)
+		r.Route("/{name}", func(r chi.Router) {
+			r.Get("/", s.vodH.Get)
+			r.Put("/", s.vodH.Update)
+			r.Delete("/", s.vodH.Delete)
+			r.Get("/files", s.vodH.ListFiles)
+			r.Post("/files", s.vodH.UploadFile)
+			r.Delete("/files/*", s.vodH.DeleteFile)
+			r.Get("/raw/*", s.vodH.Raw)
 		})
 	})
 
