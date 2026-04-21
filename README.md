@@ -39,13 +39,13 @@ A high-availability live media server written in pure Go. Open Streamer ingests 
 - **ABR transcoding** — bounded FFmpeg worker pool with configurable profiles (resolution, bitrate, codec) and hardware acceleration (NVENC / VAAPI / VideoToolbox / QSV)
 - **FFmpeg crash recovery** — per-profile exponential-backoff restart; after `max_restarts` failures the stream is stopped and an alert event is published
 - **HLS publishing** — MPEG-TS segmenter + playlist generator; ABR master playlist with `#EXT-X-DISCONTINUITY` on failover
-- **DASH publishing** — fMP4 packager + dynamic MPD (eyevinn/mp4ff); ABR per-track sharding
+- **DASH publishing** — fMP4 packager + dynamic MPD; ABR per-track sharding
 - **RTSP / RTMP / SRT serve** — shared listeners; streams selected by path (`/live/<code>`), RTMP app, or SRT streamid
 - **DVR recording** — persistent per-stream recording (ID = stream code); resumes after restart with `#EXT-X-DISCONTINUITY` markers; configurable segment duration, retention window, and max disk size
 - **Timeshift** — dynamic VOD M3U8 from `playlist.m3u8` by absolute time (`from=RFC3339`) or relative offset (`offset_sec=N`)
 - **Hot-reload stream config** — `PUT /streams/{code}` applies only the diff; adding a push destination does not interrupt HLS viewers; changing one ABR profile restarts only that FFmpeg process; toggling DASH does not affect RTSP subscribers
 - **Push-to-platform** — re-streams to multiple destinations (YouTube, Facebook, Twitch, CDN relay) per stream
-- **Webhook & Kafka hooks** — lifecycle events with retry, timeout, and optional HMAC signing; Kafka delivery via `segmentio/kafka-go`
+- **Webhook & Kafka hooks** — lifecycle events with retry, timeout, and optional HMAC signing
 - **Prometheus metrics** — bitrate, FPS, failover count, transcoder restarts, buffer depth, stream uptime
 - **Pluggable storage** — JSON flat-file (default), PostgreSQL/MySQL (JSONB), MongoDB
 
@@ -115,10 +115,10 @@ Ingestor → $raw$<code> → Transcoder → $r$<code>$track_1 → Publisher (ren
 
 | URL | Protocol | Notes |
 | --- | -------- | ----- |
-| `rtmp://server/app/key` | RTMP | Native Go (yapingcat/gomedia) |
-| `rtmps://server/app/key` | RTMPS | TLS wrapper over RTMP |
-| `rtsp://camera:554/stream` | RTSP | Native Go (gortsplib v5), RTCP A/V sync, H.264 + H.265 + AAC |
-| `srt://relay:9999?streamid=key` | SRT | Native Go (datarhei/gosrt, caller mode) |
+| `rtmp://server/app/key` | RTMP | Native Go pull; AVCC→Annex-B and ADTS wrapping handled internally |
+| `rtmps://server/app/key` | RTMPS | Currently *not* supported on pull; RTMPS works on push-out |
+| `rtsp://camera:554/stream` | RTSP | Native Go pull, RTCP A/V sync, H.264 + H.265 + AAC |
+| `srt://relay:9999?streamid=key` | SRT | Native Go pull, caller mode |
 | `udp://239.1.1.1:5000` | UDP MPEG-TS | Unicast + multicast; RTP header auto-stripped |
 | `http://cdn/live.ts` | HTTP stream | Raw MPEG-TS over HTTP/HTTPS |
 | `https://cdn/playlist.m3u8` | HLS | Native M3U8 parser, segment fetch with retry |
@@ -135,18 +135,18 @@ Ingestor → $raw$<code> → Transcoder → $r$<code>$track_1 → Publisher (ren
 
 Push mode is detected automatically when the URL host is a wildcard address (`0.0.0.0`, `::`).
 
-**RTMP push relay architecture**: the encoder pushes to the gomedia relay; an internal joy4 pull worker connects loopback to the same relay. All codec conversion (AVCC→Annex-B, ADTS wrapping) is handled by the existing RTMPReader — identical to pull mode, no code duplication.
+**RTMP push relay architecture**: the encoder pushes to a shared RTMP relay; an internal pull worker connects loopback to the same relay. All codec conversion (AVCC→Annex-B, ADTS wrapping) is handled by the same RTMP reader as pull mode — no code duplication.
 
 ### Output (serve & push-out)
 
-| Protocol       | Clients                            | URL pattern                             |
-|----------------|------------------------------------|-----------------------------------------|
-| HLS            | Browsers, iOS, Android, Smart TVs  | `GET /{code}/index.m3u8`                |
-| DASH           | MPEG-DASH players, DRM             | `GET /{code}/index.mpd`                 |
-| RTSP           | VLC, broadcast tools, IP cameras   | `rtsp://host:port/live/<code>`          |
-| RTMP play      | Legacy players, CDN relays         | `rtmp://host:port/live/<code>`          |
-| SRT listen     | Contribution-quality pull          | `srt://host:port?streamid=live/<code>`  |
-| RTMP push-out  | YouTube, Facebook, Twitch, CDN     | configured per-stream in `push[]`       |
+| Protocol      | Clients                           | URL pattern                                                                 |
+|---------------|-----------------------------------|-----------------------------------------------------------------------------|
+| HLS           | Browsers, iOS, Android, Smart TVs | `GET /{code}/index.m3u8`                                                    |
+| DASH          | MPEG-DASH players, DRM            | `GET /{code}/index.mpd`                                                     |
+| RTSP          | VLC, broadcast tools, IP cameras  | `rtsp://host:port/live/<code>`                                              |
+| RTMP play     | Legacy players, CDN relays        | `rtmp://host:port/live/<code>`                                              |
+| SRT listen    | Contribution-quality pull         | `srt://host:port?streamid=live/<code>`                                      |
+| RTMP push-out | YouTube, Facebook, Twitch, CDN    | `rtmp://` and `rtmps://` (TLS) supported; configured per-stream in `push[]` |
 
 ---
 
@@ -598,8 +598,8 @@ GitHub Actions runs on every push / PR to `main`:
 ### Strategy
 
 - **Unit tests** — pure logic, no I/O; fast and fully deterministic
-- **Integration tests (testcontainers)** — SQL store (Postgres), Mongo store use real containers; skipped automatically when Docker is unavailable
-- **RTMP integration test** — spins up a `bluenviron/mediamtx` container and an FFmpeg publisher; skipped without Docker
+- **Integration tests** — SQL store (Postgres), Mongo store use real containers; skipped automatically when Docker is unavailable
+- **RTMP integration test** — spins up an RTMP server container and an FFmpeg publisher; skipped without Docker
 
 ### Coverage by package
 
@@ -613,8 +613,8 @@ GitHub Actions runs on every push / PR to `main`:
 | `internal/publisher` | HLS segmenter, codec string, manifest generation, discontinuity, context cancel |
 | `internal/dvr` | Playlist parse, index read/write round-trip, atomic write |
 | `internal/store/json` | Full CRUD + concurrent read-modify-write safety (race detector) |
-| `internal/store/sql` | Full CRUD + concurrent access (testcontainers Postgres) |
-| `internal/store/mongo` | Full CRUD + concurrent access (testcontainers MongoDB) |
+| `internal/store/sql` | Full CRUD + concurrent access (containerised Postgres) |
+| `internal/store/mongo` | Full CRUD + concurrent access (containerised MongoDB) |
 
 ---
 
@@ -631,7 +631,7 @@ GitHub Actions runs on every push / PR to `main`:
 ├── api/
 │   └── docs/           # Auto-generated OpenAPI/Swagger spec
 ├── internal/
-│   ├── api/            # HTTP server + REST handlers (chi router)
+│   ├── api/            # HTTP server + REST handlers
 │   │   └── handler/    # StreamHandler, RecordingHandler, HookHandler
 │   ├── buffer/         # Buffer Hub — ring buffer, fan-out subscriptions
 │   ├── coordinator/    # Pipeline wiring (buffer → manager → transcoder → publisher → DVR)
@@ -651,7 +651,7 @@ GitHub Actions runs on every push / PR to `main`:
 │   └── tsmux/          # MPEG-TS muxing utilities (AVPacket → 188-byte TS)
 ├── pkg/
 │   ├── ffmpeg/         # FFmpeg subprocess helper
-│   ├── logger/         # slog initialisation
+│   ├── logger/         # structured logger initialisation
 │   └── protocol/       # URL → protocol Kind detection
 └── build/
     ├── Dockerfile          # Multi-stage build (Go 1.25 → alpine)

@@ -16,9 +16,9 @@ Legend for **Completion**:
 
 | Feature | Completion | Notes |
 | --------- | ------------ | ------- |
-| Configuration (`config/`, viper/env) | Complete | Single `Config` loaded at startup; OPEN_STREAMER_ env prefix |
-| Dependency injection (`samber/do/v2`) | Complete | All services wired in `cmd/server/main.go` |
-| Structured logging (`slog`, `pkg/logger`) | Complete | `text` / `json` format; configurable level |
+| Configuration (`config/`, file + env layered) | Complete | Single `Config` loaded at startup; OPEN_STREAMER_ env prefix |
+| Dependency injection container | Complete | All services wired in `cmd/server/main.go` |
+| Structured logging (`pkg/logger`) | Complete | `text` / `json` format; configurable level |
 | Graceful shutdown (SIGINT/SIGTERM) | Complete | 10 s timeout, all services shut down in reverse order |
 | Prometheus metrics (`internal/metrics`) | Complete | Wired in ingestor, manager, transcoder, DVR, coordinator; stream start time, bytes/packets, failovers, restarts, active workers |
 
@@ -29,8 +29,8 @@ Legend for **Completion**:
 | Feature | Completion | Notes |
 | --------- | ------------ | ------- |
 | Stream repository — JSON file | Complete | Default store; configurable dir |
-| Stream repository — SQL (Postgres/MySQL) | Complete | pgx + sqlx; JSONB storage; auto-migrate on startup |
-| Stream repository — MongoDB | Complete | mongo-driver v2; BSON+JSON; indexes created on startup |
+| Stream repository — SQL (Postgres/MySQL) | Complete | JSONB storage; auto-migrate on startup |
+| Stream repository — MongoDB | Complete | BSON+JSON document storage; indexes created on startup |
 | Recording repository | Complete | All 3 drivers; DVR writes recording metadata on every segment flush |
 | Hook repository | Complete | Full CRUD + test endpoint |
 | REST API — streams CRUD / start / stop / status | Complete | Chi router under `/streams` |
@@ -41,7 +41,7 @@ Legend for **Completion**:
 | REST API — recordings segment serve | Complete | `GET /recordings/{rid}/{file}` — path traversal protected |
 | REST API — hooks CRUD + test (HTTP) | Complete | HTTP hook test fires real outbound request |
 | REST API — hooks test (Kafka) | Complete | `DeliverTestEvent` routes to `deliverKafka`; brokers via `hooks.kafka_brokers` |
-| OpenAPI / Swagger | Complete | Generated via `swag`; served at `/swagger/` |
+| OpenAPI / Swagger | Complete | Auto-generated spec served at `/swagger/` |
 | HTTP static delivery — HLS master + segments | Complete | `/{code}/index.m3u8`, `/{code}/*` |
 | HTTP static delivery — DASH MPD + segments | Complete | `/{code}/index.mpd`, `/{code}/*` |
 | Health / readiness probes | Complete | `/healthz`, `/readyz` |
@@ -66,13 +66,13 @@ Legend for **Completion**:
 | --------- | ------------ | ------- |
 | Pull — HLS | Complete | M3U8 parser, segment fetch, retry + backoff |
 | Pull — HTTP (raw MPEG-TS) | Complete | |
-| Pull — RTSP | Complete | Rewritten with gortsplib v5: RTCP A/V sync, RTP reorder buffer, proper DTS extraction (DTSExtractor), H.264 + H.265 + AAC |
+| Pull — RTSP | Complete | RTCP A/V sync, RTP reorder buffer, proper DTS extraction, H.264 + H.265 + AAC |
 | Pull — RTMP | Complete | AVCC→Annex-B, ADTS wrapping via TSDemuxPacketReader |
 | Pull — SRT (caller) | Partial | Code path complete; HLS/DASH combos not yet verified in manual matrix |
 | Pull — UDP / MPEG-TS | Complete | Unicast + multicast; auto-strip RTP header; OS-assigned port for tests |
 | Pull — File (`.ts`, `.mp4`, `.flv`) | Complete | Loop mode; paced playback to simulate real-time |
 | Pull — S3 | Complete | GetObject stream; S3-compatible via `?endpoint=` |
-| Push — RTMP listen (:1935) | Complete | gomedia relay → loopback joy4 pull → Buffer Hub |
+| Push — RTMP listen (:1935) | Complete | Shared RTMP relay → loopback pull worker → Buffer Hub |
 | Push — SRT listen (:9999) | Complete | streamid `live/<code>` → registry → Buffer Hub |
 | Configurable write target (raw vs main buffer) | Complete | `mediaBufferID` passed from coordinator |
 | Exponential-backoff reconnect | Complete | Per-input `Net.ReconnectDelaySec`, `ReconnectMaxDelaySec` |
@@ -126,10 +126,10 @@ Legend for **Completion**:
 | HLS — `#EXT-X-DISCONTINUITY` on failover | Complete | Per-variant generation counter; exactly one tag per failover |
 | DASH — single representation (fMP4 + dynamic MPD) | Complete | H.264 + H.265 + AAC supported; MP3 skipped |
 | DASH — ABR (root MPD + per-track directories) | Complete | Audio packaged only on best track folder |
-| RTSP play (H.264 + AAC, gortsplib) | Complete | Shared gortsplib.Server; lazy stream mount after codec detection; clients use `rtsp://host:port_min/live/<code>` |
-| RTMP play (gomedia) | Complete | Shared port with ingest (:1935) via `PlayFunc` callback; optional dedicated port via `publisher.rtmp.port`; clients use `rtmp://host:port/live/<code>` |
-| SRT listen (gosrt) | Complete | gosrt.Server listener; per-client buffer subscriber; raw MPEG-TS output; clients use `srt://host:port?streamid=live/<code>` |
-| RTMP push out (re-stream to platform) | Complete | `rtmp://` destinations; auto-reconnect with backoff; RTMPS return clear error |
+| RTSP play (H.264 + AAC) | Complete | Shared RTSP server; lazy stream mount after codec detection; clients use `rtsp://host:port_min/live/<code>` |
+| RTMP play | Complete | Shared port with ingest (:1935) via play callback; optional dedicated port via `publisher.rtmp.port`; clients use `rtmp://host:port/live/<code>` |
+| SRT listen | Complete | Shared SRT listener; per-client buffer subscriber; raw MPEG-TS output; clients use `srt://host:port?streamid=live/<code>` |
+| RTMP push out (re-stream to platform) | Complete | `rtmp://` (plain TCP) and `rtmps://` (TLS, default :443); FMLE handshake (`releaseStream` + `FCPublish`) for strict pops (YouTube/Twitch); waits for `NetStream.Publish.Start` status before sending media; queues + drops to next keyframe on reconnect; per-input discontinuity tear-down handled in publisher `feedLoop`; auto-reconnect with backoff |
 | Per-protocol independent context | Complete | Each output goroutine (`"hls"`, `"dash"`, `"rtsp"`, `"push:<url>"`) has its own cancel func inside `streamState.protocols` |
 | `UpdateProtocols(old, new)` | Complete | Only stops/starts protocols whose ON↔OFF state changed; connected RTSP/SRT viewers unaffected |
 | `RestartHLSDASH(stream)` | Complete | Restarts only HLS + DASH goroutines when ABR ladder count changes; RTSP/RTMP/SRT unaffected |
@@ -187,7 +187,7 @@ Legend for **Completion**:
 | In-process event bus | Complete | Typed events; bounded queue (512); worker pool |
 | Event types | Complete | `stream.*`, `input.*`, `recording.*`, `segment.written`, `transcoder.*` — all wired and published |
 | HTTP webhook delivery | Complete | Retries, timeout, optional HMAC (`X-OpenStreamer-Signature`) |
-| Kafka delivery | Complete | `segmentio/kafka-go`; lazy writer per topic; brokers via `hooks.kafka_brokers` config |
+| Kafka delivery | Complete | Lazy writer per topic; brokers via `hooks.kafka_brokers` config |
 | Event documentation | Complete | `docs/EVENTS.md` — full payload schemas, volume guide, delivery details |
 
 ---
@@ -265,4 +265,4 @@ Legend for **Completion**:
 
 ---
 
-*Updated 2026-04-15. Reflects hot-reload (coordinator.Update + diff engine), per-profile transcoder lifecycle, per-protocol publisher lifecycle, and integration test coverage.*
+*Updated 2026-04-21. Reflects hot-reload (coordinator.Update + diff engine), per-profile transcoder lifecycle, per-protocol publisher lifecycle, RTMP push-out hardened (FMLE handshake + RTMPS + publish.start gating), and integration test coverage.*

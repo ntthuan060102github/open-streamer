@@ -214,19 +214,19 @@ Push servers (`push.RTMPServer`, `push.SRTServer`) are shared singletons — one
 **RTMP push relay architecture:**
 
 ```text
-OBS/FFmpeg ──RTMP publish──► gomedia RTMPServer
+OBS/FFmpeg ──RTMP publish──► Shared RTMP server
                                     │ OnPublish(key):
                                     │  1. registry.Acquire(key) → streamID
                                     │  2. start loopback pull worker:
                                     │     input.URL = "rtmp://127.0.0.1:1935/live/<key>"
                                     ▼
-                            joy4 RTMPReader (pull/rtmp.go)
+                            RTMP pull reader (pull/rtmp.go)
                                     │ same AVCC→Annex-B, ADTS path as normal pull
                                     ▼
                                Buffer Hub
 ```
 
-When the encoder disconnects, `OnClose` calls `registry.Release(key)`. The loopback joy4 reader receives a natural EOF from the relay and the pull worker exits cleanly. No crash, no goroutine leak.
+When the encoder disconnects, `OnClose` calls `registry.Release(key)`. The loopback reader receives a natural EOF from the relay and the pull worker exits cleanly. No crash, no goroutine leak.
 
 ### Packet Types
 
@@ -403,7 +403,7 @@ type streamState struct {
 Protocol keys:
 - `"hls"` — HLS segmenter (single-rendition or ABR)
 - `"dash"` — DASH fMP4 packager
-- `"rtsp"` — RTSP gortsplib mount
+- `"rtsp"` — RTSP server mount
 - `"push:<url>"` — RTMP push-out goroutine per destination
 
 `stopProtocol(streamID, key)` cancels exactly one goroutine. `spawnProtocolLocked(ss, key, fn)` starts a new goroutine for the key, cancelling any existing one first.
@@ -451,11 +451,11 @@ The HLS segmenter maintains an `hlsSegmenter` struct per stream:
 
 ### DASH Packager (fMP4)
 
-The DASH packager uses a `tsBuffer` (buffered pipe) feeding into a `mpeg2.TSDemuxer`:
+The DASH packager uses a `tsBuffer` (buffered pipe) feeding into an MPEG-TS demuxer:
 
 1. Raw TS from buffer subscriber → `tsBuffer.Write` (never blocks; replaces `io.Pipe` which caused packet loss under transcoding load).
-2. `TSDemuxer` extracts H.264/AAC elementary streams.
-3. eyevinn/mp4ff boxes them into fMP4: `init.mp4` + `seg_N.m4s`.
+2. The demuxer extracts H.264/AAC elementary streams.
+3. An fMP4 muxer boxes them into `init.mp4` + `seg_N.m4s`.
 4. Dynamic MPD updated after each segment.
 
 H.265 in the TS path is currently not supported by the DASH packager and logged as a warning.
@@ -464,11 +464,56 @@ H.265 in the TS path is currently not supported by the DASH packager and logged 
 
 These use **shared listeners** — one TCP/UDP port serves all streams:
 
-- **RTSP** (`gortsplib`): clients connect to `rtsp://host:port/live/<code>`
-- **RTMP play** (`gomedia`): clients connect to `rtmp://host:port/live/<code>` with app `live`
-- **SRT listen** (`gosrt`): clients connect with `streamid=live/<code>`
+- **RTSP**: clients connect to `rtsp://host:port/live/<code>`
+- **RTMP play**: clients connect to `rtmp://host:port/live/<code>` with app `live`
+- **SRT listen**: clients connect with `streamid=live/<code>`
 
 Each serves the `PlaybackBufferID` for the requested stream.
+
+### RTMP Push-Out
+
+`push_rtmp.go` re-streams a stream's media buffer out to a remote RTMP/RTMPS endpoint
+(YouTube, Facebook, Twitch, generic CDN). Each push destination runs as its own
+`"push:<url>"` goroutine inside the per-stream `streamState.protocols` map.
+
+**Transport:** the publisher dials the remote itself — plain TCP for `rtmp://` and TLS
+for `rtmps://` (default port 443). The RTMP client reads and writes through the
+(optionally TLS-wrapped) `net.Conn` the publisher already opened. Inbound bytes are
+pumped into the client from a single reader goroutine; outbound frames are written
+through the client's frame API.
+
+**Codec config:** the underlying H.264 muxer extracts SPS/PPS from each new stream
+itself and emits the `AVCDecoderConfigurationRecord` on the first VCL frame; the
+AAC muxer accepts ADTS-prefixed frames and emits the AAC sequence header on the
+first audio frame. The publisher does **not** carry codec config across reconnects —
+the muxer rebuilds it from the next keyframe.
+
+**Handshake — FMLE flow:** when the connection state advances to
+`RTMP_CONNECTING`, the client sends `releaseStream` and `FCPublish` before
+`createStream` and `publish` — the legacy FMLE order that strict ingest pops
+(YouTube/Twitch) require. The publisher then waits for the publish-start state
+(and the corresponding `NetStream.Publish.Start` status callback) before sending
+any media. If a publish-failed state arrives instead, the connection is torn down
+and the outer reconnect loop backs off.
+
+**Pre-publish queue + keyframe-gated drain:** AV packets pulled from the buffer
+arrive while the handshake is still in progress. They are queued; once the ready
+signal fires, the drain step drops everything older than the first H.264 keyframe
+and then begins writing in order. This guarantees the remote starts with a
+decodable GOP.
+
+**Per-input discontinuity:** discontinuity is handled in the publisher's
+`feedLoop`, **not** in the ingestor (per project rule "ingestor must not know
+about source switch"). When a `Discontinuity` AV packet arrives:
+
+- if the session is already ready → tear it down so the next loop iteration
+  reconnects with fresh codec probing on the new source;
+- if not ready yet → absorb silently (the queue + keyframe-gate already handles it).
+
+**Reconnect:** any error from the read loop, write path, or status handler signals
+the failure channel; the outer goroutine cancels the session, sleeps
+`RetryTimeoutSec` (per-destination, default backoff), and retries. The destination
+URL is parsed once per connect attempt so DNS rotates correctly across retries.
 
 ---
 
@@ -592,7 +637,7 @@ The in-process bus uses a bounded channel (capacity 512) and a fixed worker pool
 select {
 case bus.queue <- delivery{...}:
 default:
-    slog.Warn("event bus: queue full, dropping event", "type", event.Type)
+    log.Warn("event bus: queue full, dropping event", "type", event.Type)
 }
 ```
 
@@ -621,7 +666,7 @@ The HTTP hook dispatcher sends a POST to the registered `target` URL with:
 - Timeout: `hook.TimeoutSec`
 - Retries: `hook.MaxRetries` with exponential backoff
 
-The Kafka deliverer uses `segmentio/kafka-go` with a lazy writer per topic; brokers are configured via `hooks.kafka_brokers`. NATS is not implemented.
+The Kafka deliverer uses a lazy writer per topic; brokers are configured via `hooks.kafka_brokers`. NATS is not implemented.
 
 ---
 
@@ -669,7 +714,7 @@ Writes are atomic: marshal → write tmp file → rename. Reads deserialise the 
 
 ### SQL Driver
 
-Postgres/MySQL via pgx/sqlx. Tables: `streams`, `recordings`, `hooks`. Each row stores the entity as a JSONB column plus indexed lookup fields (`code`, `status`, `stream_code`).
+Postgres/MySQL with three tables: `streams`, `recordings`, `hooks`. Each row stores the entity as a JSONB column plus indexed lookup fields (`code`, `status`, `stream_code`).
 
 ### MongoDB Driver
 
@@ -683,7 +728,7 @@ Each entity stored as a BSON document in its own collection. `_id` = domain ID f
 
 The HTTP server is **stateless** — it delegates every operation to the service layer and returns the result. No goroutines or in-memory caches live inside the API handlers.
 
-### Router (chi)
+### Router
 
 Middleware stack: `RequestID` → `RealIP` → `Recoverer` → `Logger` → `Timeout(120s)`.
 
@@ -729,7 +774,7 @@ Path traversal protection: rejects any path containing `..` or starting with `/`
 
 ### Config Loading
 
-Viper loads configuration in three layers (each overrides the previous):
+Configuration is loaded in three layers (each overrides the previous):
 
 1. Built-in defaults (`setDefaults()` in `config/config.go`)
 2. `config.yaml` in the current working directory or `/etc/open-streamer/`
@@ -737,19 +782,20 @@ Viper loads configuration in three layers (each overrides the previous):
 
 The root `Config` struct is populated once at startup and passed to each service as its relevant sub-config only (e.g. `cfg.Publisher` for Publisher, `cfg.Ingestor` for Ingestor). Services never receive the full `Config`.
 
-### Dependency Injection (samber/do/v2)
+### Dependency Injection
 
-All services are registered with a `do.Injector` and resolved lazily on first use. Each service constructor follows the pattern:
+All services are registered with a DI container and resolved lazily on first use. Each service constructor follows the pattern:
 
 ```go
-func New(i do.Injector) (*Service, error) {
-    dep := do.MustInvoke[*dep.Service](i)
-    cfg := do.MustInvoke[*config.Config](i)
+func New(i Injector) (*Service, error) {
+    dep := MustInvoke[*dep.Service](i)
+    cfg := MustInvoke[*config.Config](i)
     return &Service{dep: dep, cfg: cfg.SubConfig}, nil
 }
 ```
 
 Registration order in `cmd/server/main.go`:
+
 1. Config
 2. Storage repositories (stream, recording, hook)
 3. Buffer service
@@ -759,8 +805,8 @@ Registration order in `cmd/server/main.go`:
 7. API handlers → API server
 8. Metrics server
 
-Graceful shutdown calls `injector.Shutdown()`, which invokes `HealthCheck` / `Shutdown` on each registered service in reverse registration order.
+Graceful shutdown calls the container's `Shutdown()`, which invokes `HealthCheck` / `Shutdown` on each registered service in reverse registration order.
 
 ---
 
-*Updated 2026-04-15. Keep this document in sync when changing subsystem behaviour.*
+*Updated 2026-04-21. Keep this document in sync when changing subsystem behaviour.*
