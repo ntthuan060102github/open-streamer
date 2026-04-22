@@ -1,4 +1,6 @@
-# syntax=docker/dockerfile:1.7
+# Works with both the legacy builder and BuildKit. Enable BuildKit
+# (DOCKER_BUILDKIT=1 or `docker buildx build`) for faster rebuilds via
+# automatic layer cache; no Dockerfile changes needed.
 
 # ---- build stage ----
 FROM golang:1.25.9-alpine AS builder
@@ -8,14 +10,11 @@ RUN apk add --no-cache git ca-certificates
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+RUN go mod download
 
 COPY . .
 
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=0 GOOS=linux go build \
         -trimpath \
         -ldflags="-s -w" \
         -o /out/open-streamer \
