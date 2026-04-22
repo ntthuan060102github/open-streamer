@@ -1,15 +1,14 @@
 services:
   open-streamer:
-    image: ghcr.io/ntt0601zcoder/open-streamer:latest
-    # build:
-    #   context: ..
-    #   dockerfile: build/Dockerfile
+    build:
+      context: ..
+      dockerfile: build/Dockerfile
     ports:
       - "8080:8080"      # REST API + HLS/DASH static serving
       - "1935:1935"      # RTMP — shared port for push ingest + play
-      - "9999:9999/udp"  # SRT — shared port for push ingest + play
-      - "8554:8554"      # RTSP — shared port for play (and any future ingest)
-      - "9091:9091"      # Prometheus metrics
+      # - "9999:9999/udp"  # SRT — shared port for push ingest + play
+      # - "8554:8554"      # RTSP — shared port for play (and any future ingest)
+      # - "9091:9091"      # Prometheus metrics
     environment:
       # Only OPEN_STREAMER_STORAGE_* env vars are honored — they pick the
       # storage backend at boot. All other runtime settings (server, listeners,
@@ -20,9 +19,9 @@ services:
       OPEN_STREAMER_STORAGE_JSON_DIR: "/data"
     volumes:
       - ./data:/data          # JSON store (open_streamer.json lives here)
-      - ./out/hls:/out/hls    # HLS segments
-      - ./out/dash:/out/dash  # DASH segments
-      - ./out/dvr:/out/dvr    # DVR recordings
+      # - ./out/hls:/out/hls    # HLS segments
+      # - ./out/dash:/out/dash  # DASH segments
+      # - ./out/dvr:/out/dvr    # DVR recordings
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
@@ -30,25 +29,25 @@ services:
       timeout: 5s
       retries: 3
 
-  prometheus:
-    image: prom/prometheus:v3.2.1
-    ports:
-      - "9092:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-    restart: unless-stopped
+#   prometheus:
+#     image: prom/prometheus:v3.2.1
+#     ports:
+#       - "9092:9090"
+#     volumes:
+#       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#     command:
+#       - "--config.file=/etc/prometheus/prometheus.yml"
+#     restart: unless-stopped
 
-  grafana:
-    image: grafana/grafana:11.5.2
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-    restart: unless-stopped
+#   grafana:
+#     image: grafana/grafana:11.5.2
+#     ports:
+#       - "3000:3000"
+#     environment:
+#       GF_SECURITY_ADMIN_PASSWORD: admin
+#     volumes:
+#       - grafana_data:/var/lib/grafana
+#     restart: unless-stopped
 
-volumes:
-  grafana_data:
+# volumes:
+#   grafana_data:
