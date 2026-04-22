@@ -35,12 +35,4 @@ COPY --from=builder /out/open-streamer /usr/local/bin/open-streamer
 USER streamer
 WORKDIR /data
 
-# HTTP API + HLS/DASH / gRPC / Prometheus / RTMP / RTSP / SRT (UDP)
-EXPOSE 8080 9090 9091 1935 8554 9999/udp
-
-VOLUME ["/data", "/out/hls", "/out/dash", "/out/dvr"]
-
-HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
-
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/open-streamer"]
