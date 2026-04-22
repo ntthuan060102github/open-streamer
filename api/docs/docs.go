@@ -1899,9 +1899,6 @@ const docTemplate = `{
         "config.PublisherHLSConfig": {
             "type": "object",
             "properties": {
-                "base_url": {
-                    "type": "string"
-                },
                 "dir": {
                     "type": "string"
                 },

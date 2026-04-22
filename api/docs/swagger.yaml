@@ -392,8 +392,6 @@ definitions:
     type: object
   config.PublisherHLSConfig:
     properties:
-      base_url:
-        type: string
       dir:
         type: string
       live_ephemeral:
