@@ -11,30 +11,13 @@ services:
       - "8554:8554"      # RTSP — shared port for play (and any future ingest)
       - "9091:9091"      # Prometheus metrics
     environment:
-      OPEN_STREAMER_SERVER_HTTP_ADDR: ":8080"
+      # Only OPEN_STREAMER_STORAGE_* env vars are honored — they pick the
+      # storage backend at boot. All other runtime settings (server, listeners,
+      # ingestor, transcoder, publisher, hooks, log, ...) live in the persisted
+      # GlobalConfig in the store (seeded from ./data/open_streamer.json on
+      # first boot, then editable via REST: GET/POST /config).
       OPEN_STREAMER_STORAGE_DRIVER: "json"
       OPEN_STREAMER_STORAGE_JSON_DIR: "/data"
-      OPEN_STREAMER_BUFFER_CAPACITY: "1000"
-      OPEN_STREAMER_TRANSCODER_MAX_WORKERS: "4"
-      OPEN_STREAMER_TRANSCODER_FFMPEG_PATH: "ffmpeg"
-      OPEN_STREAMER_TRANSCODER_MAX_RESTARTS: "5"
-      OPEN_STREAMER_PUBLISHER_HLS_DIR: "/out/hls"
-      OPEN_STREAMER_PUBLISHER_HLS_LIVE_SEGMENT_SEC: "4"
-      OPEN_STREAMER_PUBLISHER_HLS_LIVE_WINDOW: "6"
-      OPEN_STREAMER_PUBLISHER_DASH_DIR: "/out/dash"
-      # Listeners — one shared port per protocol for both ingest and play
-      OPEN_STREAMER_LISTENERS_RTMP_ENABLED: "true"
-      OPEN_STREAMER_LISTENERS_RTMP_PORT: "1935"
-      OPEN_STREAMER_LISTENERS_RTSP_ENABLED: "true"
-      OPEN_STREAMER_LISTENERS_RTSP_PORT: "8554"
-      OPEN_STREAMER_LISTENERS_RTSP_TRANSPORT: "tcp"
-      OPEN_STREAMER_LISTENERS_SRT_ENABLED: "true"
-      OPEN_STREAMER_LISTENERS_SRT_PORT: "9999"
-      OPEN_STREAMER_LISTENERS_SRT_LATENCY_MS: "120"
-      OPEN_STREAMER_MANAGER_INPUT_PACKET_TIMEOUT_SEC: "30"
-      OPEN_STREAMER_METRICS_ADDR: ":9091"
-      OPEN_STREAMER_LOG_LEVEL: "info"
-      OPEN_STREAMER_LOG_FORMAT: "json"
     volumes:
       - ./data:/data          # JSON store (open_streamer.json lives here)
       - ./out/hls:/out/hls    # HLS segments

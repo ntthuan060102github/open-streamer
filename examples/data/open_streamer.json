@@ -438,5 +438,72 @@
       "enabled": false
     }
   },
-  "global": {}
+  "global": {
+    "server": {
+      "http_addr": ":8080",
+      "cors": {
+        "enabled": true,
+        "allowed_origins": ["*"],
+        "allowed_methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_credentials": false,
+        "max_age": 600
+      }
+    },
+    "listeners": {
+      "rtmp": {
+        "enabled": true,
+        "listen_host": "0.0.0.0",
+        "port": 1935
+      },
+      "rtsp": {
+        "enabled": true,
+        "listen_host": "0.0.0.0",
+        "port": 8554,
+        "transport": "tcp"
+      },
+      "srt": {
+        "enabled": true,
+        "listen_host": "0.0.0.0",
+        "port": 9999,
+        "latency_ms": 120
+      }
+    },
+    "ingestor": {
+      "hls_max_segment_buffer": 8
+    },
+    "buffer": {
+      "capacity": 1000
+    },
+    "transcoder": {
+      "max_workers": 4,
+      "ffmpeg_path": "ffmpeg",
+      "max_restarts": 5
+    },
+    "publisher": {
+      "hls": {
+        "dir": "/out/hls",
+        "live_ephemeral": true,
+        "live_segment_sec": 4,
+        "live_window": 6,
+        "live_history": 4
+      },
+      "dash": {
+        "dir": "/out/dash",
+        "live_ephemeral": true,
+        "live_segment_sec": 4,
+        "live_window": 6,
+        "live_history": 4
+      }
+    },
+    "manager": {
+      "input_packet_timeout_sec": 30
+    },
+    "hooks": {
+      "worker_count": 4
+    },
+    "log": {
+      "level": "info",
+      "format": "json"
+    }
+  }
 }

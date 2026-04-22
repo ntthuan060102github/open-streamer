@@ -97,8 +97,7 @@ type PublisherConfig struct {
 
 // PublisherHLSConfig is filesystem + live packaging for Apple HLS (m3u8 + segments).
 type PublisherHLSConfig struct {
-	Dir     string `mapstructure:"dir" json:"dir" yaml:"dir"`
-	BaseURL string `mapstructure:"base_url" json:"base_url" yaml:"base_url"`
+	Dir string `mapstructure:"dir" json:"dir" yaml:"dir"`
 	// LiveEphemeral enables bounded retention (sliding manifest, delete old segments).
 	LiveEphemeral bool `mapstructure:"live_ephemeral" json:"live_ephemeral" yaml:"live_ephemeral"`
 	// LiveSegmentSec is segment duration in seconds.
