@@ -57,9 +57,15 @@ func (s *Service) runProfileEncoder(
 	}
 	defer s.buf.Unsubscribe(rawIngestID, sub)
 
-	maxRestarts := s.cfg.MaxRestarts
 	delay := restartBaseDelay
 	attempt := 0
+	// Spam-suppression state: when the same error message recurs, drop log
+	// level + skip event publishes after the first few. Streams are
+	// long-running infrastructure — a stuck config (e.g. ffmpeg missing a
+	// filter) would otherwise spew identical errors every 30s for days.
+	var lastErrMsg string
+	consecutiveSame := 0
+	const visibleConsecutiveCap = 3
 
 	for {
 		crashed, runErr := s.runOnce(ctx, logStream, outBufferID, track, sub, args)
@@ -71,48 +77,58 @@ func (s *Service) runProfileEncoder(
 		}
 
 		attempt++
-		fatal := maxRestarts > 0 && attempt >= maxRestarts
 		errMsg := "ffmpeg crashed"
 		if runErr != nil {
 			errMsg = runErr.Error()
 		}
+		// Always record into per-profile error history (frontend visibility,
+		// see RuntimeStatus). Always bump the metric so Prometheus alerts on
+		// rate even when logs are suppressed.
 		s.recordProfileError(logStream, profileIndex, errMsg)
-		//nolint:contextcheck // ctx may be cancelled after crash; publish must outlive it
-		s.bus.Publish(context.Background(), domain.Event{
-			Type:       domain.EventTranscoderError,
-			StreamCode: logStream,
-			Payload: map[string]any{
-				"profile":        track,
-				"attempt":        attempt,
-				"fatal":          fatal,
-				"restart_in_sec": delay.Seconds(),
-				"error":          errMsg,
-			},
-		})
-
 		s.m.TranscoderRestartsTotal.WithLabelValues(string(logStream)).Inc()
 
-		if fatal {
-			slog.Error("transcoder: ffmpeg exceeded max restarts, giving up",
+		if errMsg == lastErrMsg {
+			consecutiveSame++
+		} else {
+			consecutiveSame = 1
+			lastErrMsg = errMsg
+		}
+		// Power-of-2 attempts always get a visible warn + event so a stuck
+		// stream still pings ops periodically (1, 2, 4, 8, 16, 32 …) instead
+		// of going completely silent after suppression kicks in.
+		isPowerOf2 := attempt&(attempt-1) == 0
+		visible := consecutiveSame <= visibleConsecutiveCap || isPowerOf2
+
+		if visible {
+			slog.Warn("transcoder: ffmpeg crashed, restarting",
 				"stream_code", logStream,
 				"profile", track,
-				"max_restarts", maxRestarts,
+				"attempt", attempt,
+				"consecutive_same_err", consecutiveSame,
+				"restart_in", delay,
 			)
-			s.mu.Lock()
-			cb := s.onFatal
-			s.mu.Unlock()
-			if cb != nil {
-				go cb(logStream)
-			}
-			return
+			//nolint:contextcheck // ctx may be cancelled after crash; publish must outlive it
+			s.bus.Publish(context.Background(), domain.Event{
+				Type:       domain.EventTranscoderError,
+				StreamCode: logStream,
+				Payload: map[string]any{
+					"profile":        track,
+					"attempt":        attempt,
+					"restart_in_sec": delay.Seconds(),
+					"error":          errMsg,
+				},
+			})
+		} else {
+			slog.Debug("transcoder: ffmpeg crashed (suppressed: same error repeating)",
+				"stream_code", logStream,
+				"profile", track,
+				"attempt", attempt,
+				"consecutive_same_err", consecutiveSame,
+				"restart_in", delay,
+				"err", errMsg,
+			)
 		}
 
-		slog.Warn("transcoder: ffmpeg crashed, restarting",
-			"stream_code", logStream,
-			"profile", track,
-			"attempt", attempt,
-			"restart_in", delay,
-		)
 		select {
 		case <-ctx.Done():
 			return

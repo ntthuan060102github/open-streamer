@@ -1972,10 +1972,6 @@
                 "ffmpeg_path": {
                     "type": "string"
                 },
-                "max_restarts": {
-                    "description": "MaxRestarts is the maximum number of consecutive FFmpeg crashes allowed per\nprofile before the transcoder gives up and triggers a fatal callback.\n0 = unlimited retries (not recommended for production).",
-                    "type": "integer"
-                },
                 "max_workers": {
                     "description": "MaxWorkers caps the number of concurrent FFmpeg processes.",
                     "type": "integer"

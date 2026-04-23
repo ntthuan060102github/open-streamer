@@ -81,10 +81,6 @@ type TranscoderConfig struct {
 	// MaxWorkers caps the number of concurrent FFmpeg processes.
 	MaxWorkers int    `mapstructure:"max_workers" json:"max_workers" yaml:"max_workers"`
 	FFmpegPath string `mapstructure:"ffmpeg_path" json:"ffmpeg_path" yaml:"ffmpeg_path"`
-	// MaxRestarts is the maximum number of consecutive FFmpeg crashes allowed per
-	// profile before the transcoder gives up and triggers a fatal callback.
-	// 0 = unlimited retries (not recommended for production).
-	MaxRestarts int `mapstructure:"max_restarts" json:"max_restarts" yaml:"max_restarts"`
 }
 
 // PublisherConfig controls filesystem-based output delivery (HLS, DASH).

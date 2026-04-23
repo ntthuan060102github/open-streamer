@@ -54,7 +54,6 @@ func New(i do.Injector) (*Coordinator, error) {
 		renditions: make(map[domain.StreamCode][]string),
 		status:     make(map[domain.StreamCode]domain.StreamStatus),
 	}
-	c.tc.SetFatalCallback(c.handleTranscoderFatal)
 	c.mgr.SetExhaustedCallback(c.handleAllInputsExhausted)
 	c.mgr.SetRestoredCallback(c.handleInputRestored)
 	return c, nil
@@ -81,7 +80,6 @@ func newForTesting(
 		renditions: make(map[domain.StreamCode][]string),
 		status:     make(map[domain.StreamCode]domain.StreamStatus),
 	}
-	c.tc.SetFatalCallback(c.handleTranscoderFatal)
 	c.mgr.SetExhaustedCallback(c.handleAllInputsExhausted)
 	c.mgr.SetRestoredCallback(c.handleInputRestored)
 	return c
@@ -553,13 +551,6 @@ func (c *Coordinator) handleAllInputsExhausted(streamCode domain.StreamCode) {
 func (c *Coordinator) handleInputRestored(streamCode domain.StreamCode) {
 	slog.Info("coordinator: input restored, stream active", "stream_code", streamCode)
 	c.setStatus(streamCode, domain.StatusActive)
-}
-
-// handleTranscoderFatal is called by the transcoder when a profile exceeds MaxRestarts.
-// It stops the full pipeline; status transitions to StatusStopped automatically via Stop().
-func (c *Coordinator) handleTranscoderFatal(streamCode domain.StreamCode) {
-	slog.Error("coordinator: transcoder fatal, stopping stream pipeline", "stream_code", streamCode)
-	c.Stop(context.Background(), streamCode)
 }
 
 // BootstrapPersistedStreams starts the pipeline for every non-disabled stream that

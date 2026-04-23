@@ -151,16 +151,6 @@ type Service struct {
 	sem     chan struct{} // bounded semaphore to cap concurrent FFmpeg processes
 	mu      sync.Mutex
 	workers map[domain.StreamCode]*streamWorker
-	onFatal func(streamCode domain.StreamCode) // called when a profile exceeds MaxRestarts
-}
-
-// SetFatalCallback registers a function called when a transcoder profile exceeds its
-// maximum restart count. The callback fires once per profile that gives up.
-// It is safe to call this before or after Start.
-func (s *Service) SetFatalCallback(fn func(streamCode domain.StreamCode)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onFatal = fn
 }
 
 // New creates a Service and registers it with the DI injector.

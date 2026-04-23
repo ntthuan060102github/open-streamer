@@ -27,7 +27,6 @@ type mgrDep interface {
 
 // tcDep is the subset of transcoder.Service the coordinator needs.
 type tcDep interface {
-	SetFatalCallback(func(domain.StreamCode))
 	Start(context.Context, domain.StreamCode, domain.StreamCode, *domain.TranscoderConfig, []transcoder.RenditionTarget) error
 	Stop(domain.StreamCode)
 	StopProfile(domain.StreamCode, int)

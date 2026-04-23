@@ -92,13 +92,6 @@ type spyTC struct {
 	stopped         []domain.StreamCode
 	profilesStopped []int
 	profilesStarted []int
-	fatalCB         func(domain.StreamCode)
-}
-
-func (t *spyTC) SetFatalCallback(fn func(domain.StreamCode)) {
-	t.mu.Lock()
-	t.fatalCB = fn
-	t.mu.Unlock()
 }
 
 func (t *spyTC) Start(_ context.Context, c domain.StreamCode, _ domain.StreamCode, _ *domain.TranscoderConfig, _ []transcoder.RenditionTarget) error {

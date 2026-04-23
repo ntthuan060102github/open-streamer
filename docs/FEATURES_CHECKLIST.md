@@ -111,8 +111,8 @@ Legend for **Completion**:
 | Hardware acceleration (NVENC / VAAPI / VideoToolbox / QSV) | Complete | `global.hw_accel` maps to encoder + hwaccel flags |
 | FFmpeg stderr filtering | Complete | Timestamp discontinuity, frame reorder → debug; real errors → warn/error |
 | Passthrough / remux mode (no FFmpeg) | Complete | `transcoder.mode: passthrough` or `remux` skips FFmpeg; ingestor writes raw MPEG-TS directly to publisher buffer |
-| FFmpeg crash auto-restart with backoff | Complete | Per-profile retry: 2 s → 4 s → … → 30 s cap; publishes `transcoder.error {attempt, fatal}` |
-| Transcoder fatal → stream stopped | Complete | After `transcoder.max_restarts` (default 5) failures: pipeline torn down, stream status → `stopped` |
+| FFmpeg crash auto-restart with backoff (infinite) | Complete | Per-profile retry forever: 2 s → 4 s → … → 30 s cap. Pipeline never tears down on FFmpeg failure — streams self-heal once the underlying issue is resolved. |
+| Crash log + event spam suppression | Complete | After 3 consecutive identical errors, warn-level logs drop to debug and `transcoder.error` events are emitted only on power-of-2 attempts (1, 2, 4, 8, 16…). Per-profile error history (last 5) and `TranscoderRestartsTotal` metric remain accurate for ops visibility. |
 | `StopProfile(streamID, idx)` | Complete | Cancels one `profileWorker` context; only that FFmpeg process exits |
 | `StartProfile(streamID, idx, target)` | Complete | Acquires semaphore slot, spawns new `profileWorker` with fresh context |
 
