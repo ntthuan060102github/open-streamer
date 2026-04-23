@@ -309,28 +309,24 @@ func deinterlaceFilter(im domain.InterlaceMode, onGPU bool) string {
 	return fmt.Sprintf("%s=mode=0:parity=%d:deint=0", name, parity)
 }
 
-// bframesArgs emits -bf and (for NVENC) -b_ref_mode.
+// bframesArgs emits -bf and (for NVENC) -b_ref_mode. nil pointer = encoder
+// default (no -bf flag emitted; encoder picks its own — h264_nvenc default
+// is preset-dependent, ~2-3 B-frames at p4+).
 //
-// Default = 0 B-frames (when bf is nil). Rationale:
-//
-//   - Live-streaming convention favours 0 B-frames for low end-to-end latency
-//     (each B-frame adds ~1 frame of decoder buffering, ~33 ms at 30fps).
-//   - The lal-based RTMP push out path drops PTS / composition_time when
-//     muxing FLV tags (lal's AvPacket2RtmpRemuxer doesn't propagate
-//     pkt.Pts), so any B-frames would be displayed at their DTS instead of
-//     PTS at the receiver — visible as fine-grained motion jitter ("even
-//     but not smooth") for downstream RTMP players (YouTube, Flussonic, …).
-//
-// Power users can opt back into B-frames by setting bframes explicitly per
-// profile; HLS/DASH playback handles them correctly via TS PES PTS, only
-// RTMP push is sensitive.
+// History: this used to default to "-bf 0" because the RTMP push out path
+// (via lal's AvPacket2RtmpRemuxer) silently dropped pkt.Pts → composition
+// time always 0 → B-frames displayed in DTS order at the receiver → motion
+// jitter. That root cause is now fixed: push_codec.go emits FLV tags with
+// proper composition_time, so B-frames work end-to-end through RTMP push.
+// Default reverted to "encoder default" so transcoder output benefits from
+// the encoder's own compression heuristics.
 func bframesArgs(bf *int, encoder string) []string {
-	n := 0
-	if bf != nil {
-		n = *bf
-		if n < 0 {
-			n = 0
-		}
+	if bf == nil {
+		return nil
+	}
+	n := *bf
+	if n < 0 {
+		n = 0
 	}
 	out := []string{"-bf", strconv.Itoa(n)}
 	if n > 0 && strings.Contains(strings.ToLower(encoder), "nvenc") {
