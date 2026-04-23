@@ -64,6 +64,7 @@ func TestScenario_BothCopy_EmitsCopyForBothStreams(t *testing.T) {
 }
 
 // ── Mode 2: video.copy=true + audio re-encode ───────────────────────────────
+
 func TestScenario_VideoCopy_AudioReencodeAAC(t *testing.T) {
 	t.Parallel()
 	tc := &domain.TranscoderConfig{
