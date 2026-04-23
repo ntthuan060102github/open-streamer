@@ -79,6 +79,29 @@ func TestSetPushStatus_ActiveClearsErrors(t *testing.T) {
 	require.NotNil(t, rt.Pushes[0].ConnectedAt, "connected_at still stamped")
 }
 
+// Leaving Active clears connectedAt — otherwise UI would keep computing
+// "uptime" against a stale timestamp from a session that already ended.
+func TestSetPushStatus_LeavingActiveClearsConnectedAt(t *testing.T) {
+	t.Parallel()
+	s := newPushTestService()
+
+	s.setPushStatus("test1", "rtmp://a/key", PushStatusActive)
+	rt, _ := s.RuntimeStatus("test1")
+	require.NotNil(t, rt.Pushes[0].ConnectedAt, "Active stamps connected_at")
+
+	s.setPushStatus("test1", "rtmp://a/key", PushStatusReconnecting)
+	rt, _ = s.RuntimeStatus("test1")
+	require.Nil(t, rt.Pushes[0].ConnectedAt, "Reconnecting must clear connected_at")
+
+	s.setPushStatus("test1", "rtmp://a/key", PushStatusActive)
+	rt, _ = s.RuntimeStatus("test1")
+	require.NotNil(t, rt.Pushes[0].ConnectedAt, "re-Active re-stamps")
+
+	s.setPushStatus("test1", "rtmp://a/key", PushStatusFailed)
+	rt, _ = s.RuntimeStatus("test1")
+	require.Nil(t, rt.Pushes[0].ConnectedAt, "Failed must also clear")
+}
+
 // Non-Active transitions must NOT clear the error history.
 func TestSetPushStatus_NonActiveKeepsErrors(t *testing.T) {
 	t.Parallel()

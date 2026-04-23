@@ -81,15 +81,19 @@ func (s *Service) getOrCreatePushState(streamID domain.StreamCode, url string) *
 	return st
 }
 
-// setPushStatus updates the status. Entering Active also:
-//   - stamps connectedAt so the API can show session uptime
-//   - clears the error history because past failures are now resolved (server
-//     came back, network healed, etc.) and leaving them stuck on the UI
-//     would misleadingly suggest the destination is still in trouble
+// setPushStatus updates the status with the following invariants:
 //
-// This differs from the input/transcoder error history (which persists for
-// the lifetime of the registration) — for pushes the user wants a clean
-// slate per healthy session.
+//   - Entering Active stamps connectedAt and clears the error history.
+//     Past failures are resolved (server came back, network healed, …) so
+//     leaving them on the UI would misleadingly suggest the destination is
+//     still in trouble.
+//   - Leaving Active clears connectedAt. Otherwise the API would keep
+//     returning a connected_at value while reconnecting/failed and the UI
+//     would compute a bogus uptime against a session that ended seconds ago.
+//
+// This differs from input/transcoder error history (which persists for the
+// lifetime of the registration) — for pushes the user wants a clean slate
+// per healthy session.
 func (s *Service) setPushStatus(streamID domain.StreamCode, url string, status PushStatus) {
 	st := s.getOrCreatePushState(streamID, url)
 	st.mu.Lock()
@@ -97,6 +101,10 @@ func (s *Service) setPushStatus(streamID domain.StreamCode, url string, status P
 	if status == PushStatusActive {
 		st.connectedAt = time.Now()
 		st.errors = nil
+	} else {
+		// Reset session-anchor so the API/UI can't compute uptime against
+		// a stale Active timestamp from a previous session.
+		st.connectedAt = time.Time{}
 	}
 	st.mu.Unlock()
 }
