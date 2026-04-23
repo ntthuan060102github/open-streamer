@@ -463,8 +463,15 @@ func (s *Service) collectTimeoutIfNeeded(
 	*timedOut = priority
 }
 
-// collectProbeIfNeeded queues a probe task for a degraded non-active input past its cooldown.
+// collectProbeIfNeeded queues a probe task for a degraded input past its cooldown.
 // Caller must hold state.mu.
+//
+// We normally skip the active priority because the live ingestor worker is
+// already trying to reconnect on its own. EXCEPTION: when the stream is
+// exhausted, the active worker has stopped (handleReadError returned true on
+// EOF / non-retriable error), so nobody is reconnecting. In that case the
+// "active" priority is stale — we must probe it ourselves or single-input
+// streams stay permanently exhausted.
 func (s *Service) collectProbeIfNeeded(
 	state *streamState,
 	h *InputHealth,
@@ -472,7 +479,10 @@ func (s *Service) collectProbeIfNeeded(
 	now time.Time,
 	tasks *[]probeTask,
 ) {
-	if h.Status != domain.StatusDegraded || priority == state.active || state.probing[priority] {
+	if h.Status != domain.StatusDegraded || state.probing[priority] {
+		return
+	}
+	if priority == state.active && !state.exhausted {
 		return
 	}
 	at, seen := state.degradedAt[priority]
@@ -497,7 +507,11 @@ func (s *Service) tryFailover(streamID domain.StreamCode, state *streamState) {
 		s.handleExhausted(streamID, state)
 		return
 	}
-	if best.Input.Priority == state.active {
+	// Skip when best is already the active worker — except when exhausted, in
+	// which case the active worker has stopped (EOF / error) and we must
+	// restart it. Common single-input case: priority 0 degrades, exhausts,
+	// later probes clean → best.Priority == state.active == 0 → must restart.
+	if best.Input.Priority == state.active && !state.exhausted {
 		state.mu.Unlock()
 		return
 	}
@@ -629,17 +643,24 @@ func (s *Service) runProbe(streamID domain.StreamCode, state *streamState, task 
 	task.h.Status = domain.StatusIdle
 	delete(state.degradedAt, task.priority)
 	currentActive := state.active
+	wasExhausted := state.exhausted
 	sinceSwitch := time.Since(state.lastSwitchAt)
 	state.mu.Unlock()
 
 	slog.Info("manager: degraded input recovered via probe",
 		"stream_code", streamID,
 		"input_priority", task.priority,
+		"was_exhausted", wasExhausted,
 	)
 
-	// Failback: this input has higher priority (lower value) than the fallback we are
-	// currently running on, and the switch cooldown has elapsed — switch back.
-	if task.priority < currentActive && sinceSwitch >= failbackSwitchCooldown {
+	// Two reasons to failover after a successful probe:
+	//   1. Exhausted recovery — the active worker died (EOF / non-retriable
+	//      error) so there's nothing running. Restart on whatever input just
+	//      probed clean, regardless of priority comparison (might be the same
+	//      priority that was active before).
+	//   2. Failback — recovered input has higher priority than the fallback
+	//      we're currently running on; switch back when cooldown elapsed.
+	if wasExhausted || (task.priority < currentActive && sinceSwitch >= failbackSwitchCooldown) {
 		s.tryFailover(streamID, state)
 	}
 }

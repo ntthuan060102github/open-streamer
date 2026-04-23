@@ -218,10 +218,12 @@ func TestCollectProbeIfNeeded_QueuesDegradedNonActive(t *testing.T) {
 	assert.True(t, state.probing[2])
 }
 
-func TestCollectProbeIfNeeded_SkipsActiveInput(t *testing.T) {
+func TestCollectProbeIfNeeded_SkipsActiveInputWhenNotExhausted(t *testing.T) {
 	t.Parallel()
+	// Live ingestor worker is reconnecting on its own — explicit probe would race.
 	state := &streamState{
 		active:     1,
+		exhausted:  false,
 		degradedAt: map[int]time.Time{1: time.Now().Add(-failbackProbeCooldown - time.Second)},
 		probing:    make(map[int]bool),
 	}
@@ -229,6 +231,25 @@ func TestCollectProbeIfNeeded_SkipsActiveInput(t *testing.T) {
 	var tasks []probeTask
 	collectProbeIfNeeded(state, h, 1, time.Now(), &tasks)
 	assert.Empty(t, tasks)
+}
+
+// Single-input streams: after the active worker dies (EOF / non-retriable),
+// nothing reconnects and state stays exhausted forever unless the probe loop
+// re-attempts the active priority. Regression for the test1/test2 case where
+// pulling RTMP from a restarting upstream wedged test2 in degraded forever.
+func TestCollectProbeIfNeeded_ProbesActiveWhenExhausted(t *testing.T) {
+	t.Parallel()
+	state := &streamState{
+		active:     0,
+		exhausted:  true,
+		degradedAt: map[int]time.Time{0: time.Now().Add(-failbackProbeCooldown - time.Second)},
+		probing:    make(map[int]bool),
+	}
+	h := &InputHealth{Input: domain.Input{Priority: 0}, Status: domain.StatusDegraded}
+	var tasks []probeTask
+	collectProbeIfNeeded(state, h, 0, time.Now(), &tasks)
+	assert.Len(t, tasks, 1, "exhausted single-input must still probe to recover")
+	assert.Equal(t, 0, tasks[0].priority)
 }
 
 func TestCollectProbeIfNeeded_SkipsIfCooldownNotElapsed(t *testing.T) {

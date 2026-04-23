@@ -125,7 +125,20 @@ func (s *RTMPServer) deleteRelay(key string) {
 // handleConn drives a single TCP connection. It can be either a publisher
 // (encoder pushing a stream), an internal joy4 pull worker, or an external
 // play client served by the registered PlayFunc.
+//
+// recover guard: gomedia's AMF/chunk parser panics on malformed input from
+// untrusted RTMP peers (e.g. "unsupport amf type N"). One bad publisher would
+// otherwise crash the entire server. We log + close the connection instead.
 func (s *RTMPServer) handleConn(ctx context.Context, conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("rtmp server: connection handler panic recovered",
+				"remote", conn.RemoteAddr().String(),
+				"err", r,
+			)
+			_ = conn.Close()
+		}
+	}()
 	// connCtx is cancelled when this connection closes, stopping any play session.
 	connCtx, connCancel := context.WithCancel(ctx)
 	defer connCancel()

@@ -12,6 +12,7 @@ require (
 	github.com/nareix/joy4 v0.0.0-20200507095837-05a4ffbb5369
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
+	github.com/q191201771/lal v0.37.4
 	github.com/samber/do/v2 v2.0.0
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/spf13/viper v1.21.0
@@ -88,6 +89,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
+	github.com/q191201771/naza v0.30.48 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/samber/go-type-to-string v1.8.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.2 // indirect
