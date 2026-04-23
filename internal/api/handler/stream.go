@@ -27,29 +27,32 @@ type StreamHandler struct {
 }
 
 // streamResponse is the API representation of a stream.
-// It embeds the persisted domain.Stream (whose Status field is json:"-") and
-// overlays runtime-computed fields so clients always see the live state.
+// Persisted config from domain.Stream is embedded at top level; everything
+// runtime-computed (status, pipeline activity, input health, transcoder state)
+// lives under a single `runtime` envelope so clients have one root for live data.
 type streamResponse struct {
 	*domain.Stream
-	Status         domain.StreamStatus       `json:"status"`
-	PipelineActive bool                      `json:"pipeline_active"`
-	Runtime        *manager.RuntimeStatus    `json:"runtime,omitempty"`
-	Transcoder     *transcoder.RuntimeStatus `json:"transcoder,omitempty"`
+	Runtime manager.RuntimeStatus `json:"runtime"`
 }
 
 func (h *StreamHandler) withStatus(s *domain.Stream) streamResponse {
-	resp := streamResponse{
-		Stream: s,
-		Status: h.coordinator.StreamStatus(s.Code),
+	rt, registered := h.manager.RuntimeStatus(s.Code)
+	rt.Status = h.coordinator.StreamStatus(s.Code)
+	rt.PipelineActive = registered
+	if registered {
+		// Nest transcoder live state under the same envelope; keeps it from
+		// colliding with the persisted Stream.Transcoder config field on the
+		// same json tag.
+		if tc, ok := h.transcoder.RuntimeStatus(s.Code); ok {
+			rt.Transcoder = &tc
+		}
 	}
-	if rt, ok := h.manager.RuntimeStatus(s.Code); ok {
-		resp.PipelineActive = true
-		resp.Runtime = &rt
+	if rt.Inputs == nil {
+		// json marshals a nil slice as `null`; emit `[]` so the contract is
+		// stable for clients regardless of pipeline state.
+		rt.Inputs = []manager.InputHealthSnapshot{}
 	}
-	if tc, ok := h.transcoder.RuntimeStatus(s.Code); ok {
-		resp.Transcoder = &tc
-	}
-	return resp
+	return streamResponse{Stream: s, Runtime: rt}
 }
 
 // NewStreamHandler creates a StreamHandler and registers it with the DI injector.
@@ -94,7 +97,7 @@ func (h *StreamHandler) List(w http.ResponseWriter, r *http.Request) {
 	resp := make([]streamResponse, 0, len(streams))
 	for _, s := range streams {
 		sr := h.withStatus(s)
-		if statusFilter != nil && sr.Status != *statusFilter {
+		if statusFilter != nil && sr.Runtime.Status != *statusFilter {
 			continue
 		}
 		resp = append(resp, sr)

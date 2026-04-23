@@ -36,6 +36,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
 	"github.com/ntt0601zcoder/open-streamer/internal/ingestor"
 	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
+	"github.com/ntt0601zcoder/open-streamer/internal/transcoder"
 	"github.com/samber/do/v2"
 )
 
@@ -104,14 +105,27 @@ type streamState struct {
 	cancel context.CancelFunc
 }
 
-// RuntimeStatus is a JSON-safe snapshot of manager state for one stream.
+// RuntimeStatus is the single "runtime" envelope returned by the API for a
+// stream. Sub-systems contribute their own sections — manager owns input
+// health; transcoder owns per-profile state — but the API exposes one shape so
+// clients have a single root for all live data.
+//
+// Status and PipelineActive are populated by the API handler from the
+// coordinator (not by manager itself), so the envelope can be returned even
+// when no manager pipeline is registered (status will be "stopped" / "idle"
+// with PipelineActive=false). Transcoder is similarly populated by the
+// handler when an FFmpeg pipeline is running for this stream.
+//
 // Exhausted is true when every input has degraded and no failover candidate
 // remains — the stream is effectively offline at the source.
 type RuntimeStatus struct {
-	ActiveInputPriority   int                   `json:"active_input_priority"`
-	OverrideInputPriority *int                  `json:"override_input_priority,omitempty"`
-	Exhausted             bool                  `json:"exhausted"`
-	Inputs                []InputHealthSnapshot `json:"inputs"`
+	Status                domain.StreamStatus       `json:"status"`
+	PipelineActive        bool                      `json:"pipeline_active"`
+	ActiveInputPriority   int                       `json:"active_input_priority"`
+	OverrideInputPriority *int                      `json:"override_input_priority,omitempty"`
+	Exhausted             bool                      `json:"exhausted"`
+	Inputs                []InputHealthSnapshot     `json:"inputs"`
+	Transcoder            *transcoder.RuntimeStatus `json:"transcoder,omitempty"`
 }
 
 // InputHealthSnapshot is a serialisable copy of one input's health.

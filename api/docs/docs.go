@@ -1637,9 +1637,6 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
-                "pipeline_active": {
-                    "type": "boolean"
-                },
                 "protocols": {
                     "description": "Protocols defines which delivery protocols are opened for this stream.\nThe server opens a listener/packager for each enabled protocol.\nProtocol-level config (ports, segment duration, CDN URL) lives in server config.",
                     "allOf": [
@@ -1657,9 +1654,6 @@ const docTemplate = `{
                 },
                 "runtime": {
                     "$ref": "#/definitions/manager.RuntimeStatus"
-                },
-                "status": {
-                    "$ref": "#/definitions/domain.StreamStatus"
                 },
                 "stream_key": {
                     "description": "StreamKey is used to authenticate RTMP/SRT push ingest.",
@@ -1680,7 +1674,12 @@ const docTemplate = `{
                     ]
                 },
                 "transcoder": {
-                    "$ref": "#/definitions/transcoder.RuntimeStatus"
+                    "description": "Transcoder controls encoding/decoding settings.\nnil means no transcoding for this stream.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.TranscoderConfig"
+                        }
+                    ]
                 },
                 "watermark": {
                     "description": "Watermark is an optional text or image overlay applied before encoding.",
@@ -2889,6 +2888,15 @@ const docTemplate = `{
                 },
                 "override_input_priority": {
                     "type": "integer"
+                },
+                "pipeline_active": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "$ref": "#/definitions/domain.StreamStatus"
+                },
+                "transcoder": {
+                    "$ref": "#/definitions/transcoder.RuntimeStatus"
                 }
             }
         },

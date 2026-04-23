@@ -197,8 +197,6 @@ definitions:
         type: array
       name:
         type: string
-      pipeline_active:
-        type: boolean
       protocols:
         allOf:
         - $ref: '#/definitions/domain.OutputProtocols'
@@ -215,8 +213,6 @@ definitions:
         type: array
       runtime:
         $ref: '#/definitions/manager.RuntimeStatus'
-      status:
-        $ref: '#/definitions/domain.StreamStatus'
       stream_key:
         description: StreamKey is used to authenticate RTMP/SRT push ingest.
         type: string
@@ -230,7 +226,11 @@ definitions:
         description: Thumbnail controls periodic screenshot generation for preview
           images.
       transcoder:
-        $ref: '#/definitions/transcoder.RuntimeStatus'
+        allOf:
+        - $ref: '#/definitions/domain.TranscoderConfig'
+        description: |-
+          Transcoder controls encoding/decoding settings.
+          nil means no transcoding for this stream.
       watermark:
         allOf:
         - $ref: '#/definitions/domain.WatermarkConfig'
@@ -1210,6 +1210,12 @@ definitions:
         type: array
       override_input_priority:
         type: integer
+      pipeline_active:
+        type: boolean
+      status:
+        $ref: '#/definitions/domain.StreamStatus'
+      transcoder:
+        $ref: '#/definitions/transcoder.RuntimeStatus'
     type: object
   transcoder.ProfileSnapshot:
     properties:

@@ -4,7 +4,6 @@ package apidocs
 import (
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/manager"
-	"github.com/ntt0601zcoder/open-streamer/internal/transcoder"
 	"github.com/ntt0601zcoder/open-streamer/internal/vod"
 )
 
@@ -17,19 +16,19 @@ type ErrorBody struct {
 }
 
 // StreamResponse is the API representation of a stream returned by GET /streams
-// and GET /streams/{code}. It adds runtime-computed fields on top of the
-// persisted configuration:
+// and GET /streams/{code}. The persisted configuration is embedded at the top
+// level; everything runtime-computed lives under a single `runtime` envelope:
 //
-//   - runtime    — manager state: active input, per-input health + last 5 errors
-//   - transcoder — per-profile FFmpeg state: restart count + last 5 crash errors
+//   - runtime.status            — coordinator-resolved lifecycle state
+//   - runtime.pipeline_active   — true when the manager has registered a pipeline
+//   - runtime.inputs[]          — per-input health + last 5 degradation errors
+//   - runtime.transcoder        — per-profile FFmpeg state: restart count + last 5 crash errors
 //
-// Both `runtime` and `transcoder` are null until the pipeline is running.
+// `runtime` is always present (never null), even when the pipeline is not
+// running — clients can rely on it as a single root for all live data.
 type StreamResponse struct {
 	domain.Stream
-	Status         domain.StreamStatus       `json:"status"`
-	PipelineActive bool                      `json:"pipeline_active"`
-	Runtime        *manager.RuntimeStatus    `json:"runtime,omitempty"`
-	Transcoder     *transcoder.RuntimeStatus `json:"transcoder,omitempty"`
+	Runtime manager.RuntimeStatus `json:"runtime"`
 }
 
 // StreamData wraps a single stream response.
