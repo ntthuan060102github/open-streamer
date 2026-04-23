@@ -296,7 +296,7 @@ func TestBframesArgs(t *testing.T) {
 		enc  string
 		want []string
 	}{
-		{"nil → no flag (encoder default)", nil, "h264_nvenc", nil},
+		{"nil → defaults to 0 (live-stream convention; matches RTMP push composition_time=0)", nil, "h264_nvenc", []string{"-bf", "0"}},
 		{"explicit zero on NVENC → -bf 0 only", bf(0), "h264_nvenc", []string{"-bf", "0"}},
 		{"3 on NVENC → -bf 3 + b_ref_mode middle", bf(3), "h264_nvenc", []string{"-bf", "3", "-b_ref_mode", "middle"}},
 		{"3 on libx264 → -bf only (no b_ref_mode)", bf(3), "libx264", []string{"-bf", "3"}},

@@ -895,8 +895,9 @@ func TestScenario_InterlaceProgressive_SkipsFilter(t *testing.T) {
 
 func TestScenario_NewFields_NoneSet_NoExtraArgs(t *testing.T) {
 	t.Parallel()
-	// Backward-compat: a config with only the v0.0.5 fields must produce the
-	// same FFmpeg command as before (no -bf, no -refs, no setsar, no yadif).
+	// A config with only the v0.0.5 fields must produce a minimal FFmpeg
+	// command — no per-profile encoder tweaks beyond the implicit
+	// `-bf 0` default we now apply for live-stream / RTMP-push smoothness.
 	tc := &domain.TranscoderConfig{
 		Video: domain.VideoTranscodeConfig{},
 		Audio: domain.AudioTranscodeConfig{Copy: true},
@@ -905,9 +906,10 @@ func TestScenario_NewFields_NoneSet_NoExtraArgs(t *testing.T) {
 	args, err := buildFFmpegArgs(p, tc)
 	require.NoError(t, err)
 
-	require.Equal(t, "", argAfter(args, "-bf"))
+	// `-bf 0` is the implicit default — see bframesArgs doc comment for rationale.
+	require.Equal(t, "0", argAfter(args, "-bf"))
 	require.Equal(t, "", argAfter(args, "-refs"))
-	require.Equal(t, "", argAfter(args, "-b_ref_mode"))
+	require.Equal(t, "", argAfter(args, "-b_ref_mode"), "no b_ref_mode when bf=0")
 	vf := argAfter(args, "-vf")
 	require.NotContains(t, vf, "yadif")
 	require.NotContains(t, vf, "setsar")
