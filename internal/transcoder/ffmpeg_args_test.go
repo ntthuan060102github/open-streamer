@@ -201,9 +201,14 @@ func TestResizeFilter_Modes(t *testing.T) {
 			wantNot:  []string{"pad="},
 		},
 		{
-			name: "GPU NVENC pad → scale_cuda + pad_cuda",
+			name: "GPU NVENC pad → scale_cuda + pad_cuda (named params required)",
 			w:    1920, h: 1080, mode: "pad", hw: domain.HWAccelNVENC, enc: "h264_nvenc",
-			wantSubs: []string{"scale_cuda=1920:1080:", "pad_cuda=1920:1080:"},
+			// pad_cuda has no shorthand list, so positional `w:h:x:y` parses as
+			// one option name and FFmpeg fails with "No option name near ...".
+			wantSubs: []string{
+				"scale_cuda=1920:1080:",
+				"pad_cuda=w=1920:h=1080:x=(1920-iw)/2:y=(1080-ih)/2",
+			},
 		},
 		{
 			name: "GPU NVENC stretch",

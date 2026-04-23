@@ -241,7 +241,11 @@ func gpuResizeFilter(name string, w, h int, mode domain.ResizeMode) string {
 	case domain.ResizeModePad:
 		fallthrough
 	default:
-		return fmt.Sprintf("%s=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2,pad_cuda=%d:%d:(%d-iw)/2:(%d-ih)/2",
+		// pad_cuda has no shorthand option list — positional `w:h:x:y` is
+		// rejected with "No option name near ...". Named params (w=…:h=…:x=…:y=…)
+		// are required so each chunk has its own key. Centered offsets must
+		// stay as expressions because source dims are not known until runtime.
+		return fmt.Sprintf("%s=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2,pad_cuda=w=%d:h=%d:x=(%d-iw)/2:y=(%d-ih)/2",
 			name, w, h, w, h, w, h)
 	}
 }
