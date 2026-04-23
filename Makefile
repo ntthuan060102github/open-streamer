@@ -88,6 +88,10 @@ test: ## go test with race + shuffle
 test-norace: ## go test without -race (faster / constrained envs)
 	$(GO) test -shuffle=on -count=1 -timeout=5m ./...
 
+.PHONY: test-integration
+test-integration: ## Spawn real ffmpeg to validate generated args (auto-skips on missing ffmpeg / CUDA)
+	$(GO) test -tags integration -count=1 -timeout=3m -v ./internal/transcoder/...
+
 .PHONY: cover
 cover: ## Generate coverage.out and print total %
 	$(GO) test -race -shuffle=on -count=1 -timeout=5m -coverprofile=$(COVER_OUT) ./...
