@@ -99,3 +99,40 @@ func TestDecodeStreamBodyInvalidPriority(t *testing.T) {
 		t.Errorf("want INVALID_INPUT_PRIORITY, got %+v", vErr)
 	}
 }
+
+// Regression: shallow-copying cur into base aliased pointer fields like
+// Transcoder, so json.Decode on base mutated cur in-place and downstream
+// ComputeDiff(cur, body) reported no change. The fix deep-clones cur first.
+func TestDecodeStreamBodyDoesNotMutateExisting(t *testing.T) {
+	cur := &domain.Stream{
+		Code: "x",
+		Transcoder: &domain.TranscoderConfig{
+			Video: domain.VideoTranscodeConfig{
+				Profiles: []domain.VideoProfile{{Width: 1280, Height: 720, Bitrate: 2500}},
+			},
+			Audio: domain.AudioTranscodeConfig{Copy: true},
+		},
+	}
+	body := map[string]any{
+		"transcoder": map[string]any{
+			"video": map[string]any{
+				"copy":     false,
+				"profiles": []map[string]any{{"width": 1920, "height": 1080, "bitrate": 4500}},
+			},
+			"audio": map[string]any{"copy": true},
+		},
+	}
+	got, vErr := decodeBodyHelper(t, "x", cur, true, body)
+	if vErr != nil {
+		t.Fatalf(validationErrFmt, vErr)
+	}
+	if cur.Transcoder == got.Transcoder {
+		t.Fatal("cur.Transcoder and body.Transcoder must not share a pointer (deep clone failed)")
+	}
+	if cur.Transcoder.Video.Profiles[0].Width != 1280 {
+		t.Errorf("cur was mutated: got width %d, want 1280", cur.Transcoder.Video.Profiles[0].Width)
+	}
+	if got.Transcoder.Video.Profiles[0].Width != 1920 {
+		t.Errorf("body did not apply: got width %d, want 1920", got.Transcoder.Video.Profiles[0].Width)
+	}
+}

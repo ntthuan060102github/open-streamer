@@ -207,9 +207,21 @@ func decodeStreamBody(
 ) (*domain.Stream, *putValidationError) {
 	// Start from the existing stream so omitted fields keep their current values.
 	// For new streams, start from zero value.
+	//
+	// Deep-clone via JSON round-trip when merging onto an existing stream:
+	// `base = *cur` is a shallow copy, so pointer fields (Transcoder, DVR, Push
+	// items) would alias `cur`. json.Decode on `base` would then mutate `cur`
+	// in-place, and ComputeDiff(cur, body) downstream would see identical
+	// pointers and report no change — silently swallowing the update.
 	var base domain.Stream
 	if exists {
-		base = *cur
+		data, err := json.Marshal(cur)
+		if err != nil {
+			return nil, &putValidationError{code: "INVALID_BODY", message: "clone existing stream: " + err.Error()}
+		}
+		if err := json.Unmarshal(data, &base); err != nil {
+			return nil, &putValidationError{code: "INVALID_BODY", message: "clone existing stream: " + err.Error()}
+		}
 	}
 
 	// Unmarshal onto base — only fields present in the JSON are overwritten.
