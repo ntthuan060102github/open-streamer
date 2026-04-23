@@ -37,7 +37,7 @@ A high-availability live media server written in pure Go. Open Streamer ingests 
 - **Exponential-backoff reconnect** — pull workers reconnect automatically with configurable per-input backoff parameters
 - **Fan-out Buffer Hub** — single in-memory ring buffer per stream fans out to Transcoder, Publisher, and DVR concurrently; slow consumers drop packets, never block the writer
 - **ABR transcoding** — bounded FFmpeg worker pool with configurable profiles (resolution, bitrate, codec) and hardware acceleration (NVENC / VAAPI / VideoToolbox / QSV)
-- **FFmpeg crash recovery** — per-profile exponential-backoff restart; after `max_restarts` failures the stream is stopped and an alert event is published
+- **FFmpeg crash recovery** — per-profile exponential-backoff restart (2 s → 30 s cap), retried indefinitely so streams self-heal once the underlying issue resolves; per-profile last-5-errors history exposed via `runtime.transcoder.profiles[].errors[]`
 - **HLS publishing** — MPEG-TS segmenter + playlist generator; ABR master playlist with `#EXT-X-DISCONTINUITY` on failover
 - **DASH publishing** — fMP4 packager + dynamic MPD; ABR per-track sharding
 - **RTSP / RTMP / SRT serve** — shared listeners; streams selected by path (`/live/<code>`), RTMP app, or SRT streamid

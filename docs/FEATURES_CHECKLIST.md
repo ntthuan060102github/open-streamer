@@ -130,7 +130,7 @@ Legend for **Completion**:
 | RTSP play (H.264 + AAC) | Complete | Shared RTSP server (default :554) configured under `listeners.rtsp.port`; lazy stream mount after codec detection; clients use `rtsp://host:port/live/<code>` |
 | RTMP play | Complete | Shared port with ingest (default :1935) via play callback configured under `listeners.rtmp.port`; clients use `rtmp://host:port/live/<code>` |
 | SRT listen | Complete | Shared SRT listener (default :9999) configured under `listeners.srt.port`; per-client buffer subscriber; raw MPEG-TS output; clients use `srt://host:port?streamid=live/<code>` |
-| RTMP push out (re-stream to platform) | Complete | `rtmp://` (plain TCP) and `rtmps://` (TLS, default :443); FMLE handshake (`releaseStream` + `FCPublish`) for strict pops (YouTube/Twitch); waits for `NetStream.Publish.Start` status before sending media; queues + drops to next keyframe on reconnect; per-input discontinuity tear-down handled in publisher `feedLoop`; auto-reconnect with backoff |
+| RTMP push out (re-stream to platform) | Complete | `rtmp://` (plain TCP) and `rtmps://` (TLS, default :443); built on `q191201771/lal` PushSession (replaced `yapingcat/gomedia` to fix Flussonic AMF panic). lal Push() blocks until publish ack so no separate readyCh / pending queue. Codec adapter (`remux.AvPacket2RtmpRemuxer`) auto-extracts SPS/PPS + AAC ASC sequence headers from Annex-B / ADTS input. Per-input discontinuity tear-down handled in publisher `feedLoop`; auto-reconnect with backoff. |
 | Per-protocol independent context | Complete | Each output goroutine (`"hls"`, `"dash"`, `"rtsp"`, `"push:<url>"`) has its own cancel func inside `streamState.protocols` |
 | `UpdateProtocols(old, new)` | Complete | Only stops/starts protocols whose ON↔OFF state changed; connected RTSP/SRT viewers unaffected |
 | `RestartHLSDASH(stream)` | Complete | Restarts only HLS + DASH goroutines when ABR ladder count changes; RTSP/RTMP/SRT unaffected |
@@ -193,6 +193,21 @@ Legend for **Completion**:
 
 ---
 
+## Runtime Status & Observability
+
+All live state is exposed under `runtime.*` in `GET /streams/{code}` so the UI has one root for everything dynamic. Persisted config stays at the top level (`stream.transcoder`, `stream.push`, …); runtime overlay never collides.
+
+| Feature | Completion | Notes |
+| --------- | ------------ | ------- |
+| `runtime.status` + `runtime.pipeline_active` | Complete | Coordinator-resolved lifecycle state. Always present (even when stream is stopped/idle), populated by API handler. |
+| `runtime.inputs[].errors[]` | Complete | Last 5 degradation reasons per input (packet timeout, ingestor error, …) with timestamps; newest at index 0. Persists for the manager registration lifetime; cleared only on Stop. |
+| `runtime.transcoder.profiles[]` | Complete | Per-profile FFmpeg state: `restart_count`, `errors[]` (last 5 crashes with stderr-tail context). Updated on every restart attempt. |
+| `runtime.publisher.pushes[]` | Complete | Per-destination push state: `status` (starting / active / reconnecting / failed), `attempt`, `connected_at` (only when active), `errors[]` (last 5). On successful re-Active the errors list and `connected_at` reset. |
+| FFmpeg stderr tail in transcoder errors | Complete | `runOnce` keeps a ring of the last 8 warn-level stderr lines and embeds them in the returned error so `errors[].message` shows the actual cause ("No such filter: pad_cuda" etc.) instead of just "exit status 8". |
+| Build version stamping (`pkg/version`) | Complete | `Version`, `Commit`, `BuiltAt` injected at build time via Makefile ldflags / GitHub release workflow. Exposed via `GET /config.version`. |
+
+---
+
 ## Domain Extras (Not in Live Pipeline)
 
 | Feature | Completion | Notes |
@@ -200,6 +215,25 @@ Legend for **Completion**:
 | Watermark config on `Stream` | Schema only | Fields exist; not applied in transcoder graph |
 | Thumbnail config on `Stream` | Schema only | Fields exist; not generated alongside outputs |
 | `TranscodeMode` (passthrough / remux) | Complete | `transcoder.mode: passthrough/remux` bypasses FFmpeg entirely |
+
+---
+
+## Pending / Planned
+
+Tracking what is intentionally NOT done yet. Each row links to a plan file or
+captures the current decision context.
+
+| Priority | Feature | Status | Notes |
+| -------- | ------- | ------ | ----- |
+| High | `copy://<code>` ingest protocol | Planned | Design locked, see [PLAN_COPY_PROTOCOL.md](./PLAN_COPY_PROTOCOL.md). Re-stream another in-process stream's published output (raw or full ABR ladder). Implementation not started. |
+| High | RTMP ingest server lal migration | Pending | `internal/publisher/push_rtmp.go` already swapped (Phase 1). `internal/ingestor/push/rtmp_server.go` still on `yapingcat/gomedia` with a per-connection `recover()` guard against AMF panics. Phase 2 swaps it to lal `Server` for symmetric robustness. |
+| Medium | Per-rendition push selection | Discussed | `serveRTMPPush` always uses `PlaybackBufferID` (best rendition by resolution × bitrate). To push different rungs to different destinations, add `Rendition` field to `domain.PushDestination` and route via `pickPushBuffer(stream, dest.Rendition)`. ~50 LOC. |
+| Medium | Watermark | Schema only | Already in domain; needs FFmpeg `overlay`/`drawtext` injection in `buildVideoFilter`, and dynamic asset upload. |
+| Medium | Thumbnail | Schema only | Periodic JPEG snapshot from main buffer; needs ffmpeg `select=eq(pict_type\\,I)` chain or a dedicated TS demux + JPEG encode. |
+| Low | HLS / DASH push out | Not started | Only RTMP/RTMPS push exists. HLS push (live HTTP POST chunk upload) would target Akamai-style ingest. |
+| Low | WebRTC publish / play | Not started | Would add a Pion-based subsystem; large surface (SDP, ICE, DTLS-SRTP). |
+| Low | RTSP / SRT pull manual matrix verification | Untested | Code paths complete; manual playback matrix never run end-to-end. |
+| — | Auto-recovery scheduler at coordinator level | Decided NOT | Replaced by infinite per-module retry with backoff cap (transcoder retry forever, manager probe forever). No fatal callback, no `MaxRestarts`. Pipeline never tears down on crash. |
 
 ---
 
@@ -212,7 +246,12 @@ Legend for **Completion**:
 | Unit tests — ingestor dispatch + registry | Complete | |
 | Unit tests — pull readers (File, HTTP, UDP, RTMP packet parsing) | Complete | |
 | Unit tests — manager state machine | Complete | selectBest, collectTimeoutIfNeeded, collectProbeIfNeeded |
-| Unit tests — transcoder args construction | Complete | buildScaleFilter, normalizeVideoEncoder, gopFrames, audioEncodeArgs, MaxBitrate/Framerate/CodecProfile |
+| Unit tests — transcoder args construction | Complete | buildScaleFilter, normalizeVideoEncoder, gopFrames, audioEncodeArgs, MaxBitrate/Framerate/CodecProfile, gpuResizeFilter pad-always-CPU-roundtrip |
+| Unit tests — error history rings | Complete | `recordInputError` (manager), `recordProfileErrorEntry` (transcoder), `recordPushErrorEntry` (publisher) — ordering, cap, defensive snapshot copy |
+| Unit tests — runtime status snapshots | Complete | manager / transcoder / publisher RuntimeStatus shape, defensive copy, sort order, lazy init for push state, Active-clears-errors / leaving-Active-clears-connectedAt |
+| Unit tests — manager exhausted recovery regression | Complete | `TestCollectProbeIfNeeded_ProbesActiveWhenExhausted` — guards the bug where single-input streams stayed degraded forever after upstream restart |
+| Unit tests — stderr tail + ffmpeg cmdline formatter | Complete | `stderrTail` ring buffer + `formatFFmpegCmd` shell-pasteable rendering with proper quoting |
+| Integration tests — ffmpeg filter chain validation (`make test-integration`) | Complete | Build-tagged tests spawn real ffmpeg with the generated `-vf` chain and 1 lavfi frame. Auto-skips when ffmpeg / specific filters / CUDA device are missing. Catches version-specific syntax bugs that pass Go-level checks. |
 | Unit tests — publisher HLS segmenter | Complete | windowTailEntries, hlsCodecString, manifest generation, discontinuity, context cancel |
 | Unit tests — dvr playlist parsing | Complete | parsePlaylist (single/multi/disc/skip), loadIndex/saveIndex round-trip, atomic write |
 | Unit tests — coordinator diff engine | Complete | `TestComputeDiff_*` in `internal/coordinator/diff_test.go`; covers all 5 change categories |
@@ -263,7 +302,11 @@ Legend for **Completion**:
 - **DVR has no global enable/disable.** Each stream opt-in via `stream.dvr.enabled = true`.
 - **Failover timestamp jumps** produce `#EXT-X-DISCONTINUITY` in HLS and are logged at debug level from FFmpeg stderr.
 - **`PUT /streams/{code}` is non-disruptive** when the stream is running — only changed components are restarted.
+- **Pipeline never tears down on FFmpeg crash.** Each profile retries forever with backoff (2s → 30s cap). After 3 consecutive identical errors, logs drop to debug and events emit only on power-of-2 attempts. Restart count + last 5 errors stay visible via `runtime.transcoder.profiles[].errors`.
+- **Push to non-standard RTMP servers (Flussonic etc.)** uses `q191201771/lal` — production-tested against the AMF-extension panic that `yapingcat/gomedia` had. Ingest RTMP server still on gomedia (Phase 2 of lib swap pending) but with `recover()` guard to isolate per-connection panics.
+- **Build version** is stamped into the binary at compile time (`make build` runs `git describe --tags --always --dirty`); exposed via `GET /config.version`. Override with `make build VERSION=v1.2.3`.
+- **`build/reinstall.sh <tag>`** downloads + verifies + uninstalls + reinstalls a tagged release on Linux/systemd hosts. Data dir (`/var/lib/open-streamer`) preserved across version switches.
 
 ---
 
-*Updated 2026-04-23. Adds planned `copy://` ingest protocol (see [PLAN_COPY_PROTOCOL.md](./PLAN_COPY_PROTOCOL.md)). Previous note: hot-reload (coordinator.Update + diff engine), per-profile transcoder lifecycle, per-protocol publisher lifecycle, RTMP push-out hardened (FMLE handshake + RTMPS + publish.start gating), and integration test coverage.*
+*Updated 2026-04-23 (revision 2). Adds Runtime Status & Observability section (per-input/profile/push error history with timestamps, build version exposure), Pending/Planned section (consolidated decision context for what's intentionally not done), updated push out notes (lal swap), updated test list (error history rings, runtime snapshots, exhausted-recovery regression, ffmpeg integration filter validation). Previous notes: hot-reload (coordinator.Update + diff engine), per-profile transcoder lifecycle, per-protocol publisher lifecycle, planned `copy://` ingest protocol (see [PLAN_COPY_PROTOCOL.md](./PLAN_COPY_PROTOCOL.md)).*

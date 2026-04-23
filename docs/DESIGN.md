@@ -164,7 +164,7 @@ The coordinator talks to each service through a narrow interface:
 
 ```go
 type mgrDep interface { IsRegistered, Register, Unregister, UpdateInputs, UpdateBufferWriteID, ... }
-type tcDep  interface { Start, Stop, StopProfile, StartProfile, SetFatalCallback }
+type tcDep  interface { Start, Stop, StopProfile, StartProfile }
 type pubDep interface { Start, Stop, UpdateProtocols, RestartHLSDASH, UpdateABRMasterMeta }
 type dvrDep interface { IsRecording, StartRecording, StopRecording }
 ```
