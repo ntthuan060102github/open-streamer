@@ -6,6 +6,8 @@ definitions:
         items:
           $ref: '#/definitions/domain.AudioCodec'
         type: array
+      global_config:
+        $ref: '#/definitions/domain.GlobalConfig'
       hw_accels:
         items:
           $ref: '#/definitions/domain.HWAccel'
@@ -14,10 +16,14 @@ definitions:
         items:
           type: string
         type: array
+      ports:
+        $ref: '#/definitions/apidocs.ConfigPorts'
       stream_statuses:
         items:
           $ref: '#/definitions/domain.StreamStatus'
         type: array
+      version:
+        $ref: '#/definitions/version.Info'
       video_codecs:
         items:
           $ref: '#/definitions/domain.VideoCodec'
@@ -1231,6 +1237,15 @@ definitions:
         items:
           $ref: '#/definitions/transcoder.ProfileSnapshot'
         type: array
+    type: object
+  version.Info:
+    properties:
+      built_at:
+        type: string
+      commit:
+        type: string
+      version:
+        type: string
     type: object
   vod.FileEntry:
     properties:

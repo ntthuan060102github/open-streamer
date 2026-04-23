@@ -5,6 +5,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/manager"
 	"github.com/ntt0601zcoder/open-streamer/internal/vod"
+	"github.com/ntt0601zcoder/open-streamer/pkg/version"
 )
 
 // ErrorBody matches handler writeError JSON shape.
@@ -70,6 +71,7 @@ type InputSwitchRequest struct {
 
 // ConfigData wraps the GET /config response.
 type ConfigData struct {
+	Version            version.Info               `json:"version"`
 	HWAccels           []domain.HWAccel           `json:"hw_accels"`
 	VideoCodecs        []domain.VideoCodec        `json:"video_codecs"`
 	AudioCodecs        []domain.AudioCodec        `json:"audio_codecs"`
@@ -77,6 +79,8 @@ type ConfigData struct {
 	StreamStatuses     []domain.StreamStatus      `json:"stream_statuses"`
 	WatermarkTypes     []domain.WatermarkType     `json:"watermark_types"`
 	WatermarkPositions []domain.WatermarkPosition `json:"watermark_positions"`
+	Ports              ConfigPorts                `json:"ports"`
+	GlobalConfig       *domain.GlobalConfig       `json:"global_config"`
 }
 
 // ConfigUpdateResponse wraps the POST /config response.

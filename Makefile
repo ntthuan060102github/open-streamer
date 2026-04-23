@@ -28,18 +28,31 @@ all: tidy vet build test ## tidy, vet, build, test (race)
 
 # --- build & run ---
 
+# --- version stamping ---
+# Injected into pkg/version at build time. CI workflows can override
+# VERSION (e.g. VERSION=v0.0.7 make build) to stamp release tags;
+# local builds default to `git describe` + short SHA fallback.
+VERSION_PKG := github.com/ntt0601zcoder/open-streamer/pkg/version
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILT_AT    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS     ?= -s -w \
+               -X $(VERSION_PKG).Version=$(VERSION) \
+               -X $(VERSION_PKG).Commit=$(COMMIT) \
+               -X $(VERSION_PKG).BuiltAt=$(BUILT_AT)
+
 .PHONY: build
-build: ## Compile server binary to $(BIN_DIR)/$(BIN_NAME)
+build: ## Compile server binary to $(BIN_DIR)/$(BIN_NAME) with version stamping
 	@mkdir -p $(BIN_DIR)
-	$(GO) build $(GOFLAGS) -o $(BIN_DIR)/$(BIN_NAME) $(MAIN_PKG)
+	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(BIN_NAME) $(MAIN_PKG)
 
 .PHONY: run
 run: ## Run server without building a persistent binary
 	$(GO) run $(GOFLAGS) $(MAIN_PKG)
 
 .PHONY: install
-install: ## Install server binary to $$GOBIN or $$GOPATH/bin
-	$(GO) install $(GOFLAGS) $(MAIN_PKG)
+install: ## Install server binary to $$GOBIN or $$GOPATH/bin (with version stamping)
+	$(GO) install $(GOFLAGS) -ldflags="$(LDFLAGS)" $(MAIN_PKG)
 
 # --- quality ---
 
@@ -49,7 +62,7 @@ generate: ## Run go generate (e.g. Swagger from swag annotations)
 
 .PHONY: swagger
 swagger: ## Regenerate api/docs (OpenAPI 2) via swag; run from repo root
-	cd cmd/server && $(GO) run github.com/swaggo/swag/cmd/swag@latest init -g doc_swagger.go -o ../../api/docs --parseGoList=false -d .,../../internal/api,../../internal/api/handler,../../internal/api/apidocs,../../internal/domain,../../internal/manager,../../internal/transcoder,../../internal/vod,../../config
+	cd cmd/server && $(GO) run github.com/swaggo/swag/cmd/swag@latest init -g doc_swagger.go -o ../../api/docs --parseGoList=false -d .,../../internal/api,../../internal/api/handler,../../internal/api/apidocs,../../internal/domain,../../internal/manager,../../internal/transcoder,../../internal/vod,../../config,../../pkg/version
 
 .PHONY: tidy
 tidy: ## go mod tidy

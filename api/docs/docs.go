@@ -1348,6 +1348,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/domain.AudioCodec"
                     }
                 },
+                "global_config": {
+                    "$ref": "#/definitions/domain.GlobalConfig"
+                },
                 "hw_accels": {
                     "type": "array",
                     "items": {
@@ -1360,11 +1363,17 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "ports": {
+                    "$ref": "#/definitions/apidocs.ConfigPorts"
+                },
                 "stream_statuses": {
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/domain.StreamStatus"
                     }
+                },
+                "version": {
+                    "$ref": "#/definitions/version.Info"
                 },
                 "video_codecs": {
                     "type": "array",
@@ -2925,6 +2934,20 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/transcoder.ProfileSnapshot"
                     }
+                }
+            }
+        },
+        "version.Info": {
+            "type": "object",
+            "properties": {
+                "built_at": {
+                    "type": "string"
+                },
+                "commit": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
                 }
             }
         },

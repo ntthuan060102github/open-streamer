@@ -10,6 +10,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/hwdetect"
 	"github.com/ntt0601zcoder/open-streamer/internal/store"
 	"github.com/ntt0601zcoder/open-streamer/internal/vod"
+	"github.com/ntt0601zcoder/open-streamer/pkg/version"
 	"github.com/samber/do/v2"
 )
 
@@ -40,6 +41,7 @@ type publisherPorts struct {
 
 // configResponse is the payload returned by GET /config.
 type configResponse struct {
+	Version            version.Info               `json:"version"`
 	HWAccels           []domain.HWAccel           `json:"hw_accels"`
 	VideoCodecs        []domain.VideoCodec        `json:"video_codecs"`
 	AudioCodecs        []domain.AudioCodec        `json:"audio_codecs"`
@@ -114,6 +116,7 @@ func portsFromConfig(gcfg *domain.GlobalConfig) publisherPorts {
 func (h *ConfigHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 	gcfg := h.rtm.CurrentConfig()
 	resp := configResponse{
+		Version:  version.Get(),
 		HWAccels: hwdetect.Available(),
 		VideoCodecs: []domain.VideoCodec{
 			domain.VideoCodecH264,
