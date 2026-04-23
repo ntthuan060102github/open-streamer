@@ -131,22 +131,32 @@ func TestBuildFFmpegArgs_NilTranscoderConfig(t *testing.T) {
 func TestBuildScaleFilter(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
+		name    string
 		w, h    int
+		hw      domain.HWAccel
+		enc     string
 		wantPfx string
 		wantNil bool
 	}{
-		{0, 0, "", true},
-		{1280, 720, "scale=1280:720:", false},
-		{1280, 0, "scale=1280:-2:", false},
-		{0, 720, "scale=-2:720:", false},
+		{"zero dims → empty", 0, 0, domain.HWAccelNone, "libx264", "", true},
+		{"CPU both dims", 1280, 720, domain.HWAccelNone, "libx264", "scale=1280:720:", false},
+		{"CPU width only", 1280, 0, domain.HWAccelNone, "libx264", "scale=1280:-2:", false},
+		{"CPU height only", 0, 720, domain.HWAccelNone, "libx264", "scale=-2:720:", false},
+		{"NVENC both dims → scale_cuda", 1280, 720, domain.HWAccelNVENC, "h264_nvenc", "scale_cuda=1280:720:", false},
+		{"NVENC + CPU encoder mismatch → CPU scale", 1280, 720, domain.HWAccelNVENC, "libx264", "scale=1280:720:", false},
+		{"VAAPI both dims → scale_vaapi", 1920, 1080, domain.HWAccelVAAPI, "h264_vaapi", "scale_vaapi=1920:1080:", false},
+		{"QSV both dims → scale_qsv", 1280, 720, domain.HWAccelQSV, "h264_qsv", "scale_qsv=1280:720:", false},
+		{"VideoToolbox falls back to CPU scale", 1280, 720, domain.HWAccelVideoToolbox, "h264_videotoolbox", "scale=1280:720:", false},
 	}
 	for _, tt := range tests {
-		got := buildScaleFilter(tt.w, tt.h)
-		if tt.wantNil {
-			require.Empty(t, got)
-		} else {
-			require.Contains(t, got, tt.wantPfx)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildScaleFilter(tt.w, tt.h, tt.hw, tt.enc)
+			if tt.wantNil {
+				require.Empty(t, got)
+			} else {
+				require.Contains(t, got, tt.wantPfx)
+			}
+		})
 	}
 }
 

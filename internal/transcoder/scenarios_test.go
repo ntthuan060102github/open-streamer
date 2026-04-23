@@ -343,13 +343,14 @@ func TestScenario_MultipleProfiles_OnlyFirstUsed(t *testing.T) {
 		"only profiles[0].Bitrate should appear")
 	require.Equal(t, "p5", argAfter(args, "-preset"))
 	vf := argAfter(args, "-vf")
-	require.Contains(t, vf, "scale=1920:1080:")
+	// HW=nvenc → GPU scale filter, not CPU `scale=`.
+	require.Contains(t, vf, "scale_cuda=1920:1080:")
 
 	joined := strings.Join(args, " ")
 	require.NotContains(t, joined, "2500k", "profiles[1] bitrate must not appear")
 	require.NotContains(t, joined, "1200k", "profiles[2] bitrate must not appear")
-	require.NotContains(t, joined, "scale=1280:", "profiles[1] scale must not appear")
-	require.NotContains(t, joined, "scale=854:", "profiles[2] scale must not appear")
+	require.NotContains(t, joined, "scale_cuda=1280:", "profiles[1] scale must not appear")
+	require.NotContains(t, joined, "scale_cuda=854:", "profiles[2] scale must not appear")
 }
 
 // KeyframeInterval × Framerate → GOP (no Global.GOP).
@@ -485,4 +486,217 @@ func TestScenario_MapFlagsAllowMissingStreams(t *testing.T) {
 	maps := allArgsAfter(args, "-map")
 	require.Contains(t, maps, "0:v:0?")
 	require.Contains(t, maps, "0:a:0?")
+}
+
+// ── Full-GPU pipeline contract ──────────────────────────────────────────────
+//
+// When user picks a HW backend AND the resolved encoder belongs to that
+// backend, decode + scale + encode must all stay in VRAM. Mixing CPU decode
+// with GPU encode burns PCIe bandwidth on every frame and adds latency.
+//
+// hwInputArgs flags must appear BEFORE -i, scale must use the GPU filter, and
+// the encoder must match the backend.
+
+// inputIdx returns the position of `-i` so we can assert that hwaccel flags
+// appear before it (input options vs output options ordering matters).
+func inputIdx(t *testing.T, args []string) int {
+	t.Helper()
+	i := indexOf(args, "-i")
+	require.Greater(t, i, 0, "missing -i")
+	return i
+}
+
+func TestScenario_NVENC_FullGPUPipeline(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelNVENC},
+	}
+	p := []Profile{{Width: 1280, Height: 720, Bitrate: "2500k"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+
+	// 1. hwaccel flags must appear before -i (input option, not output option).
+	hwIdx := indexOf(args, "-hwaccel")
+	require.Greater(t, hwIdx, -1, "must emit -hwaccel for NVENC")
+	require.Equal(t, "cuda", args[hwIdx+1])
+	require.Less(t, hwIdx, inputIdx(t, args), "-hwaccel must precede -i")
+
+	// 2. Output format must be cuda so decoder produces VRAM frames.
+	hwOutIdx := indexOf(args, "-hwaccel_output_format")
+	require.Greater(t, hwOutIdx, -1, "must emit -hwaccel_output_format")
+	require.Equal(t, "cuda", args[hwOutIdx+1])
+	require.Less(t, hwOutIdx, inputIdx(t, args), "-hwaccel_output_format must precede -i")
+
+	// 3. Scale stays on GPU.
+	vf := argAfter(args, "-vf")
+	require.Contains(t, vf, "scale_cuda=1280:720:",
+		"scale must use scale_cuda to keep frames in VRAM")
+	require.Contains(t, vf, "force_divisible_by=2",
+		"GPU scaler needs even dims for NVENC")
+
+	// 4. CPU scale chain must NOT appear anywhere.
+	require.NotContains(t, strings.Join(args, " "), "pad=ceil(iw/2)",
+		"no CPU pad chain when on GPU pipeline")
+
+	// 5. Encoder is GPU.
+	require.Equal(t, "h264_nvenc", argAfter(args, "-c:v"))
+}
+
+// HEVC variant — must produce hevc_nvenc + scale_cuda + cuda hwaccel.
+func TestScenario_NVENC_HEVC_FullGPUPipeline(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelNVENC},
+	}
+	p := []Profile{{Width: 1920, Height: 1080, Bitrate: "3500k", Codec: "h265"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+	require.Equal(t, "cuda", argAfter(args, "-hwaccel"))
+	require.Equal(t, "cuda", argAfter(args, "-hwaccel_output_format"))
+	require.Contains(t, argAfter(args, "-vf"), "scale_cuda=1920:1080:")
+	require.Equal(t, "hevc_nvenc", argAfter(args, "-c:v"))
+}
+
+// Bug #2 partner: explicit codec=libx264 with HW=nvenc must NOT enable
+// hwaccel, because libx264 cannot read CUDA frames — FFmpeg would crash.
+// This is the safety valve when an operator wants CPU encode despite a GPU
+// being present (e.g. quality testing).
+func TestScenario_NVENC_ExplicitLibx264_KeepsCPUPipeline(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelNVENC},
+	}
+	// "h264_videotoolbox" or other codecs that include "264" pass through
+	// normalizeVideoEncoder verbatim. Use libx264 explicitly.
+	p := []Profile{{
+		Width: 1280, Height: 720, Bitrate: "2500k",
+		Codec: "libx264", Preset: "veryfast",
+	}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+
+	require.Equal(t, "libx264", argAfter(args, "-c:v"))
+	require.NotContains(t, args, "-hwaccel",
+		"explicit CPU encoder + HW=nvenc must NOT emit hwaccel — libx264 cannot read CUDA frames")
+	require.NotContains(t, args, "-hwaccel_output_format")
+	vf := argAfter(args, "-vf")
+	require.Contains(t, vf, "scale=1280:720:",
+		"CPU encoder requires CPU scale (scale_cuda would output GPU frames libx264 cannot consume)")
+	require.NotContains(t, vf, "scale_cuda")
+}
+
+// video.copy=true → no decode → hwaccel is wasted init, must NOT be emitted.
+func TestScenario_NVENC_VideoCopy_NoHWAccel(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{Copy: true},
+		Audio:  domain.AudioTranscodeConfig{Codec: domain.AudioCodecAAC, Bitrate: 128},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelNVENC},
+	}
+	args, err := buildFFmpegArgs([]Profile{{Bitrate: "ignored"}}, tc)
+	require.NoError(t, err)
+	require.NotContains(t, args, "-hwaccel",
+		"video.copy=true skips decode — hwaccel context init is wasted")
+	require.Equal(t, "copy", argAfter(args, "-c:v"))
+	require.Equal(t, "aac", argAfter(args, "-c:a"))
+}
+
+// HW=none → CPU pipeline, no hwaccel flags ever.
+func TestScenario_NoHW_NoHWAccelFlags(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelNone},
+	}
+	p := []Profile{{Width: 1280, Height: 720, Bitrate: "2500k"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+	require.NotContains(t, args, "-hwaccel")
+	require.NotContains(t, args, "-hwaccel_output_format")
+	require.Equal(t, "libx264", argAfter(args, "-c:v"))
+}
+
+// VAAPI parallel: same full-GPU contract.
+func TestScenario_VAAPI_FullGPUPipeline(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelVAAPI},
+	}
+	p := []Profile{{Width: 1280, Height: 720, Bitrate: "2500k", Codec: "h264_vaapi"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+	require.Equal(t, "vaapi", argAfter(args, "-hwaccel"))
+	require.Equal(t, "vaapi", argAfter(args, "-hwaccel_output_format"))
+	require.Contains(t, argAfter(args, "-vf"), "scale_vaapi=1280:720:")
+	require.Equal(t, "h264_vaapi", argAfter(args, "-c:v"))
+}
+
+// QSV parallel: same full-GPU contract.
+func TestScenario_QSV_FullGPUPipeline(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelQSV},
+	}
+	p := []Profile{{Width: 1280, Height: 720, Bitrate: "2500k", Codec: "h264_qsv"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+	require.Equal(t, "qsv", argAfter(args, "-hwaccel"))
+	require.Equal(t, "qsv", argAfter(args, "-hwaccel_output_format"))
+	require.Contains(t, argAfter(args, "-vf"), "scale_qsv=1280:720:")
+	require.Equal(t, "h264_qsv", argAfter(args, "-c:v"))
+}
+
+// VideoToolbox: hwaccel emitted (no _output_format), but scale stays CPU
+// because there's no widely-supported scale_videotoolbox filter — VT decoder
+// auto-downloads frames for CPU filters.
+func TestScenario_VideoToolbox_HWAccelButCPUScale(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelVideoToolbox},
+	}
+	p := []Profile{{Width: 1280, Height: 720, Bitrate: "2500k", Codec: "h264_videotoolbox"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+	require.Equal(t, "videotoolbox", argAfter(args, "-hwaccel"))
+	require.NotContains(t, args, "-hwaccel_output_format",
+		"VT auto-maps frames; output_format would force a specific surface type")
+	require.Contains(t, argAfter(args, "-vf"), "scale=1280:720:",
+		"no scale_videotoolbox filter; CPU scale + auto-download is the working chain")
+}
+
+// Order contract: hwaccel block must precede -f mpegts -i pipe:0. FFmpeg
+// treats flags before -i as input options, after as output options.
+func TestScenario_NVENC_HWAccelOrderingBeforeInput(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{
+		Video:  domain.VideoTranscodeConfig{},
+		Audio:  domain.AudioTranscodeConfig{Copy: true},
+		Global: domain.TranscoderGlobalConfig{HW: domain.HWAccelNVENC},
+	}
+	p := []Profile{{Width: 1920, Height: 1080, Bitrate: "4500k"}}
+	args, err := buildFFmpegArgs(p, tc)
+	require.NoError(t, err)
+
+	iIdx := inputIdx(t, args)
+	for _, flag := range []string{"-hwaccel", "-hwaccel_output_format"} {
+		idx := indexOf(args, flag)
+		require.Greater(t, idx, -1, "missing %s", flag)
+		require.Less(t, idx, iIdx, "%s must come before -i", flag)
+	}
+	// And -c:v must come after -i (output option).
+	cvIdx := indexOf(args, "-c:v")
+	require.Greater(t, cvIdx, iIdx, "-c:v must come after -i")
 }
