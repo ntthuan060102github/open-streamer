@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -99,6 +100,11 @@ func (h *VODHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_STORAGE", err.Error())
 		return
 	}
+	if err := ensureMountStorageWritable(mount.Storage); err != nil {
+		writeError(w, http.StatusBadRequest, "STORAGE_NOT_WRITABLE",
+			"vod mount storage is not writable by the service: "+err.Error())
+		return
+	}
 	if _, err := h.repo.FindByName(r.Context(), mount.Name); err == nil {
 		writeError(w, http.StatusConflict, "ALREADY_EXISTS", "vod mount already exists")
 		return
@@ -163,6 +169,11 @@ func (h *VODHandler) Update(w http.ResponseWriter, r *http.Request) {
 	mount.Name = name
 	if err := mount.ValidateStorage(); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_STORAGE", err.Error())
+		return
+	}
+	if err := ensureMountStorageWritable(mount.Storage); err != nil {
+		writeError(w, http.StatusBadRequest, "STORAGE_NOT_WRITABLE",
+			"vod mount storage is not writable by the service: "+err.Error())
 		return
 	}
 	if err := h.repo.Save(r.Context(), &mount); err != nil {
@@ -454,4 +465,30 @@ func writeUploadAtomic(dst string, src io.Reader) (int64, error) {
 		return 0, err
 	}
 	return written, nil
+}
+
+// ensureMountStorageWritable guarantees the mount's storage path exists and is
+// writable by the running service. Behaviour:
+//
+//  1. MkdirAll(path, 0o755) — creates the directory tree if missing. No-op
+//     when the directory already exists (regardless of its actual perms).
+//  2. Write probe — creates a sentinel file inside the directory and removes
+//     it. This catches the common "directory pre-created by root, service
+//     runs as a different user" case that MkdirAll silently swallows.
+//
+// Returning a clear error here lets the API surface a descriptive 400 at
+// mount-creation time, instead of failing per-upload later with a confusing
+// "permission denied" deep in the file pipeline.
+func ensureMountStorageWritable(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+	probe, err := os.CreateTemp(path, ".open-streamer-write-probe-*")
+	if err != nil {
+		return fmt.Errorf("write probe: %w", err)
+	}
+	probeName := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(probeName)
+	return nil
 }
