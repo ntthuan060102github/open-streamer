@@ -408,6 +408,11 @@ func (s *Service) logStderr(streamID domain.StreamCode, profile string, r io.Rea
 			continue
 		}
 		// H.264 decoder / demuxer noise: probe gaps, segment joins, B-frame reorder, MMCO.
+		// "Invalid timestamps" is mpegts-muxer noise: input has DTS > PTS or
+		// non-monotonic PTS (common with re-muxed Wowza/Flussonic upstreams
+		// or weird B-frame structures); muxer self-corrects, output stays
+		// valid. Without this filter the warn-level spam is one line per
+		// affected packet (30/sec for 30fps).
 		if strings.Contains(line, "non-existing PPS") ||
 			strings.Contains(line, "no frame!") ||
 			strings.Contains(line, "error while decoding MB") ||
@@ -417,7 +422,8 @@ func (s *Service) logStderr(streamID domain.StreamCode, profile string, r io.Rea
 			strings.Contains(line, "co located POCs unavailable") ||
 			strings.Contains(line, "mmco: unref short failure") ||
 			strings.Contains(line, "reference picture missing during reorder") ||
-			strings.Contains(line, "Missing reference picture") {
+			strings.Contains(line, "Missing reference picture") ||
+			strings.Contains(line, "Invalid timestamps") {
 			slog.Debug("transcoder: ffmpeg stderr", "stream_code", streamID, "profile", profile, "msg", line)
 			continue
 		}
