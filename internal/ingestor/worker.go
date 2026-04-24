@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
@@ -235,7 +236,22 @@ func minDur(a, b time.Duration) time.Duration {
 }
 
 func shouldFailoverImmediately(err error) bool {
-	m := httpStatusPattern.FindStringSubmatch(err.Error())
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// TLS / x509 / DNS — source-side configuration errors that won't
+	// recover by reconnect. Without this branch the worker spins in the
+	// reconnect loop forever, manager never sees the input as degraded,
+	// and failover to a backup input never fires (e.g. an HLS source with
+	// an untrusted CA cert: previously cycled "fetch failed, retrying"
+	// every few seconds without surfacing as an input error).
+	if strings.Contains(msg, "x509:") ||
+		strings.Contains(msg, "tls:") ||
+		strings.Contains(msg, "no such host") {
+		return true
+	}
+	m := httpStatusPattern.FindStringSubmatch(msg)
 	if len(m) != 2 {
 		return false
 	}

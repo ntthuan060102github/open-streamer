@@ -21,6 +21,8 @@ package pull
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +79,41 @@ func (e *httpStatusErr) isPermanent() bool {
 		http.StatusForbidden, // 403
 		http.StatusNotFound,  // 404
 		http.StatusGone:      // 410
+		return true
+	}
+	return false
+}
+
+// isPermanentTransportError reports whether a non-HTTP-status error from the
+// playlist or segment fetch is fundamentally unrecoverable by retrying. TLS
+// certificate failures (untrusted CA, hostname mismatch, expired cert) and
+// DNS hostname-not-found are configuration / source-side problems that won't
+// fix themselves in a few hundred milliseconds — burning 5 retries on them
+// just delays the failover to the backup input.
+func isPermanentTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// errors.As-style detection on standard library types.
+	var unkAuth x509.UnknownAuthorityError
+	if errors.As(err, &unkAuth) {
+		return true
+	}
+	var hostErr x509.HostnameError
+	if errors.As(err, &hostErr) {
+		return true
+	}
+	var certInvalid x509.CertificateInvalidError
+	if errors.As(err, &certInvalid) {
+		return true
+	}
+	// Fallback: substring match catches other tls/x509 wrappers + dns.
+	// Net/http often wraps these in url.Error or *tls.PermanentError without
+	// re-exporting a type that errors.As can match cleanly.
+	msg := err.Error()
+	if strings.Contains(msg, "x509:") ||
+		strings.Contains(msg, "tls:") ||
+		strings.Contains(msg, "no such host") {
 		return true
 	}
 	return false
@@ -162,8 +199,18 @@ func (r *HLSReader) Open(ctx context.Context) error {
 		segTimeout = hlsDefaultSegmentTimeout
 	}
 
-	r.plClient = &http.Client{Timeout: plTimeout}
-	r.segClient = &http.Client{Timeout: segTimeout}
+	// Build a shared transport so playlist + segment clients pick up the
+	// same TLS policy. Default uses Go's secure defaults; the operator can
+	// opt out via input.net.insecure_tls = true (e.g. self-signed source on
+	// a trusted private network — Vietnamese TV CDN often expired certs).
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if r.input.Net.InsecureTLS {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // operator-opted-in for sources on trusted networks
+		slog.Warn("hls reader: TLS verification disabled per input.net.insecure_tls",
+			"url", r.input.URL)
+	}
+	r.plClient = &http.Client{Timeout: plTimeout, Transport: transport}
+	r.segClient = &http.Client{Timeout: segTimeout, Transport: transport}
 
 	// Fresh channel and once per Open() call so the previous poll goroutine's
 	// deferred close(out) cannot race with this new goroutine's close.
@@ -321,6 +368,12 @@ func (r *HLSReader) fetchPlaylistWithRetry(ctx context.Context, mediaURL *string
 			// fail immediately so the caller can trigger failover without delay.
 			var he *httpStatusErr
 			if errors.As(err, &he) && he.isPermanent() {
+				return nil, err
+			}
+			// TLS / x509 / DNS errors are configuration-side and won't fix
+			// themselves — short-circuit so the caller fails over instead of
+			// burning the full retry budget on doomed attempts.
+			if isPermanentTransportError(err) {
 				return nil, err
 			}
 			lastErr = err

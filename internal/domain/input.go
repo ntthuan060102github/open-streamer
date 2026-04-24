@@ -77,4 +77,11 @@ type InputNetConfig struct {
 
 	// MaxReconnects is the total number of reconnect attempts (0 = unlimited).
 	MaxReconnects int `json:"max_reconnects,omitempty" yaml:"max_reconnects,omitempty"`
+
+	// InsecureTLS disables TLS certificate verification for HTTPS pulls
+	// (HLS playlist + segment GETs). Default false — leave secure-by-default
+	// for production. Use only when the source uses a self-signed,
+	// expired, or otherwise-invalid certificate that you trust at the
+	// network level (private VLAN, fixed IP allowlist).
+	InsecureTLS bool `json:"insecure_tls,omitempty" yaml:"insecure_tls,omitempty"`
 }
