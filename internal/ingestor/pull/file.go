@@ -207,9 +207,20 @@ type mp4Handler struct {
 	vset bool
 	aset bool
 
+	// Continuous-PTS state. On loop reset, ptsOffset jumps forward by the
+	// duration of the just-finished iteration so the new iteration's
+	// timestamps continue monotonically from where the previous one ended —
+	// downstream (transcoder, HLS segmenter, RTMP play, RTSP) sees one
+	// seamless stream instead of a PTS-rewind discontinuity that would
+	// stall output for several seconds while consumers re-sync.
+	ptsOffset    uint64 // added to every (pts, dts) before muxing (ms)
+	maxDtsSeen   uint64 // largest DTS observed in current iteration (raw, pre-offset)
+	firstDtsSeen uint64 // first DTS observed in current iteration (raw)
+	hasFirstDts  bool
+
 	// real-time pacing: emit at original media rate
 	paceOnce bool
-	paceRef  uint64    // DTS of first packet (ms)
+	paceRef  uint64    // adjusted DTS of first packet (ms)
 	paceAt   time.Time // wall-clock of first packet
 }
 
@@ -245,12 +256,34 @@ func (h *mp4Handler) reset() error {
 	}
 	h.demux = dmx
 	h.queue = h.queue[:0]
-	h.vpid, h.apid = 0, 0
-	h.vset, h.aset = false, false
+	// Advance ptsOffset to keep the output timeline monotonically increasing
+	// across the loop boundary. Each new iteration's packet (pts+offset)
+	// continues right after the previous iteration's last packet — no
+	// discontinuity, no downstream re-sync gap.
+	if h.hasFirstDts {
+		h.ptsOffset += (h.maxDtsSeen - h.firstDtsSeen) + loopFrameAdvanceMs
+	}
+	h.maxDtsSeen = 0
+	h.firstDtsSeen = 0
+	h.hasFirstDts = false
+	// Keep vpid/apid + vset/aset across loops: same TSMuxer, same PIDs →
+	// downstream consumers don't see a stream-shape change. Resetting them
+	// would make AddStream allocate fresh PIDs and break the continuity.
 	h.paceOnce = false
-	slog.Info("file reader: mp4 loop reset", "path", h.path, "took_ms", time.Since(start).Milliseconds())
+	slog.Info("file reader: mp4 loop reset",
+		"path", h.path,
+		"took_ms", time.Since(start).Milliseconds(),
+		"new_pts_offset_ms", h.ptsOffset,
+	)
 	return nil
 }
+
+// loopFrameAdvanceMs is the synthetic gap inserted between the last frame
+// of one loop iteration and the first frame of the next. Picked to be
+// larger than a typical inter-frame interval (~16-40ms at 25-60fps) so
+// PTS strictly increases without overlap, but small enough to be invisible
+// in playback.
+const loopFrameAdvanceMs = 40
 
 func (h *mp4Handler) read(ctx context.Context) ([]byte, error) {
 	for {
@@ -280,33 +313,46 @@ func (h *mp4Handler) feedNextPacket(ctx context.Context) error {
 		return fmt.Errorf("mp4 read packet: %w", err)
 	}
 
-	h.pace(ctx, pkt.Dts)
-	h.muxPacket(pkt)
+	// Track raw min/max DTS in the current iteration so reset() can advance
+	// ptsOffset by the iteration's true duration.
+	if !h.hasFirstDts {
+		h.firstDtsSeen = pkt.Dts
+		h.hasFirstDts = true
+	}
+	if pkt.Dts > h.maxDtsSeen {
+		h.maxDtsSeen = pkt.Dts
+	}
+
+	adjPts := pkt.Pts + h.ptsOffset
+	adjDts := pkt.Dts + h.ptsOffset
+
+	h.pace(ctx, adjDts)
+	h.muxPacket(pkt, adjPts, adjDts)
 	return nil
 }
 
-func (h *mp4Handler) muxPacket(pkt *gomp4.AVPacket) {
+func (h *mp4Handler) muxPacket(pkt *gomp4.AVPacket, adjPts, adjDts uint64) {
 	switch pkt.Cid {
 	case gomp4.MP4_CODEC_H264:
 		if !h.vset {
 			h.vpid = h.mux.AddStream(gompeg2.TS_STREAM_H264)
 			h.vset = true
 		}
-		_ = h.mux.Write(h.vpid, pkt.Data, pkt.Pts, pkt.Dts)
+		_ = h.mux.Write(h.vpid, pkt.Data, adjPts, adjDts)
 
 	case gomp4.MP4_CODEC_H265:
 		if !h.vset {
 			h.vpid = h.mux.AddStream(gompeg2.TS_STREAM_H265)
 			h.vset = true
 		}
-		_ = h.mux.Write(h.vpid, pkt.Data, pkt.Pts, pkt.Dts)
+		_ = h.mux.Write(h.vpid, pkt.Data, adjPts, adjDts)
 
 	case gomp4.MP4_CODEC_AAC:
 		if !h.aset {
 			h.apid = h.mux.AddStream(gompeg2.TS_STREAM_AAC)
 			h.aset = true
 		}
-		_ = h.mux.Write(h.apid, pkt.Data, pkt.Pts, pkt.Dts)
+		_ = h.mux.Write(h.apid, pkt.Data, adjPts, adjDts)
 
 	case gomp4.MP4_CODEC_G711A, gomp4.MP4_CODEC_G711U,
 		gomp4.MP4_CODEC_MP2, gomp4.MP4_CODEC_MP3, gomp4.MP4_CODEC_OPUS:
@@ -357,6 +403,13 @@ type flvHandler struct {
 	vset bool
 	aset bool
 
+	// Continuous-PTS state across loops — same rationale as mp4Handler.
+	// FLV PTS/DTS are 32-bit milliseconds, so the offset is uint32 too.
+	ptsOffset    uint32
+	maxDtsSeen   uint32
+	firstDtsSeen uint32
+	hasFirstDts  bool
+
 	// real-time pacing — ctx stored during read so the OnFrame callback can use it.
 	// Safe because read is always called from a single goroutine and OnFrame fires
 	// synchronously inside reader.Input (no concurrency).
@@ -396,8 +449,19 @@ func (h *flvHandler) buildReader() {
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		h.pace(ctx, dts)
-		h.muxFrame(cid, frame, pts, dts)
+		// Track raw min/max DTS so reset() can advance ptsOffset by the
+		// iteration's true duration (continuous-PTS — see mp4Handler comment).
+		if !h.hasFirstDts {
+			h.firstDtsSeen = dts
+			h.hasFirstDts = true
+		}
+		if dts > h.maxDtsSeen {
+			h.maxDtsSeen = dts
+		}
+		adjPts := pts + h.ptsOffset
+		adjDts := dts + h.ptsOffset
+		h.pace(ctx, adjDts)
+		h.muxFrame(cid, frame, adjPts, adjDts)
 	}
 	h.reader = r
 }
@@ -440,11 +504,20 @@ func (h *flvHandler) reset() error {
 		return fmt.Errorf("flv loop seek: %w", err)
 	}
 	h.queue = h.queue[:0]
-	h.vpid, h.apid = 0, 0
-	h.vset, h.aset = false, false
+	if h.hasFirstDts {
+		h.ptsOffset += (h.maxDtsSeen - h.firstDtsSeen) + loopFrameAdvanceMs
+	}
+	h.maxDtsSeen = 0
+	h.firstDtsSeen = 0
+	h.hasFirstDts = false
+	// Keep vpid/apid + vset/aset across loops (same TSMuxer, same PIDs).
 	h.paceOnce = false
 	h.buildReader()
-	slog.Info("file reader: flv loop reset", "path", h.path, "took_ms", time.Since(start).Milliseconds())
+	slog.Info("file reader: flv loop reset",
+		"path", h.path,
+		"took_ms", time.Since(start).Milliseconds(),
+		"new_pts_offset_ms", h.ptsOffset,
+	)
 	return nil
 }
 
