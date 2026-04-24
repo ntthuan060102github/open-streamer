@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,7 +60,12 @@ type FileReader struct {
 // path must be a resolved absolute filesystem path. The caller (typically
 // internal/ingestor.NewPacketReader) is responsible for resolving any
 // file:// URL through the VOD registry first.
+//
+// Logs the loop flag at construction so operators can verify the deployed
+// binary's vod.Registry resolver hands the expected value (loop=true is the
+// default for file:// URLs without an explicit ?loop=false override).
 func NewFileReader(path string, loop bool) *FileReader {
+	slog.Info("file reader: construct", "path", path, "loop", loop)
 	return &FileReader{path: path, loop: loop}
 }
 
@@ -170,6 +176,7 @@ func (h *tsHandler) read(ctx context.Context) ([]byte, error) {
 		if !h.loop {
 			return nil, io.EOF
 		}
+		slog.Info("file reader: ts loop reset", "path", h.path)
 		if _, seekErr := h.f.Seek(0, io.SeekStart); seekErr != nil {
 			return nil, fmt.Errorf("file reader: ts loop seek: %w", seekErr)
 		}
@@ -228,6 +235,7 @@ func newMP4Handler(path string, loop bool) (*mp4Handler, error) {
 }
 
 func (h *mp4Handler) reset() error {
+	start := time.Now()
 	if _, err := h.f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("mp4 seek: %w", err)
 	}
@@ -240,6 +248,7 @@ func (h *mp4Handler) reset() error {
 	h.vpid, h.apid = 0, 0
 	h.vset, h.aset = false, false
 	h.paceOnce = false
+	slog.Info("file reader: mp4 loop reset", "path", h.path, "took_ms", time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -426,6 +435,7 @@ func (h *flvHandler) muxFrame(cid gocodec.CodecID, frame []byte, pts uint32, dts
 }
 
 func (h *flvHandler) reset() error {
+	start := time.Now()
 	if _, err := h.f.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("flv loop seek: %w", err)
 	}
@@ -434,6 +444,7 @@ func (h *flvHandler) reset() error {
 	h.vset, h.aset = false, false
 	h.paceOnce = false
 	h.buildReader()
+	slog.Info("file reader: flv loop reset", "path", h.path, "took_ms", time.Since(start).Milliseconds())
 	return nil
 }
 

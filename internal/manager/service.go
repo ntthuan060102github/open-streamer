@@ -369,7 +369,15 @@ func (s *Service) RecordPacket(streamID domain.StreamCode, inputPriority int) {
 			h.LastPacketAt = now
 			if h.Status != domain.StatusActive {
 				h.Status = domain.StatusActive
-				// Errors history is preserved across recovery; only cleared on Stop/Unregister.
+				// Recovery wipes the error history. Without this, transient
+				// faults (file-loop EOF gap, brief network blip) leave a
+				// stale "1 error" badge in the UI on a now-healthy input —
+				// users can't distinguish "currently broken" from "broke
+				// 2 minutes ago, recovered". Diagnostic history of past
+				// failures is still observable via hooks (EventInputDegraded
+				// / EventInputFailover) and slog warn lines, which are the
+				// right place for "what happened over time".
+				h.Errors = nil
 				delete(state.degradedAt, inputPriority)
 				s.m.ManagerInputHealth.WithLabelValues(string(streamID), strconv.Itoa(inputPriority)).Set(1)
 			}

@@ -126,6 +126,38 @@ func TestRecordPacket_UnknownStreamIsNoOp(t *testing.T) {
 	svc.RecordPacket("ghost", 0) // must not panic
 }
 
+// Recovery (Degraded → Active via RecordPacket) must wipe the input's
+// error history so the UI doesn't show a stale "X errors" badge on a
+// now-healthy input. Diagnostic trace lives in hooks/logs, not here.
+func TestRecordPacket_RecoveryClearsErrorHistory(t *testing.T) {
+	t.Parallel()
+	svc, _ := newSvc(t)
+	require.NoError(t, svc.Register(context.Background(),
+		streamWithInputs("rec1", "rtmp://x", "rtmp://y"), ""))
+
+	// Drive priority 1 (non-active) into degraded so it has an error
+	// history, then RecordPacket on it (simulates probe-driven recovery
+	// where the active input died and 1 came back).
+	svc.ReportInputError("rec1", 1, errors.New("blip"))
+
+	rt, _ := svc.RuntimeStatus("rec1")
+	for _, in := range rt.Inputs {
+		if in.InputPriority == 1 {
+			require.Equal(t, domain.StatusDegraded, in.Status)
+			require.Len(t, in.Errors, 1, "precondition: error recorded")
+		}
+	}
+
+	svc.RecordPacket("rec1", 1)
+	rt, _ = svc.RuntimeStatus("rec1")
+	for _, in := range rt.Inputs {
+		if in.InputPriority == 1 {
+			assert.Equal(t, domain.StatusActive, in.Status, "must promote to active")
+			assert.Empty(t, in.Errors, "recovery must wipe stale error history")
+		}
+	}
+}
+
 func TestRecordPacket_UnknownPriorityIsNoOp(t *testing.T) {
 	t.Parallel()
 	svc, _ := newSvc(t)
