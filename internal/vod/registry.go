@@ -155,7 +155,14 @@ func (r *Registry) ResolvePath(name domain.VODName, subPath string) (string, err
 //
 // Accepts URLs of the form:
 //
-//	file://<mount>/path/to/file.mp4[?loop=true]
+//	file://<mount>/path/to/file.mp4[?loop=true|false]
+//
+// Loop default is TRUE — file:// inputs replay from the beginning when they
+// reach EOF, treating the file as a continuous stream source. Operators who
+// want one-shot playback must opt out with `?loop=false`. Rationale: in a
+// streaming server, a file is almost always used as a fallback / standby /
+// test source where unattended end-of-file means the stream is silently
+// dead, which is rarely intended.
 //
 // Rejects bare paths, file:///absolute paths, and URLs whose host is not a
 // registered mount. Also rejects resolved paths that escape the mount root
@@ -191,7 +198,19 @@ func (r *Registry) Resolve(rawURL string) (path string, loop bool, err error) {
 		return "", false, fmt.Errorf("%w: %q resolves outside %q", ErrPathEscapesMount, rawURL, storage)
 	}
 
-	return resolved, u.Query().Get("loop") == "true", nil
+	return resolved, parseLoopParam(u.Query().Get("loop")), nil
+}
+
+// parseLoopParam interprets the `loop` query parameter on file:// URLs.
+// Default (param empty) is true; explicit false/0/no opts out. Anything else
+// also defaults to true to avoid silent surprises from typos.
+func parseLoopParam(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 // ListFiles enumerates the contents of subPath inside mount name.

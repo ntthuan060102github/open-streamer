@@ -42,7 +42,19 @@ func (h *StreamHandler) withStatus(s *domain.Stream) streamResponse {
 	rt, registered := h.manager.RuntimeStatus(s.Code)
 	rt.Status = h.coordinator.StreamStatus(s.Code)
 	rt.PipelineActive = registered
-	if registered {
+
+	// ABR-copy streams bypass the manager entirely (their pipeline is N
+	// in-process taps, not an ingest worker), so the manager has no record
+	// to report. Substitute the coordinator's synthetic snapshot so the UI
+	// can show input status / activity instead of "UNKNOWN".
+	if !registered {
+		if abrRT, ok := h.coordinator.ABRCopyRuntimeStatus(s.Code); ok {
+			abrRT.Status = rt.Status // preserve coordinator-level status set above
+			rt = abrRT
+		}
+	}
+
+	if rt.PipelineActive {
 		// Nest transcoder + push runtime under the same envelope; keeps them
 		// from colliding with the persisted Stream.Transcoder / Stream.Push
 		// config fields on the same json tags.

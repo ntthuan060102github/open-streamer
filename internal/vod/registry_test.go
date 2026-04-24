@@ -33,8 +33,10 @@ func TestRegistry_ResolveValidURL(t *testing.T) {
 	if got != want {
 		t.Errorf("path=%q want %q", got, want)
 	}
-	if loop {
-		t.Error("loop should default to false")
+	// loop defaults to TRUE for file:// — file is treated as a continuous
+	// source, EOF replays from start. Opt-out via ?loop=false.
+	if !loop {
+		t.Error("loop should default to true")
 	}
 }
 
@@ -48,6 +50,26 @@ func TestRegistry_ResolveLoopQuery(t *testing.T) {
 	}
 	if !loop {
 		t.Error("loop=true must be honoured")
+	}
+}
+
+// Operators who want one-shot playback opt out via ?loop=false. Also covers
+// the alternate falsey forms (0, no, off) for ergonomics.
+func TestRegistry_ResolveLoopOptOut(t *testing.T) {
+	t.Parallel()
+	r, _ := newRegistryWithMount(t)
+
+	for _, falsey := range []string{"false", "0", "no", "off", "FALSE", " false "} {
+		t.Run(falsey, func(t *testing.T) {
+			t.Parallel()
+			_, loop, err := r.Resolve("file://vod/clip.mp4?loop=" + falsey)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			if loop {
+				t.Errorf("loop=%q must opt out", falsey)
+			}
+		})
 	}
 }
 

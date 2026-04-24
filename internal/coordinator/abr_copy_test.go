@@ -312,6 +312,64 @@ func TestABRCopy_TapForwardsPacketsAcrossRungs(t *testing.T) {
 	}
 }
 
+// ABRCopyRuntimeStatus returns ok=false when the stream isn't running as an
+// ABR copy — caller falls back to the normal manager.RuntimeStatus path.
+func TestABRCopyRuntimeStatus_NotRunningReturnsFalse(t *testing.T) {
+	t.Parallel()
+	h := newABRHarness(t)
+	_, ok := h.coord.ABRCopyRuntimeStatus("nonexistent")
+	require.False(t, ok)
+}
+
+// Before any packet flows through a tap, status is Degraded (no recent
+// activity) — distinguishes "tap goroutine spawned" from "actually feeding".
+func TestABRCopyRuntimeStatus_DegradedBeforeFirstPacket(t *testing.T) {
+	t.Parallel()
+	up := abrUpstream(1)
+	h := newABRHarness(t, up)
+	require.NoError(t, h.coord.Start(context.Background(), copyDownstream("up")))
+	defer h.coord.Stop(context.Background(), "dn")
+
+	rt, ok := h.coord.ABRCopyRuntimeStatus("dn")
+	require.True(t, ok)
+	require.True(t, rt.PipelineActive)
+	require.Equal(t, 0, rt.ActiveInputPriority)
+	require.Len(t, rt.Inputs, 1)
+	assert.Equal(t, domain.StatusDegraded, rt.Inputs[0].Status,
+		"no packets seen yet → degraded (lets UI distinguish 'pipeline up but silent' from 'pipeline up and flowing')")
+	assert.True(t, rt.Inputs[0].LastPacketAt.IsZero())
+}
+
+// After a packet flows through a tap, status flips to Active and
+// LastPacketAt is stamped — this is what fixes the UI "UNKNOWN" badge.
+func TestABRCopyRuntimeStatus_ActiveAfterTapPacket(t *testing.T) {
+	t.Parallel()
+	up := abrUpstream(2)
+	h := newABRHarness(t, up)
+	upRends := buffer.RenditionsForTranscoder(up.Code, up.Transcoder)
+	for _, r := range upRends {
+		h.buf.Create(r.BufferID)
+	}
+	require.NoError(t, h.coord.Start(context.Background(), copyDownstream("up")))
+	defer h.coord.Stop(context.Background(), "dn")
+
+	// Wait for tap subscribe + emit one packet on rung 0.
+	time.Sleep(50 * time.Millisecond)
+	require.NoError(t, h.buf.Write(upRends[0].BufferID, buffer.TSPacket([]byte{0x01})))
+
+	// Poll briefly — the stamp happens after Write returns to the tap.
+	require.Eventually(t, func() bool {
+		rt, ok := h.coord.ABRCopyRuntimeStatus("dn")
+		if !ok || len(rt.Inputs) != 1 {
+			return false
+		}
+		return rt.Inputs[0].Status == domain.StatusActive
+	}, 2*time.Second, 20*time.Millisecond, "input must flip to active after packet flows")
+
+	rt, _ := h.coord.ABRCopyRuntimeStatus("dn")
+	assert.False(t, rt.Inputs[0].LastPacketAt.IsZero(), "LastPacketAt must be stamped")
+}
+
 func TestABRCopy_TapStopsOnContextCancel(t *testing.T) {
 	t.Parallel()
 	up := abrUpstream(1)

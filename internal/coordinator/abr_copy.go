@@ -25,10 +25,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
+	"github.com/ntt0601zcoder/open-streamer/internal/manager"
 )
 
 // abrCopyEntry holds the runtime handles needed to tear down an ABR-copy stream.
@@ -36,6 +38,14 @@ type abrCopyEntry struct {
 	cancel context.CancelFunc
 	wg     *sync.WaitGroup
 	slugs  []string // rendition slugs; used to delete downstream buffers on stop
+	// upstream is captured for the synthetic input snapshot returned to the
+	// API — gives the operator the URL of the input that's actually feeding
+	// the pipeline (`copy://<upstreamCode>`).
+	upstream domain.StreamCode
+	// lastPacketAtNanos is updated on every successful tap forward (any rung).
+	// Atomic so the N tap goroutines + the API status reader can race-free.
+	// Zero value = no packet has flowed yet.
+	lastPacketAtNanos atomic.Int64
 }
 
 // detectABRCopy reports whether `s` is an ABR-copy candidate. Returns the
@@ -138,15 +148,17 @@ func (c *Coordinator) startABRCopy(ctx context.Context, downstream, upstream *do
 	// "start the pipeline", not "run forever". Stop() cancels this ctx.
 	tapCtx, cancel := context.WithCancel(context.Background())
 	wg := &sync.WaitGroup{}
+	entry := &abrCopyEntry{cancel: cancel, wg: wg, slugs: slugs, upstream: upstream.Code}
+
+	c.abrMu.Lock()
+	c.abrCopies[downstream.Code] = entry
+	c.abrMu.Unlock()
+
 	for i := range downRends {
 		wg.Add(1)
 		//nolint:contextcheck // tapCtx is intentionally detached from request ctx; cancelled by Stop()
-		go c.runABRCopyTap(tapCtx, wg, downstream.Code, upRends[i].BufferID, downRends[i].BufferID, downRends[i].Slug)
+		go c.runABRCopyTap(tapCtx, wg, entry, downstream.Code, upRends[i].BufferID, downRends[i].BufferID, downRends[i].Slug)
 	}
-
-	c.abrMu.Lock()
-	c.abrCopies[downstream.Code] = &abrCopyEntry{cancel: cancel, wg: wg, slugs: slugs}
-	c.abrMu.Unlock()
 
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(time.Now().Unix()))
@@ -200,6 +212,7 @@ func (c *Coordinator) stopABRCopy(ctx context.Context, code domain.StreamCode, a
 func (c *Coordinator) runABRCopyTap(
 	ctx context.Context,
 	wg *sync.WaitGroup,
+	entry *abrCopyEntry,
 	downstreamCode, upBufID, downBufID domain.StreamCode,
 	slug string,
 ) {
@@ -213,7 +226,7 @@ func (c *Coordinator) runABRCopyTap(
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if c.abrCopyTapForward(ctx, upBufID, downBufID) {
+		if c.abrCopyTapForward(ctx, entry, upBufID, downBufID) {
 			return // ctx cancelled
 		}
 		// Subscribe failed or upstream chan closed — wait + retry.
@@ -239,7 +252,7 @@ func (c *Coordinator) runABRCopyTap(
 
 // abrCopyTapForward runs one subscribe-and-forward cycle. Returns true when
 // ctx cancellation caused the exit (caller should not retry).
-func (c *Coordinator) abrCopyTapForward(ctx context.Context, upBufID, downBufID domain.StreamCode) bool {
+func (c *Coordinator) abrCopyTapForward(ctx context.Context, entry *abrCopyEntry, upBufID, downBufID domain.StreamCode) bool {
 	sub, err := c.buf.Subscribe(upBufID)
 	if err != nil {
 		return false
@@ -258,7 +271,57 @@ func (c *Coordinator) abrCopyTapForward(ctx context.Context, upBufID, downBufID 
 			// buffer was already torn down between Stop() invalidating
 			// our cancel and our defer firing. Silently drop in that
 			// race; the next ctx.Done check breaks us out.
-			_ = c.buf.Write(downBufID, pkt)
+			if err := c.buf.Write(downBufID, pkt); err == nil {
+				// Stamp the entry's last-packet timestamp so the API can
+				// report the synthetic input as ACTIVE. Atomic store —
+				// any of the N tap goroutines may race here.
+				entry.lastPacketAtNanos.Store(time.Now().UnixNano())
+			}
 		}
 	}
+}
+
+// abrCopyInputStaleAfter is the threshold for marking the synthetic input
+// as Degraded vs Active. Mirrors manager.packetTimeout so behaviour is
+// consistent with the normal pipeline path.
+const abrCopyInputStaleAfter = 30 * time.Second
+
+// ABRCopyRuntimeStatus returns a synthetic manager.RuntimeStatus for an
+// ABR-copy stream (which doesn't go through the manager and therefore has no
+// real RuntimeStatus). The returned snapshot lets the API surface a single
+// "input 0" with status derived from tap activity:
+//
+//   - lastPacketAt within abrCopyInputStaleAfter → StatusActive
+//   - older than the threshold (or no packet yet) → StatusDegraded
+//
+// Returns ok=false when the stream isn't running as ABR-copy — caller should
+// fall back to the normal manager.RuntimeStatus path.
+func (c *Coordinator) ABRCopyRuntimeStatus(code domain.StreamCode) (manager.RuntimeStatus, bool) {
+	c.abrMu.RLock()
+	entry, ok := c.abrCopies[code]
+	c.abrMu.RUnlock()
+	if !ok {
+		return manager.RuntimeStatus{}, false
+	}
+
+	lastNanos := entry.lastPacketAtNanos.Load()
+	var lastPacketAt time.Time
+	status := domain.StatusDegraded
+	if lastNanos > 0 {
+		lastPacketAt = time.Unix(0, lastNanos)
+		if time.Since(lastPacketAt) <= abrCopyInputStaleAfter {
+			status = domain.StatusActive
+		}
+	}
+
+	return manager.RuntimeStatus{
+		Status:              domain.StatusActive, // pipeline-level (filled by handler)
+		PipelineActive:      true,
+		ActiveInputPriority: 0,
+		Inputs: []manager.InputHealthSnapshot{{
+			InputPriority: 0,
+			LastPacketAt:  lastPacketAt,
+			Status:        status,
+		}},
+	}, true
 }
