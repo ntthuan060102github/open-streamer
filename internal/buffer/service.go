@@ -64,6 +64,19 @@ func (rb *ringBuffer) unsubscribe(s *Subscriber) {
 	}
 }
 
+// unsubscribeAll closes every subscriber's channel and clears the list.
+// Used by Service.UnsubscribeAll to signal "no more data from this buffer"
+// to all live consumers (e.g. when a downstream needs to detect upstream
+// teardown via channel close rather than indefinite blocking).
+func (rb *ringBuffer) unsubscribeAll() {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	for _, s := range rb.subs {
+		close(s.ch)
+	}
+	rb.subs = nil
+}
+
 // Service manages ring buffers for all active streams.
 type Service struct {
 	cfg     config.BufferConfig
@@ -138,8 +151,25 @@ func (s *Service) Unsubscribe(id domain.StreamCode, sub *Subscriber) {
 }
 
 // Delete removes the ring buffer for a stream (call when stream is stopped).
+// Existing subscribers stay blocked on their channels — Delete only removes
+// the map entry. Use UnsubscribeAll first if consumers must detect the
+// teardown via Recv-close.
 func (s *Service) Delete(id domain.StreamCode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.buffers, id)
+}
+
+// UnsubscribeAll closes every subscriber's channel for the given buffer.
+// Subscribers' next Recv will see ok=false (a clean EOF signal). The buffer
+// itself is left in place — call Delete after if you also want it removed.
+// No-op when the buffer doesn't exist.
+func (s *Service) UnsubscribeAll(id domain.StreamCode) {
+	s.mu.RLock()
+	rb, ok := s.buffers[id]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	rb.unsubscribeAll()
 }

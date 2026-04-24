@@ -115,6 +115,14 @@ func NewPacketReader(
 			)
 		}
 		return pull.NewCopyReader(input, buf, lookup)
+	case protocol.KindMixer:
+		if buf == nil || lookup == nil {
+			return nil, fmt.Errorf(
+				"ingestor: mixer:// requires buffer service and stream lookup (got %q with missing deps)",
+				input.URL,
+			)
+		}
+		return pull.NewMixerReader(input, buf, lookup)
 	case protocol.KindPublish, protocol.KindUnknown:
 		// KindPublish is handled before this switch; KindUnknown falls through to error.
 		fallthrough

@@ -163,6 +163,11 @@ func (h *StreamHandler) Put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if vErr := h.validateMixerConfig(r, body); vErr != nil {
+		writeError(w, http.StatusBadRequest, vErr.code, vErr.message)
+		return
+	}
+
 	wasRunning := exists && h.coordinator.IsRunning(code)
 	nowEnabled := exists && cur.Disabled && !body.Disabled
 
@@ -278,6 +283,75 @@ func validateCopyConfigOn(proposed *domain.Stream, existing []*domain.Stream) *p
 	// fan-out loops; misconfig surfaces as runtime degradation, not fan-out.)
 	if err := domain.ValidateCopyShape(proposed, lookup); err != nil {
 		return &putValidationError{code: "INVALID_COPY_SHAPE", message: err.Error()}
+	}
+
+	return nil
+}
+
+// validateMixerConfig is the API-handler wrapper that loads existing streams
+// from the repo and delegates to validateMixerConfigOn. Split this way so the
+// pure validation logic can be unit-tested without a real or fake repo.
+func (h *StreamHandler) validateMixerConfig(r *http.Request, proposed *domain.Stream) *putValidationError {
+	all, err := h.streamRepo.List(r.Context(), store.StreamFilter{})
+	if err != nil {
+		return &putValidationError{code: "LIST_FAILED", message: "list streams for mixer validation: " + err.Error()}
+	}
+	return validateMixerConfigOn(proposed, all)
+}
+
+// validateMixerConfigOn runs the mixer:// safety checks against an in-memory
+// snapshot of the existing streams.
+//
+// Order of checks:
+//
+//  1. Per-input URL grammar — catch malformed `mixer://` early.
+//  2. Shape constraints — sole-input rule, ABR-upstream rule, self-mix,
+//     local-transcoder forbidden.
+func validateMixerConfigOn(proposed *domain.Stream, existing []*domain.Stream) *putValidationError {
+	// (1) URL grammar.
+	for i, in := range proposed.Inputs {
+		if !domain.IsMixerInput(in) {
+			continue
+		}
+		if _, _, _, err := domain.MixerInputSpec(in); err != nil {
+			return &putValidationError{
+				code:    "INVALID_MIXER_URL",
+				message: fmt.Sprintf("inputs[%d]: %s", i, err.Error()),
+			}
+		}
+	}
+
+	// Build merged view: existing repo streams with proposed substituted
+	// for the same code.
+	merged := make([]*domain.Stream, 0, len(existing)+1)
+	replaced := false
+	for _, s := range existing {
+		if s == nil {
+			continue
+		}
+		if s.Code == proposed.Code {
+			merged = append(merged, proposed)
+			replaced = true
+			continue
+		}
+		merged = append(merged, s)
+	}
+	if !replaced {
+		merged = append(merged, proposed)
+	}
+
+	lookup := func(c domain.StreamCode) (*domain.Stream, bool) {
+		for _, s := range merged {
+			if s.Code == c {
+				return s, true
+			}
+		}
+		return nil, false
+	}
+
+	// (2) Shape constraints.
+	if err := domain.ValidateMixerShape(proposed, lookup); err != nil {
+		return &putValidationError{code: "INVALID_MIXER_SHAPE", message: err.Error()}
 	}
 
 	return nil

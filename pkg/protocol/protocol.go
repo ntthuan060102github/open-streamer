@@ -21,6 +21,7 @@ const (
 	KindSRT     Kind = "srt"     // SRT (pull caller or push listener)
 	KindPublish Kind = "publish" // accept any push protocol; stream code is the routing key
 	KindCopy    Kind = "copy"    // re-stream another in-process stream's published output
+	KindMixer   Kind = "mixer"   // combine video from one in-process stream with audio from another
 	KindUnknown Kind = "unknown"
 )
 
@@ -37,6 +38,7 @@ const (
 //	file:// or /absolute/path → KindFile
 //	publish://                → KindPublish (push-listen, any protocol)
 //	copy://<stream_code>      → KindCopy   (re-stream another in-process stream)
+//	mixer://<video>,<audio>   → KindMixer  (replace audio of one stream with another)
 func Detect(rawURL string) Kind {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -58,6 +60,8 @@ func Detect(rawURL string) Kind {
 		return KindPublish
 	case "copy":
 		return KindCopy
+	case "mixer":
+		return KindMixer
 	case "http", "https":
 		if strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") ||
 			strings.HasSuffix(strings.ToLower(u.Path), ".m3u") {
@@ -163,6 +167,112 @@ func (e *copyURLError) Error() string { return "copy://: " + e.Reason }
 // IsCopyURLError reports whether err originated from CopyTarget.
 func IsCopyURLError(err error) bool {
 	_, ok := err.(*copyURLError)
+	return ok
+}
+
+// MixerSpec is the parsed result of a `mixer://` URL.
+//
+//	Video / Audio          — upstream stream codes (host part, comma-separated)
+//	AudioFailureContinue   — when true, the mixer keeps forwarding video-only
+//	                         after the audio upstream goes away. When false
+//	                         (default) audio failure aborts the whole stream
+//	                         (video failure ALWAYS aborts).
+type MixerSpec struct {
+	Video                string
+	Audio                string
+	AudioFailureContinue bool
+}
+
+// MixerTargets parses a `mixer://<video_code>,<audio_code>[?audio_failure=continue]`
+// URL. v1 grammar:
+//   - scheme exactly "mixer"
+//   - host is `<video>,<audio>` — both codes non-empty, no `:` (no port)
+//   - no path / fragment / userinfo
+//   - only one query parameter accepted: `audio_failure=continue` (default omitted)
+//
+// Returns an error message naming the offending part so the API layer can
+// surface it directly to the user.
+func MixerTargets(rawURL string) (MixerSpec, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return MixerSpec{}, &mixerURLError{Reason: "malformed url: " + err.Error()}
+	}
+	if !strings.EqualFold(u.Scheme, "mixer") {
+		return MixerSpec{}, &mixerURLError{Reason: "scheme must be 'mixer'"}
+	}
+	if u.User != nil {
+		return MixerSpec{}, &mixerURLError{Reason: "userinfo not allowed (use mixer://<video>,<audio>)"}
+	}
+	if u.Path != "" && u.Path != "/" {
+		return MixerSpec{}, &mixerURLError{Reason: "path not allowed in v1 (use mixer://<video>,<audio>)"}
+	}
+	if u.Fragment != "" {
+		return MixerSpec{}, &mixerURLError{Reason: "fragment not allowed"}
+	}
+
+	host := u.Host
+	if host == "" {
+		return MixerSpec{}, &mixerURLError{Reason: "missing upstream codes"}
+	}
+	parts := strings.Split(host, ",")
+	if len(parts) != 2 {
+		return MixerSpec{}, &mixerURLError{Reason: "expected exactly two codes separated by comma (mixer://<video>,<audio>)"}
+	}
+	video, audio := parts[0], parts[1]
+	if video == "" {
+		return MixerSpec{}, &mixerURLError{Reason: "video upstream code is empty"}
+	}
+	if audio == "" {
+		return MixerSpec{}, &mixerURLError{Reason: "audio upstream code is empty"}
+	}
+	if strings.Contains(video, ":") || strings.Contains(audio, ":") {
+		return MixerSpec{}, &mixerURLError{Reason: "port not allowed in upstream codes"}
+	}
+
+	spec := MixerSpec{Video: video, Audio: audio}
+	if err := parseMixerQuery(u.RawQuery, &spec); err != nil {
+		return MixerSpec{}, err
+	}
+	return spec, nil
+}
+
+// parseMixerQuery validates and applies the mixer:// query string to spec.
+// Only `audio_failure=down|continue` is recognised; any other key errors out.
+func parseMixerQuery(rawQuery string, spec *MixerSpec) error {
+	if rawQuery == "" {
+		return nil
+	}
+	q, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return &mixerURLError{Reason: "malformed query: " + err.Error()}
+	}
+	for key, vals := range q {
+		if key != "audio_failure" {
+			return &mixerURLError{Reason: "unknown query parameter: " + key}
+		}
+		if len(vals) != 1 {
+			return &mixerURLError{Reason: "audio_failure must appear at most once"}
+		}
+		switch vals[0] {
+		case "continue":
+			spec.AudioFailureContinue = true
+		case "down", "":
+			// explicit default
+		default:
+			return &mixerURLError{Reason: "audio_failure must be 'down' or 'continue', got: " + vals[0]}
+		}
+	}
+	return nil
+}
+
+// mixerURLError tags errors from MixerTargets so callers can match with errors.As.
+type mixerURLError struct{ Reason string }
+
+func (e *mixerURLError) Error() string { return "mixer://: " + e.Reason }
+
+// IsMixerURLError reports whether err originated from MixerTargets.
+func IsMixerURLError(err error) bool {
+	_, ok := err.(*mixerURLError)
 	return ok
 }
 

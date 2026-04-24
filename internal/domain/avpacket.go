@@ -11,6 +11,16 @@ const (
 	AVCodecAAC
 )
 
+// IsVideo reports whether the codec carries a video elementary stream.
+func (c AVCodec) IsVideo() bool {
+	return c == AVCodecH264 || c == AVCodecH265
+}
+
+// IsAudio reports whether the codec carries an audio elementary stream.
+func (c AVCodec) IsAudio() bool {
+	return c == AVCodecAAC
+}
+
 // AVPacket is one decoded video access unit (Annex B H.264/H.265) or one AAC frame (ADTS in Data).
 // PTSms and DTSms are presentation / decode timestamps in milliseconds (MPEG-TS / gomedia convention).
 type AVPacket struct {

@@ -46,6 +46,9 @@ func TestDetect(t *testing.T) {
 		// Copy (in-process re-stream)
 		{name: "copy basic", url: "copy://source-stream", want: protocol.KindCopy},
 		{name: "copy uppercase scheme", url: "COPY://source-stream", want: protocol.KindCopy},
+		// Mixer (video from one stream + audio from another)
+		{name: "mixer basic", url: "mixer://cam1,radio_fm", want: protocol.KindMixer},
+		{name: "mixer with continue option", url: "mixer://cam1,radio_fm?audio_failure=continue", want: protocol.KindMixer},
 		// Unknown
 		{name: "unknown scheme", url: "ftp://server/file", want: protocol.KindUnknown},
 		{name: "empty url", url: "", want: protocol.KindUnknown},
@@ -107,6 +110,66 @@ func TestCopyTarget_Reject(t *testing.T) {
 			_, err := protocol.CopyTarget(tt.url)
 			assert.Error(t, err, "url=%q must be rejected", tt.url)
 			assert.True(t, protocol.IsCopyURLError(err), "error must be a copyURLError so handlers can match")
+		})
+	}
+}
+
+// MixerTargets v1 grammar mirrors CopyTarget's strictness — anything beyond
+// `mixer://<video>,<audio>[?audio_failure=continue]` must reject so the API
+// surface stays clean for future qualifiers.
+func TestMixerTargets_Valid(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name              string
+		url               string
+		wantVideo         string
+		wantAudio         string
+		wantAudioContinue bool
+	}{
+		{"plain", "mixer://cam1,radio_fm", "cam1", "radio_fm", false},
+		{"alphanumeric codes", "mixer://cam_1,fm_42", "cam_1", "fm_42", false},
+		{"uppercase scheme", "MIXER://cam,radio", "cam", "radio", false},
+		{"audio_failure continue", "mixer://cam,radio?audio_failure=continue", "cam", "radio", true},
+		{"audio_failure down explicit", "mixer://cam,radio?audio_failure=down", "cam", "radio", false},
+		{"audio_failure empty value", "mixer://cam,radio?audio_failure=", "cam", "radio", false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			spec, err := protocol.MixerTargets(tt.url)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantVideo, spec.Video)
+			assert.Equal(t, tt.wantAudio, spec.Audio)
+			assert.Equal(t, tt.wantAudioContinue, spec.AudioFailureContinue)
+		})
+	}
+}
+
+func TestMixerTargets_Reject(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"wrong scheme", "rtmp://cam,radio"},
+		{"missing host", "mixer://"},
+		{"only one code", "mixer://cam"},
+		{"three codes", "mixer://a,b,c"},
+		{"empty video", "mixer://,radio"},
+		{"empty audio", "mixer://cam,"},
+		{"path not allowed", "mixer://cam,radio/extra"},
+		{"fragment not allowed", "mixer://cam,radio#frag"},
+		{"port in code", "mixer://cam:1935,radio"},
+		{"userinfo not allowed", "mixer://user@cam,radio"},
+		{"unknown query param", "mixer://cam,radio?priority=1"},
+		{"audio_failure invalid value", "mixer://cam,radio?audio_failure=skip"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := protocol.MixerTargets(tt.url)
+			assert.Error(t, err, "url=%q must be rejected", tt.url)
+			assert.True(t, protocol.IsMixerURLError(err), "error must be a mixerURLError so handlers can match")
 		})
 	}
 }
