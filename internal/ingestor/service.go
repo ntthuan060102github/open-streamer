@@ -22,6 +22,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
+	"github.com/ntt0601zcoder/open-streamer/internal/ingestor/pull"
 	"github.com/ntt0601zcoder/open-streamer/internal/ingestor/push"
 	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
 	"github.com/ntt0601zcoder/open-streamer/internal/vod"
@@ -51,6 +52,11 @@ type Service struct {
 	vods         *vod.Registry
 	onPacket     func(streamID domain.StreamCode, inputPriority int)
 	onInputError func(streamID domain.StreamCode, inputPriority int, err error)
+	// streamLookup resolves an upstream stream by code; used by the
+	// `copy://` reader to find the upstream's main buffer ID. Set via
+	// SetStreamLookup after the store is wired in main.go (avoids a
+	// store-driver dependency in this package).
+	streamLookup pull.StreamLookup
 
 	mu              sync.Mutex
 	workers         map[domain.StreamCode]*pullWorkerEntry
@@ -91,6 +97,16 @@ func (s *Service) SetInputErrorObserver(fn func(streamID domain.StreamCode, inpu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onInputError = fn
+}
+
+// SetStreamLookup wires the upstream-stream resolver used by `copy://`
+// inputs. Called once from main.go after the store is available; passing
+// `nil` (or never calling) means copy:// inputs will fail at NewPacketReader
+// with an explicit error message.
+func (s *Service) SetStreamLookup(fn pull.StreamLookup) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamLookup = fn
 }
 
 // SetRTMPPlayHandler registers an external play handler on the RTMP server.
@@ -176,7 +192,7 @@ func (s *Service) Probe(ctx context.Context, input domain.Input) error {
 	if protocol.IsPushListen(input.URL) {
 		return fmt.Errorf("ingestor: probe unsupported for push-listen input %q", input.URL)
 	}
-	reader, err := NewPacketReader(input, s.cfg, s.vods)
+	reader, err := NewPacketReader(input, s.cfg, s.vods, s.buf, s.streamLookup)
 	if err != nil {
 		return err
 	}
@@ -218,7 +234,7 @@ func (s *Service) Stop(streamID domain.StreamCode) {
 // ---- private ----
 
 func (s *Service) startPullWorker(ctx context.Context, streamID domain.StreamCode, input domain.Input, bufferWriteID domain.StreamCode) error {
-	reader, err := NewPacketReader(input, s.cfg, s.vods)
+	reader, err := NewPacketReader(input, s.cfg, s.vods, s.buf, s.streamLookup)
 	if err != nil {
 		return fmt.Errorf("ingestor: create packet reader: %w", err)
 	}

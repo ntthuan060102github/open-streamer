@@ -38,7 +38,7 @@ func TestNewPacketReader_PushListenURL_ReturnsError(t *testing.T) {
 	for _, u := range pushURLs {
 		t.Run(u, func(t *testing.T) {
 			t.Parallel()
-			_, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, testVODs)
+			_, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, testVODs, nil, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "push-listen")
 		})
@@ -58,7 +58,7 @@ func TestNewPacketReader_UnknownScheme_ReturnsError(t *testing.T) {
 	for _, u := range unknownURLs {
 		t.Run(u, func(t *testing.T) {
 			t.Parallel()
-			_, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, testVODs)
+			_, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, testVODs, nil, nil)
 			require.Error(t, err)
 		})
 	}
@@ -83,7 +83,7 @@ func TestNewPacketReader_ValidPullURLs_ReturnsPacketReader(t *testing.T) {
 	for _, u := range validURLs {
 		t.Run(u, func(t *testing.T) {
 			t.Parallel()
-			r, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, testVODs)
+			r, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, testVODs, nil, nil)
 			require.NoError(t, err)
 			assert.NotNil(t, r)
 		})
@@ -101,7 +101,7 @@ func TestNewPacketReader_FileURLRejectedWithoutMount(t *testing.T) {
 	for _, u := range cases {
 		t.Run(u, func(t *testing.T) {
 			t.Parallel()
-			_, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, emptyVODs)
+			_, err := ingestor.NewPacketReader(domain.Input{URL: u}, testCfg, emptyVODs, nil, nil)
 			require.Error(t, err)
 		})
 	}
@@ -109,6 +109,6 @@ func TestNewPacketReader_FileURLRejectedWithoutMount(t *testing.T) {
 
 func TestNewPacketReader_FileURLNeedsResolver(t *testing.T) {
 	t.Parallel()
-	_, err := ingestor.NewPacketReader(domain.Input{URL: "file://tmp/x.ts"}, testCfg, nil)
+	_, err := ingestor.NewPacketReader(domain.Input{URL: "file://tmp/x.ts"}, testCfg, nil, nil, nil)
 	require.Error(t, err)
 }

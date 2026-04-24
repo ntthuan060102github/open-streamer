@@ -104,6 +104,11 @@ func run() error {
 	configH := do.MustInvoke[*handler.ConfigHandler](injector)
 	configH.SetRuntimeManager(rtm)
 
+	// 7b. Wire the upstream-stream lookup into the ingestor so `copy://`
+	// inputs can find the buffer to subscribe to. Done here (post-DI) to
+	// avoid the ingestor package depending on the store layer.
+	wireCopyLookup(injector)
+
 	// 8. Hydrate VOD registry from the store so ingestor workers started in
 	//    bootstrap can resolve file:// URLs against the user's mount table.
 	if err := hydrateVODRegistry(ctx, injector); err != nil {
@@ -210,6 +215,26 @@ func wireServices(i *do.RootScope) {
 	do.Provide(i, handler.NewConfigHandler)
 	do.Provide(i, handler.NewVODHandler)
 	do.Provide(i, api.New)
+}
+
+// wireCopyLookup hands the ingestor a stream-by-code resolver backed by the
+// repository. Required for `copy://` input URLs — the copy reader needs to
+// look up the upstream stream to find its buffer ID and verify shape.
+//
+// We use a fresh background context for the lookup because resolution
+// happens at packet-read time, long after the original request that created
+// the worker has been served. The repo's FindByCode is fast (in-memory or
+// indexed), so blocking briefly here is acceptable.
+func wireCopyLookup(i do.Injector) {
+	ing := do.MustInvoke[*ingestor.Service](i)
+	repo := do.MustInvoke[store.StreamRepository](i)
+	ing.SetStreamLookup(func(code domain.StreamCode) (*domain.Stream, bool) {
+		s, err := repo.FindByCode(context.Background(), code)
+		if err != nil {
+			return nil, false
+		}
+		return s, true
+	})
 }
 
 // hydrateVODRegistry reads the persisted VOD mount table and seeds the

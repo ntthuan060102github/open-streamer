@@ -43,6 +43,9 @@ func TestDetect(t *testing.T) {
 		// S3 is intentionally not supported.
 		{name: "s3 bucket key (unsupported)", url: "s3://my-bucket/streams/live.ts", want: protocol.KindUnknown},
 		{name: "s3 with query (unsupported)", url: "s3://my-bucket/file.ts?region=ap-southeast-1", want: protocol.KindUnknown},
+		// Copy (in-process re-stream)
+		{name: "copy basic", url: "copy://source-stream", want: protocol.KindCopy},
+		{name: "copy uppercase scheme", url: "COPY://source-stream", want: protocol.KindCopy},
 		// Unknown
 		{name: "unknown scheme", url: "ftp://server/file", want: protocol.KindUnknown},
 		{name: "empty url", url: "", want: protocol.KindUnknown},
@@ -54,6 +57,56 @@ func TestDetect(t *testing.T) {
 			t.Parallel()
 			got := protocol.Detect(tt.url)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// CopyTarget grammar is strict so the v1 surface stays clean for future
+// qualifiers (`copy://X/raw`, `copy://X/track_2`). Anything beyond
+// `copy://<code>` must reject with a precise error message — the API layer
+// surfaces these directly to the user.
+func TestCopyTarget_Valid(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"plain code", "copy://source-stream", "source-stream"},
+		{"alphanumeric code", "copy://stream_42", "stream_42"},
+		{"uppercase scheme accepted", "COPY://upstream", "upstream"},
+		{"trailing slash on host treated as no path", "copy://upstream/", "upstream"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := protocol.CopyTarget(tt.url)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCopyTarget_Reject(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"wrong scheme", "rtmp://upstream"},
+		{"missing host", "copy://"},
+		{"path not allowed", "copy://upstream/raw"},
+		{"query not allowed", "copy://upstream?key=v"},
+		{"fragment not allowed", "copy://upstream#frag"},
+		{"port not allowed", "copy://upstream:1935"},
+		{"userinfo not allowed", "copy://user@upstream"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := protocol.CopyTarget(tt.url)
+			assert.Error(t, err, "url=%q must be rejected", tt.url)
+			assert.True(t, protocol.IsCopyURLError(err), "error must be a copyURLError so handlers can match")
 		})
 	}
 }

@@ -226,14 +226,20 @@ captures the current decision context.
 | Priority | Feature | Status | Notes |
 | -------- | ------- | ------ | ----- |
 | High | `copy://<code>` ingest protocol | Planned | Design locked, see [PLAN_COPY_PROTOCOL.md](./PLAN_COPY_PROTOCOL.md). Re-stream another in-process stream's published output (raw or full ABR ladder). Implementation not started. |
-| High | RTMP ingest server lal migration | Pending | `internal/publisher/push_rtmp.go` already swapped (Phase 1). `internal/ingestor/push/rtmp_server.go` still on `yapingcat/gomedia` with a per-connection `recover()` guard against AMF panics. Phase 2 swaps it to lal `Server` for symmetric robustness. |
-| Medium | Per-rendition push selection | Discussed | `serveRTMPPush` always uses `PlaybackBufferID` (best rendition by resolution × bitrate). To push different rungs to different destinations, add `Rendition` field to `domain.PushDestination` and route via `pickPushBuffer(stream, dest.Rendition)`. ~50 LOC. |
 | Medium | Watermark | Schema only | Already in domain; needs FFmpeg `overlay`/`drawtext` injection in `buildVideoFilter`, and dynamic asset upload. |
 | Medium | Thumbnail | Schema only | Periodic JPEG snapshot from main buffer; needs ffmpeg `select=eq(pict_type\\,I)` chain or a dedicated TS demux + JPEG encode. |
 | Low | HLS / DASH push out | Not started | Only RTMP/RTMPS push exists. HLS push (live HTTP POST chunk upload) would target Akamai-style ingest. |
 | Low | WebRTC publish / play | Not started | Would add a Pion-based subsystem; large surface (SDP, ICE, DTLS-SRTP). |
 | Low | RTSP / SRT pull manual matrix verification | Untested | Code paths complete; manual playback matrix never run end-to-end. |
-| — | Auto-recovery scheduler at coordinator level | Decided NOT | Replaced by infinite per-module retry with backoff cap (transcoder retry forever, manager probe forever). No fatal callback, no `MaxRestarts`. Pipeline never tears down on crash. |
+
+### Decided NOT (locked, do not reopen)
+
+| Feature | Reason |
+| ------- | ------ |
+| Auto-recovery scheduler at coordinator level | Replaced by infinite per-module retry with backoff cap (transcoder retry forever, manager probe forever). No fatal callback, no `MaxRestarts`. Pipeline never tears down on crash. |
+| RTMP ingest server lal migration (Phase 2) | Current gomedia-based `internal/ingestor/push/rtmp_server.go` is stable with a per-connection `recover()` guard. Cost-benefit doesn't justify a 1-day refactor + retest matrix. Revisit only if production starts seeing repeated `rtmp server: connection handler panic recovered` lines. |
+| Per-rendition push selection | Push always sends best rendition. Multi-tier publishing (different qualities to different destinations) is not a requirement; users wanting that pattern can run separate streams. |
+| Full `gomedia` → `lal` swap | TS infrastructure (`gomedia/go-mpeg2`) is production-tested and has no equivalent streaming demuxer in lal. Hybrid stack (lal for RTMP push out, gomedia for TS + RTMP ingest) is the intentional architecture. |
 
 ---
 

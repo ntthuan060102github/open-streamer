@@ -30,6 +30,7 @@ import (
 	"fmt"
 
 	"github.com/ntt0601zcoder/open-streamer/config"
+	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/ingestor/pull"
 	"github.com/ntt0601zcoder/open-streamer/pkg/protocol"
@@ -57,11 +58,25 @@ type PacketReader interface {
 // a nil resolver or an unknown mount both produce an error. Any other scheme
 // ignores the resolver.
 //
+// For copy:// URLs the buffer service + stream lookup are required:
+//   - buf: provides the upstream subscriber
+//   - lookup: resolves upstream stream config to find the buffer ID and
+//     verify the upstream is single-stream (ABR upstreams use a different
+//     coordinator path, never this factory)
+//
 // Returns an error when:
 //   - The URL scheme is unrecognised
 //   - The URL describes a push-listen address (handled by the push servers)
 //   - The URL is a file:// reference that cannot be resolved against a VOD mount
-func NewPacketReader(input domain.Input, cfg config.IngestorConfig, vods VODResolver) (PacketReader, error) {
+//   - The URL is a copy:// reference and buf or lookup is nil, the upstream
+//     is missing, or the upstream has an ABR ladder
+func NewPacketReader(
+	input domain.Input,
+	cfg config.IngestorConfig,
+	vods VODResolver,
+	buf *buffer.Service,
+	lookup pull.StreamLookup,
+) (PacketReader, error) {
 	if protocol.IsPushListen(input.URL) {
 		return nil, fmt.Errorf(
 			"ingestor: %q is a push-listen address — handled by the push server, not a pull reader",
@@ -92,6 +107,14 @@ func NewPacketReader(input domain.Input, cfg config.IngestorConfig, vods VODReso
 		return pull.NewTSDemuxPacketReader(pull.NewFileReader(path, loop)), nil
 	case protocol.KindSRT:
 		return pull.NewTSDemuxPacketReader(pull.NewSRTReader(input)), nil
+	case protocol.KindCopy:
+		if buf == nil || lookup == nil {
+			return nil, fmt.Errorf(
+				"ingestor: copy:// requires buffer service and stream lookup (got %q with missing deps)",
+				input.URL,
+			)
+		}
+		return pull.NewCopyReader(input, buf, lookup)
 	case protocol.KindPublish, protocol.KindUnknown:
 		// KindPublish is handled before this switch; KindUnknown falls through to error.
 		fallthrough

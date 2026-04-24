@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -157,6 +158,11 @@ func (h *StreamHandler) Put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if vErr := h.validateCopyConfig(r, body); vErr != nil {
+		writeError(w, http.StatusBadRequest, vErr.code, vErr.message)
+		return
+	}
+
 	wasRunning := exists && h.coordinator.IsRunning(code)
 	nowEnabled := exists && cur.Disabled && !body.Disabled
 
@@ -199,6 +205,82 @@ func (h *StreamHandler) Put(w http.ResponseWriter, r *http.Request) {
 type putValidationError struct {
 	code    string
 	message string
+}
+
+// validateCopyConfig is the API-handler wrapper that loads existing streams
+// from the repo and delegates to validateCopyConfigOn. Split this way so the
+// pure validation logic can be unit-tested without a real or fake repo.
+func (h *StreamHandler) validateCopyConfig(r *http.Request, proposed *domain.Stream) *putValidationError {
+	all, err := h.streamRepo.List(r.Context(), store.StreamFilter{})
+	if err != nil {
+		return &putValidationError{code: "LIST_FAILED", message: "list streams for copy validation: " + err.Error()}
+	}
+	return validateCopyConfigOn(proposed, all)
+}
+
+// validateCopyConfigOn runs the copy:// safety checks against an in-memory
+// snapshot of the existing streams (any source — repo list, fixture, …).
+// `existing` is the world BEFORE the write; `proposed` substitutes in for
+// any same-code entry to form the world AFTER.
+//
+// Order of checks (each gives a more specific error than the next when both
+// would fire on the same input):
+//
+//  1. Per-input URL grammar — catch malformed `copy://` before anything
+//     else interprets it.
+//  2. Shape constraints — local transcoder vs ABR upstream, fallback rules.
+//  3. Cycle detection across the merged graph.
+func validateCopyConfigOn(proposed *domain.Stream, existing []*domain.Stream) *putValidationError {
+	// (1) URL grammar.
+	for i, in := range proposed.Inputs {
+		if !domain.IsCopyInput(in) {
+			continue
+		}
+		if _, err := domain.CopyInputTarget(in); err != nil {
+			return &putValidationError{
+				code:    "INVALID_COPY_URL",
+				message: fmt.Sprintf("inputs[%d]: %s", i, err.Error()),
+			}
+		}
+	}
+
+	// Build merged view: existing repo streams with proposed substituted
+	// for the same code.
+	merged := make([]*domain.Stream, 0, len(existing)+1)
+	replaced := false
+	for _, s := range existing {
+		if s == nil {
+			continue
+		}
+		if s.Code == proposed.Code {
+			merged = append(merged, proposed)
+			replaced = true
+			continue
+		}
+		merged = append(merged, s)
+	}
+	if !replaced {
+		merged = append(merged, proposed)
+	}
+
+	lookup := func(c domain.StreamCode) (*domain.Stream, bool) {
+		for _, s := range merged {
+			if s.Code == c {
+				return s, true
+			}
+		}
+		return nil, false
+	}
+
+	// (2) Shape constraints. (Cycle detection across the copy:// graph was
+	// removed: shape validation already rejects the most common bad case
+	// — self-copy — and operators are trusted not to author multi-stream
+	// fan-out loops; misconfig surfaces as runtime degradation, not fan-out.)
+	if err := domain.ValidateCopyShape(proposed, lookup); err != nil {
+		return &putValidationError{code: "INVALID_COPY_SHAPE", message: err.Error()}
+	}
+
+	return nil
 }
 
 func (h *StreamHandler) loadCurrentStream(

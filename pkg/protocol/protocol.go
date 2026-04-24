@@ -20,6 +20,7 @@ const (
 	KindRTSP    Kind = "rtsp"    // RTSP pull
 	KindSRT     Kind = "srt"     // SRT (pull caller or push listener)
 	KindPublish Kind = "publish" // accept any push protocol; stream code is the routing key
+	KindCopy    Kind = "copy"    // re-stream another in-process stream's published output
 	KindUnknown Kind = "unknown"
 )
 
@@ -35,6 +36,7 @@ const (
 //	http(s)://...*.m3u8       → KindHLS
 //	file:// or /absolute/path → KindFile
 //	publish://                → KindPublish (push-listen, any protocol)
+//	copy://<stream_code>      → KindCopy   (re-stream another in-process stream)
 func Detect(rawURL string) Kind {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -54,6 +56,8 @@ func Detect(rawURL string) Kind {
 		return KindFile
 	case "publish":
 		return KindPublish
+	case "copy":
+		return KindCopy
 	case "http", "https":
 		if strings.HasSuffix(strings.ToLower(u.Path), ".m3u8") ||
 			strings.HasSuffix(strings.ToLower(u.Path), ".m3u") {
@@ -109,6 +113,57 @@ func IsPushListen(rawURL string) bool {
 		return false
 	}
 	return ip.IsUnspecified() || ip.IsLoopback()
+}
+
+// CopyTarget parses a `copy://<upstream_stream_code>` URL and returns the
+// upstream code. v1 grammar is strict: scheme must be exactly `copy`, host
+// must be a non-empty stream code, no path / query / fragment / userinfo are
+// allowed (those positions are reserved for future qualifiers like
+// `copy://X/raw` or `copy://X/track_2` and rejecting them now keeps the
+// surface clean for that extension).
+//
+// Returns an error message that names the offending part so the API layer
+// can surface it directly to the user without further interpretation.
+func CopyTarget(rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", &copyURLError{Reason: "malformed url: " + err.Error()}
+	}
+	if !strings.EqualFold(u.Scheme, "copy") {
+		return "", &copyURLError{Reason: "scheme must be 'copy'"}
+	}
+	if u.User != nil {
+		return "", &copyURLError{Reason: "userinfo not allowed (use copy://<code>)"}
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", &copyURLError{Reason: "path not allowed in v1 (use copy://<code>)"}
+	}
+	if u.RawQuery != "" {
+		return "", &copyURLError{Reason: "query string not allowed in v1"}
+	}
+	if u.Fragment != "" {
+		return "", &copyURLError{Reason: "fragment not allowed"}
+	}
+	code := u.Host
+	if code == "" {
+		return "", &copyURLError{Reason: "missing upstream stream code"}
+	}
+	// url.Parse splits host:port; copy:// targets a stream code, never a port.
+	if strings.Contains(code, ":") {
+		return "", &copyURLError{Reason: "port not allowed (host is the stream code, not an address)"}
+	}
+	return code, nil
+}
+
+// copyURLError tags errors from CopyTarget so callers can match with errors.As.
+type copyURLError struct{ Reason string }
+
+func (e *copyURLError) Error() string { return "copy://: " + e.Reason }
+
+// IsCopyURLError reports whether err originated from CopyTarget.
+func IsCopyURLError(err error) bool {
+	_, ok := err.(*copyURLError)
+	return ok
 }
 
 // IsMPEGTS returns true when data begins with the MPEG-TS sync byte 0x47.
