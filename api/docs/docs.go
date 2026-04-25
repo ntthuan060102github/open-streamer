@@ -2001,7 +2001,8 @@ const docTemplate = `{
                 "mp3",
                 "opus",
                 "ac3",
-                "copy"
+                "copy",
+                "aac"
             ],
             "x-enum-comments": {
                 "AudioCodecAAC": "default for HLS/DASH",
@@ -2015,14 +2016,16 @@ const docTemplate = `{
                 "legacy compatibility",
                 "best for WebRTC / low-latency",
                 "Dolby Digital — broadcast use",
-                "passthrough — no re-encode"
+                "passthrough — no re-encode",
+                ""
             ],
             "x-enum-varnames": [
                 "AudioCodecAAC",
                 "AudioCodecMP3",
                 "AudioCodecOpus",
                 "AudioCodecAC3",
-                "AudioCodecCopy"
+                "AudioCodecCopy",
+                "DefaultAudioCodec"
             ]
         },
         "domain.AudioTranscodeConfig": {
@@ -2180,7 +2183,8 @@ const docTemplate = `{
                 "nvenc",
                 "vaapi",
                 "videotoolbox",
-                "qsv"
+                "qsv",
+                "none"
             ],
             "x-enum-comments": {
                 "HWAccelNVENC": "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
@@ -2194,14 +2198,16 @@ const docTemplate = `{
                 "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
                 "Intel/AMD GPU via VA-API (Linux)",
                 "Apple GPU (macOS)",
-                "Intel Quick Sync Video"
+                "Intel Quick Sync Video",
+                ""
             ],
             "x-enum-varnames": [
                 "HWAccelNone",
                 "HWAccelNVENC",
                 "HWAccelVAAPI",
                 "HWAccelVideoToolbox",
-                "HWAccelQSV"
+                "HWAccelQSV",
+                "DefaultHWAccel"
             ]
         },
         "domain.Hook": {
@@ -2489,7 +2495,8 @@ const docTemplate = `{
                 "pad",
                 "crop",
                 "stretch",
-                "fit"
+                "fit",
+                "pad"
             ],
             "x-enum-comments": {
                 "ResizeModeCrop": "fill: keep aspect, crop excess",
@@ -2501,13 +2508,15 @@ const docTemplate = `{
                 "letterbox: keep aspect, fill remainder with black",
                 "fill: keep aspect, crop excess",
                 "distort: scale to W:H, ignore source aspect",
-                "keep aspect, no padding (output may be smaller than W:H)"
+                "keep aspect, no padding (output may be smaller than W:H)",
+                ""
             ],
             "x-enum-varnames": [
                 "ResizeModePad",
                 "ResizeModeCrop",
                 "ResizeModeStretch",
-                "ResizeModeFit"
+                "ResizeModeFit",
+                "DefaultVideoResizeMode"
             ]
         },
         "domain.StreamCodeFilter": {

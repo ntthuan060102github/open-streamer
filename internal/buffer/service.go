@@ -84,13 +84,11 @@ type Service struct {
 	buffers map[domain.StreamCode]*ringBuffer
 }
 
-const defaultBufferCapacity = 1024
-
 // New creates a Service and registers it with the DI injector.
 func New(i do.Injector) (*Service, error) {
 	cfg := do.MustInvoke[config.BufferConfig](i)
 	if cfg.Capacity <= 0 {
-		cfg.Capacity = defaultBufferCapacity
+		cfg.Capacity = domain.DefaultBufferCapacity
 	}
 	return &Service{
 		cfg:     cfg,

@@ -19,6 +19,18 @@ type HookHandler struct {
 	hooks    *hooks.Service
 }
 
+// hookResponse mirrors domain.Hook with the resolved-defaults view in
+// `effective`. Per-hook MaxRetries / TimeoutSec fall back to server-wide
+// defaults when 0 — UI uses Effective to render those concrete numbers.
+type hookResponse struct {
+	*domain.Hook
+	Effective *domain.Hook `json:"effective,omitempty"`
+}
+
+func newHookResponse(h *domain.Hook) hookResponse {
+	return hookResponse{Hook: h, Effective: domain.EffectiveHook(h)}
+}
+
 // NewHookHandler creates a HookHandler and registers it with the DI injector.
 func NewHookHandler(i do.Injector) (*HookHandler, error) {
 	return &HookHandler{
@@ -40,7 +52,11 @@ func (h *HookHandler) List(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, "LIST_FAILED", "list hooks", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": hooksList, "total": len(hooksList)})
+	resp := make([]hookResponse, 0, len(hooksList))
+	for _, hk := range hooksList {
+		resp = append(resp, newHookResponse(hk))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": resp, "total": len(resp)})
 }
 
 // Create registers a new hook.
@@ -63,7 +79,7 @@ func (h *HookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, "SAVE_FAILED", "create hook", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"data": hook})
+	writeJSON(w, http.StatusCreated, map[string]any{"data": newHookResponse(&hook)})
 }
 
 // Get returns one hook.
@@ -81,7 +97,7 @@ func (h *HookHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": hook})
+	writeJSON(w, http.StatusOK, map[string]any{"data": newHookResponse(hook)})
 }
 
 // Update replaces hook configuration.
@@ -113,7 +129,7 @@ func (h *HookHandler) Update(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, "SAVE_FAILED", "update hook", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": hook})
+	writeJSON(w, http.StatusOK, map[string]any{"data": newHookResponse(&hook)})
 }
 
 // Delete removes a hook.

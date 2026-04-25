@@ -40,6 +40,10 @@ type publisherPorts struct {
 }
 
 // configResponse is the payload returned by GET /config.
+//
+// EffectiveGlobalConfig is GlobalConfig with every implicit default surfaced
+// (see domain.EffectiveGlobalConfig). UI uses it to render concrete values
+// instead of "default" placeholders.
 type configResponse struct {
 	Version            version.Info               `json:"version"`
 	HWAccels           []domain.HWAccel           `json:"hw_accels"`
@@ -51,6 +55,7 @@ type configResponse struct {
 	WatermarkPositions []domain.WatermarkPosition `json:"watermark_positions"`
 	Ports              publisherPorts             `json:"ports"`
 	GlobalConfig       *domain.GlobalConfig       `json:"global_config"`
+	Effective          *domain.GlobalConfig       `json:"effective,omitempty"`
 }
 
 // ConfigHandler serves the GET/POST /config and GET/PUT /config/yaml endpoints.
@@ -152,6 +157,7 @@ func (h *ConfigHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 		},
 		Ports:        portsFromConfig(gcfg),
 		GlobalConfig: gcfg,
+		Effective:    domain.EffectiveGlobalConfig(gcfg),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -202,5 +208,6 @@ func (h *ConfigHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_config": gcfg,
 		"ports":         portsFromConfig(gcfg),
+		"effective":     domain.EffectiveGlobalConfig(gcfg),
 	})
 }

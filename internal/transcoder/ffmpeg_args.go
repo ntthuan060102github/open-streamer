@@ -302,18 +302,7 @@ func resizeFilter(w, h int, mode string, hw domain.HWAccel, encoder string) stri
 }
 
 func normalizeResizeMode(m string) domain.ResizeMode {
-	switch domain.ResizeMode(strings.ToLower(strings.TrimSpace(m))) {
-	case domain.ResizeModeCrop:
-		return domain.ResizeModeCrop
-	case domain.ResizeModeStretch:
-		return domain.ResizeModeStretch
-	case domain.ResizeModeFit:
-		return domain.ResizeModeFit
-	case domain.ResizeModePad:
-		return domain.ResizeModePad
-	default:
-		return domain.ResizeModePad
-	}
+	return domain.ResolveResizeMode(domain.ResizeMode(m))
 }
 
 // gpuScaleFilterName picks the in-VRAM scaler that pairs with the active
@@ -459,30 +448,7 @@ func bframesArgs(bf *int, encoder string) []string {
 }
 
 func normalizeVideoEncoder(codec string, hw domain.HWAccel) string {
-	c := strings.TrimSpace(strings.ToLower(codec))
-	switch c {
-	case "", "h264", "avc":
-		if hw == domain.HWAccelNVENC {
-			return "h264_nvenc"
-		}
-		return "libx264"
-	case "h265", "hevc":
-		if hw == domain.HWAccelNVENC {
-			return "hevc_nvenc"
-		}
-		return "libx265"
-	case "vp9":
-		return "libvpx-vp9"
-	case "av1":
-		return "libsvtav1"
-	}
-	if strings.Contains(c, "nvenc") || strings.Contains(c, "qsv") || strings.Contains(c, "videotoolbox") {
-		return codec
-	}
-	if strings.Contains(c, "264") || strings.Contains(c, "265") || strings.Contains(c, "hevc") {
-		return codec
-	}
-	return "libx264"
+	return domain.ResolveVideoEncoder(domain.VideoCodec(codec), hw)
 }
 
 func gopFrames(tc *domain.TranscoderConfig, p Profile) int {
@@ -503,25 +469,10 @@ func gopFrames(tc *domain.TranscoderConfig, p Profile) int {
 }
 
 func audioEncodeArgs(tc *domain.TranscoderConfig) []string {
-	codec := strings.TrimSpace(strings.ToLower(string(tc.Audio.Codec)))
-	if codec == "" || codec == string(domain.AudioCodecCopy) {
-		codec = "aac"
-	}
-	switch codec {
-	case "aac":
-		codec = "aac"
-	case "mp3":
-		codec = "libmp3lame"
-	case "opus":
-		codec = "libopus"
-	case "ac3":
-		codec = "ac3"
-	default:
-		codec = "aac"
-	}
+	codec := domain.ResolveAudioEncoder(tc.Audio.Codec)
 	br := tc.Audio.Bitrate
 	if br <= 0 {
-		br = 128
+		br = domain.DefaultAudioBitrateK
 	}
 	args := []string{"-c:a", codec, "-b:a", strconv.Itoa(br) + "k"}
 	if tc.Audio.SampleRate > 0 {

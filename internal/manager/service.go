@@ -202,7 +202,7 @@ func (s *Service) SetRestoredCallback(fn func(domain.StreamCode)) {
 // (defaults to 30s when ≤ 0).
 func NewForTesting(bus events.Bus, ing ingestorDep, m *metrics.Metrics, packetTimeoutSec int) *Service {
 	if packetTimeoutSec <= 0 {
-		packetTimeoutSec = 30
+		packetTimeoutSec = domain.DefaultInputPacketTimeoutSec
 	}
 	svc := &Service{
 		bus:           bus,
@@ -224,7 +224,7 @@ func New(i do.Injector) (*Service, error) {
 	m := do.MustInvoke[*metrics.Metrics](i)
 	sec := cfg.InputPacketTimeoutSec
 	if sec <= 0 {
-		sec = 30
+		sec = domain.DefaultInputPacketTimeoutSec
 	}
 	svc := &Service{
 		bus:           bus,

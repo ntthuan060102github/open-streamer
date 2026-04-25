@@ -39,8 +39,8 @@ import (
 )
 
 const (
-	hlsDefaultPlaylistTimeout = 15 * time.Second
-	hlsDefaultSegmentTimeout  = 60 * time.Second // segments can be many MB
+	hlsDefaultPlaylistTimeout = time.Duration(domain.DefaultHLSPlaylistTimeoutSec) * time.Second
+	hlsDefaultSegmentTimeout  = time.Duration(domain.DefaultHLSSegmentTimeoutSec) * time.Second
 	hlsMinPollInterval        = 500 * time.Millisecond
 	hlsMaxPlaylistRetries     = 5
 	hlsMaxSegmentRetries      = 2

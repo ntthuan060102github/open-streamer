@@ -479,6 +479,7 @@ definitions:
     - opus
     - ac3
     - copy
+    - aac
     type: string
     x-enum-comments:
       AudioCodecAAC: default for HLS/DASH
@@ -492,12 +493,14 @@ definitions:
     - best for WebRTC / low-latency
     - Dolby Digital — broadcast use
     - passthrough — no re-encode
+    - ""
     x-enum-varnames:
     - AudioCodecAAC
     - AudioCodecMP3
     - AudioCodecOpus
     - AudioCodecAC3
     - AudioCodecCopy
+    - DefaultAudioCodec
   domain.AudioTranscodeConfig:
     properties:
       bitrate:
@@ -624,6 +627,7 @@ definitions:
     - vaapi
     - videotoolbox
     - qsv
+    - none
     type: string
     x-enum-comments:
       HWAccelNVENC: NVIDIA GPU (h264_nvenc, hevc_nvenc)
@@ -637,12 +641,14 @@ definitions:
     - Intel/AMD GPU via VA-API (Linux)
     - Apple GPU (macOS)
     - Intel Quick Sync Video
+    - ""
     x-enum-varnames:
     - HWAccelNone
     - HWAccelNVENC
     - HWAccelVAAPI
     - HWAccelVideoToolbox
     - HWAccelQSV
+    - DefaultHWAccel
   domain.Hook:
     properties:
       enabled:
@@ -897,6 +903,7 @@ definitions:
     - crop
     - stretch
     - fit
+    - pad
     type: string
     x-enum-comments:
       ResizeModeCrop: 'fill: keep aspect, crop excess'
@@ -908,11 +915,13 @@ definitions:
     - 'fill: keep aspect, crop excess'
     - 'distort: scale to W:H, ignore source aspect'
     - keep aspect, no padding (output may be smaller than W:H)
+    - ""
     x-enum-varnames:
     - ResizeModePad
     - ResizeModeCrop
     - ResizeModeStretch
     - ResizeModeFit
+    - DefaultVideoResizeMode
   domain.StreamCodeFilter:
     properties:
       except:

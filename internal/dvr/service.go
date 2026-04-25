@@ -42,8 +42,8 @@ import (
 )
 
 const (
-	defaultRootDir         = "./out/dvr"
-	defaultSegmentDuration = 4 * time.Second
+	defaultRootDir         = domain.DefaultDVRRoot
+	defaultSegmentDuration = time.Duration(domain.DefaultDVRSegmentDuration) * time.Second
 	// gapTimeoutFactor: gap timer = factor × segmentDuration.
 	gapTimeoutFactor = 2
 )

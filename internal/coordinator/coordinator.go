@@ -703,7 +703,7 @@ func transcoderProfilesFromDomain(video *domain.VideoTranscodeConfig) []transcod
 		}
 		br := strconv.Itoa(p.Bitrate) + "k"
 		if p.Bitrate <= 0 {
-			br = "2500k"
+			br = strconv.Itoa(domain.DefaultVideoBitrateK) + "k"
 		}
 		out = append(out, transcoder.Profile{
 			Width:            p.Width,
@@ -728,6 +728,6 @@ func transcoderProfilesFromDomain(video *domain.VideoTranscodeConfig) []transcod
 func singleOriginCopyProfile() []transcoder.Profile {
 	// Empty codec/preset → buildFFmpegArgs picks based on Global.HW.
 	return []transcoder.Profile{{
-		Bitrate: "2500k",
+		Bitrate: strconv.Itoa(domain.DefaultVideoBitrateK) + "k",
 	}}
 }

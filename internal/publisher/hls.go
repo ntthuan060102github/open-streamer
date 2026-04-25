@@ -94,13 +94,13 @@ func runHLSSegmenter(
 	opts *hlsRunOpts,
 ) {
 	if segSec <= 0 {
-		segSec = 2
+		segSec = domain.DefaultLiveSegmentSec
 	}
 	if window <= 0 {
-		window = 12
+		window = domain.DefaultLiveWindow
 	}
 	if history < 0 {
-		history = 0
+		history = domain.DefaultLiveHistory
 	}
 
 	p := &hlsSegmenter{

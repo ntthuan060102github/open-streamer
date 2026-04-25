@@ -182,7 +182,7 @@ func (s *Service) deliverWithRetry(ctx context.Context, h *domain.Hook, event do
 	backoffs := []time.Duration{1 * time.Second, 5 * time.Second, 30 * time.Second}
 	maxRetries := h.MaxRetries
 	if maxRetries == 0 {
-		maxRetries = 3 // default when not set on the hook
+		maxRetries = domain.DefaultHookMaxRetries
 	}
 	if maxRetries > len(backoffs) {
 		maxRetries = len(backoffs)
@@ -256,7 +256,7 @@ func (s *Service) deliverHTTP(ctx context.Context, h *domain.Hook, event domain.
 
 	timeoutSec := h.TimeoutSec
 	if timeoutSec == 0 {
-		timeoutSec = 10 // default when not set on the hook
+		timeoutSec = domain.DefaultHookTimeoutSec
 	}
 	deliverCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()

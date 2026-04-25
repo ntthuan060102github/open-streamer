@@ -33,9 +33,14 @@ type StreamHandler struct {
 // Persisted config from domain.Stream is embedded at top level; everything
 // runtime-computed (status, pipeline activity, input health, transcoder state)
 // lives under a single `runtime` envelope so clients have one root for live data.
+//
+// Effective is the same Stream config with all implicit defaults applied
+// (see domain.EffectiveStream). The UI uses this to show users what the
+// system will actually do with un-set fields ("default" placeholders).
 type streamResponse struct {
 	*domain.Stream
-	Runtime manager.RuntimeStatus `json:"runtime"`
+	Runtime   manager.RuntimeStatus `json:"runtime"`
+	Effective *domain.Stream        `json:"effective,omitempty"`
 }
 
 func (h *StreamHandler) withStatus(s *domain.Stream) streamResponse {
@@ -74,7 +79,11 @@ func (h *StreamHandler) withStatus(s *domain.Stream) streamResponse {
 		// stable for clients regardless of pipeline state.
 		rt.Inputs = []manager.InputHealthSnapshot{}
 	}
-	return streamResponse{Stream: s, Runtime: rt}
+	return streamResponse{
+		Stream:    s,
+		Runtime:   rt,
+		Effective: domain.EffectiveStream(s),
+	}
 }
 
 // NewStreamHandler creates a StreamHandler and registers it with the DI injector.

@@ -68,7 +68,7 @@ import (
 
 const (
 	// defaultPushTimeout is the publish handshake budget when dest.TimeoutSec is unset.
-	defaultPushTimeout = 10 * time.Second
+	defaultPushTimeout = time.Duration(domain.DefaultPushTimeoutSec) * time.Second
 	// pushHandshakeBackstop adds a small grace period over the lal-internal
 	// timeout so we only see our own deadline tick if lal itself wedges.
 	pushHandshakeBackstop = 2 * time.Second
@@ -374,7 +374,7 @@ func (s *Service) serveRTMPPush(
 
 	retryDelay := time.Duration(dest.RetryTimeoutSec) * time.Second
 	if retryDelay <= 0 {
-		retryDelay = 5 * time.Second
+		retryDelay = time.Duration(domain.DefaultPushRetryTimeoutSec) * time.Second
 	}
 
 	attempts := 0
