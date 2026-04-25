@@ -268,25 +268,65 @@ func (s *Service) Start(
 }
 
 // spawnMultiOutput launches the single multi-output encoder goroutine. The
-// goroutine is tracked under profile index 0 in the streamWorker map so the
-// existing Stop / Update / status code paths (which iterate over profiles)
-// continue to work without per-mode branches. StartProfile/StopProfile
+// real worker is tracked under profile index 0; one "shadow" profileWorker
+// is registered per remaining ladder rung so the existing Stop / Update /
+// RuntimeStatus / recordProfileError code paths (which iterate over
+// profiles) see the same N-entry shape as legacy per-profile mode.
+//
+// The shadows share an already-closed `done` channel and a no-op cancel —
+// accidental StopProfile on a shadow returns immediately without tearing
+// down the single underlying FFmpeg process. (StartProfile/StopProfile
 // granularity is intentionally lost in multi-output mode — caller must
-// fall back to a full Stop+Start to add/remove profiles.
+// fall back to a full Stop+Start to add/remove profiles.)
+//
+// When FFmpeg crashes, runStreamEncoder calls recordProfileError once per
+// target index → every rung in the ladder shows the same crash entry +
+// restart counter, accurately conveying "all rungs went down together".
 func (s *Service) spawnMultiOutput(streamID domain.StreamCode, sw *streamWorker, targets []RenditionTarget) {
 	pCtx, pCancel := context.WithCancel(sw.baseCtx)
-	pw := &profileWorker{
+	real := &profileWorker{
 		cancel: pCancel,
 		done:   make(chan struct{}),
 	}
+
 	sw.mu.Lock()
-	sw.profiles[0] = pw
+	sw.profiles[0] = real
+	for i := 1; i < len(targets); i++ {
+		sw.profiles[i] = newShadowProfileWorker()
+	}
 	sw.mu.Unlock()
 
 	go func() {
-		defer close(pw.done)
+		defer close(real.done)
 		s.runStreamEncoder(pCtx, streamID, sw.rawIngest, sw.tc, targets)
 	}()
+}
+
+// shadowDoneCh is a single pre-closed channel shared by every shadow
+// profileWorker — read returns immediately, so Stop / StopProfile waits
+// don't block on shadows. Sharing one closed channel across all shadows
+// is safe (channel reads are concurrency-safe).
+var shadowDoneCh = func() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
+
+// newShadowProfileWorker returns a profileWorker that satisfies the
+// streamWorker.profiles invariants without owning a goroutine.
+//   - cancel is a no-op so StopProfile on a shadow does not propagate to
+//     the real multi-output FFmpeg process.
+//   - done is the pre-closed shadowDoneCh so any wait returns instantly.
+//
+// Errors and restartCount fields are still per-instance (default zero) so
+// recordProfileError accumulates a distinct history per rung — required
+// for the UI to show "track_2 had 3 crashes" the same way per-profile
+// mode does.
+func newShadowProfileWorker() *profileWorker {
+	return &profileWorker{
+		cancel: func() {},
+		done:   shadowDoneCh,
+	}
 }
 
 // Stop cancels all FFmpeg encoders for a stream and waits for them to exit.
