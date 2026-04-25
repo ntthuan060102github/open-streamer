@@ -1998,11 +1998,11 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "aac",
-                "aac",
                 "mp3",
                 "opus",
                 "ac3",
-                "copy"
+                "copy",
+                "aac"
             ],
             "x-enum-comments": {
                 "AudioCodecAAC": "default for HLS/DASH",
@@ -2012,20 +2012,20 @@ const docTemplate = `{
                 "AudioCodecOpus": "best for WebRTC / low-latency"
             },
             "x-enum-descriptions": [
-                "",
                 "default for HLS/DASH",
                 "legacy compatibility",
                 "best for WebRTC / low-latency",
                 "Dolby Digital — broadcast use",
-                "passthrough — no re-encode"
+                "passthrough — no re-encode",
+                ""
             ],
             "x-enum-varnames": [
-                "DefaultAudioCodec",
                 "AudioCodecAAC",
                 "AudioCodecMP3",
                 "AudioCodecOpus",
                 "AudioCodecAC3",
-                "AudioCodecCopy"
+                "AudioCodecCopy",
+                "DefaultAudioCodec"
             ]
         },
         "domain.AudioTranscodeConfig": {
@@ -2180,11 +2180,11 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "none",
-                "none",
                 "nvenc",
                 "vaapi",
                 "videotoolbox",
-                "qsv"
+                "qsv",
+                "none"
             ],
             "x-enum-comments": {
                 "HWAccelNVENC": "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
@@ -2194,20 +2194,20 @@ const docTemplate = `{
                 "HWAccelVideoToolbox": "Apple GPU (macOS)"
             },
             "x-enum-descriptions": [
-                "",
                 "CPU only (libx264, libx265)",
                 "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
                 "Intel/AMD GPU via VA-API (Linux)",
                 "Apple GPU (macOS)",
-                "Intel Quick Sync Video"
+                "Intel Quick Sync Video",
+                ""
             ],
             "x-enum-varnames": [
-                "DefaultHWAccel",
                 "HWAccelNone",
                 "HWAccelNVENC",
                 "HWAccelVAAPI",
                 "HWAccelVideoToolbox",
-                "HWAccelQSV"
+                "HWAccelQSV",
+                "DefaultHWAccel"
             ]
         },
         "domain.Hook": {
@@ -2493,10 +2493,10 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "pad",
-                "pad",
                 "crop",
                 "stretch",
-                "fit"
+                "fit",
+                "pad"
             ],
             "x-enum-comments": {
                 "ResizeModeCrop": "fill: keep aspect, crop excess",
@@ -2505,18 +2505,18 @@ const docTemplate = `{
                 "ResizeModeStretch": "distort: scale to W:H, ignore source aspect"
             },
             "x-enum-descriptions": [
-                "",
                 "letterbox: keep aspect, fill remainder with black",
                 "fill: keep aspect, crop excess",
                 "distort: scale to W:H, ignore source aspect",
-                "keep aspect, no padding (output may be smaller than W:H)"
+                "keep aspect, no padding (output may be smaller than W:H)",
+                ""
             ],
             "x-enum-varnames": [
-                "DefaultVideoResizeMode",
                 "ResizeModePad",
                 "ResizeModeCrop",
                 "ResizeModeStretch",
-                "ResizeModeFit"
+                "ResizeModeFit",
+                "DefaultVideoResizeMode"
             ]
         },
         "domain.StreamCodeFilter": {
