@@ -79,6 +79,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/config/defaults": {
+            "get": {
+                "description": "Static values the server fills in for unset configuration fields. Use as form placeholders so users see real defaults instead of \"default\" text.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get system configuration defaults.",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handler.configDefaultsResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/config/yaml": {
             "get": {
                 "description": "Returns global_config, streams, and hooks bundled in a single YAML document. Pair with PUT /config/yaml to round-trip an editor.",
@@ -1998,7 +2018,6 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "aac",
-                "aac",
                 "mp3",
                 "opus",
                 "ac3",
@@ -2012,7 +2031,6 @@ const docTemplate = `{
                 "AudioCodecOpus": "best for WebRTC / low-latency"
             },
             "x-enum-descriptions": [
-                "",
                 "default for HLS/DASH",
                 "legacy compatibility",
                 "best for WebRTC / low-latency",
@@ -2020,7 +2038,6 @@ const docTemplate = `{
                 "passthrough — no re-encode"
             ],
             "x-enum-varnames": [
-                "DefaultAudioCodec",
                 "AudioCodecAAC",
                 "AudioCodecMP3",
                 "AudioCodecOpus",
@@ -2180,7 +2197,6 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "none",
-                "none",
                 "nvenc",
                 "vaapi",
                 "videotoolbox",
@@ -2194,7 +2210,6 @@ const docTemplate = `{
                 "HWAccelVideoToolbox": "Apple GPU (macOS)"
             },
             "x-enum-descriptions": [
-                "",
                 "CPU only (libx264, libx265)",
                 "NVIDIA GPU (h264_nvenc, hevc_nvenc)",
                 "Intel/AMD GPU via VA-API (Linux)",
@@ -2202,7 +2217,6 @@ const docTemplate = `{
                 "Intel Quick Sync Video"
             ],
             "x-enum-varnames": [
-                "DefaultHWAccel",
                 "HWAccelNone",
                 "HWAccelNVENC",
                 "HWAccelVAAPI",
@@ -2493,7 +2507,6 @@ const docTemplate = `{
             "type": "string",
             "enum": [
                 "pad",
-                "pad",
                 "crop",
                 "stretch",
                 "fit"
@@ -2505,14 +2518,12 @@ const docTemplate = `{
                 "ResizeModeStretch": "distort: scale to W:H, ignore source aspect"
             },
             "x-enum-descriptions": [
-                "",
                 "letterbox: keep aspect, fill remainder with black",
                 "fill: keep aspect, crop excess",
                 "distort: scale to W:H, ignore source aspect",
                 "keep aspect, no padding (output may be smaller than W:H)"
             ],
             "x-enum-varnames": [
-                "DefaultVideoResizeMode",
                 "ResizeModePad",
                 "ResizeModeCrop",
                 "ResizeModeStretch",
@@ -2862,6 +2873,166 @@ const docTemplate = `{
                 "WatermarkTypeText",
                 "WatermarkTypeImage"
             ]
+        },
+        "handler.configDefaultsResponse": {
+            "type": "object",
+            "properties": {
+                "buffer": {
+                    "type": "object",
+                    "properties": {
+                        "capacity": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "dvr": {
+                    "type": "object",
+                    "properties": {
+                        "segment_duration": {
+                            "description": "SegmentDuration is in seconds.",
+                            "type": "integer"
+                        },
+                        "storage_path_template": {
+                            "description": "StoragePathTemplate uses {streamCode} as the placeholder for\nthe stream code — frontend must substitute it client-side.",
+                            "type": "string"
+                        }
+                    }
+                },
+                "hook": {
+                    "type": "object",
+                    "properties": {
+                        "max_retries": {
+                            "type": "integer"
+                        },
+                        "timeout_sec": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "ingestor": {
+                    "type": "object",
+                    "properties": {
+                        "hls_playlist_timeout_sec": {
+                            "type": "integer"
+                        },
+                        "hls_segment_timeout_sec": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "listeners": {
+                    "type": "object",
+                    "properties": {
+                        "rtmp": {
+                            "$ref": "#/definitions/handler.listenerDefaults"
+                        },
+                        "rtsp": {
+                            "$ref": "#/definitions/handler.rtspListenerDefaults"
+                        },
+                        "srt": {
+                            "$ref": "#/definitions/handler.listenerDefaults"
+                        }
+                    }
+                },
+                "manager": {
+                    "type": "object",
+                    "properties": {
+                        "input_packet_timeout_sec": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "publisher": {
+                    "type": "object",
+                    "properties": {
+                        "dash": {
+                            "$ref": "#/definitions/handler.liveSegmentDefaults"
+                        },
+                        "hls": {
+                            "$ref": "#/definitions/handler.liveSegmentDefaults"
+                        }
+                    }
+                },
+                "push": {
+                    "type": "object",
+                    "properties": {
+                        "retry_timeout_sec": {
+                            "type": "integer"
+                        },
+                        "timeout_sec": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "transcoder": {
+                    "type": "object",
+                    "properties": {
+                        "audio": {
+                            "type": "object",
+                            "properties": {
+                                "bitrate_k": {
+                                    "type": "integer"
+                                },
+                                "codec": {
+                                    "$ref": "#/definitions/domain.AudioCodec"
+                                }
+                            }
+                        },
+                        "global": {
+                            "type": "object",
+                            "properties": {
+                                "hw": {
+                                    "$ref": "#/definitions/domain.HWAccel"
+                                }
+                            }
+                        },
+                        "video": {
+                            "type": "object",
+                            "properties": {
+                                "bitrate_k": {
+                                    "type": "integer"
+                                },
+                                "resize_mode": {
+                                    "$ref": "#/definitions/domain.ResizeMode"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "handler.listenerDefaults": {
+            "type": "object",
+            "properties": {
+                "port": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handler.liveSegmentDefaults": {
+            "type": "object",
+            "properties": {
+                "live_history": {
+                    "type": "integer"
+                },
+                "live_segment_sec": {
+                    "type": "integer"
+                },
+                "live_window": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handler.rtspListenerDefaults": {
+            "type": "object",
+            "properties": {
+                "port": {
+                    "type": "integer"
+                },
+                "transport": {
+                    "type": "string"
+                }
+            }
         },
         "manager.InputHealthSnapshot": {
             "type": "object",

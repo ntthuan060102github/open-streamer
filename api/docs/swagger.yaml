@@ -475,7 +475,6 @@ definitions:
   domain.AudioCodec:
     enum:
     - aac
-    - aac
     - mp3
     - opus
     - ac3
@@ -488,14 +487,12 @@ definitions:
       AudioCodecMP3: legacy compatibility
       AudioCodecOpus: best for WebRTC / low-latency
     x-enum-descriptions:
-    - ""
     - default for HLS/DASH
     - legacy compatibility
     - best for WebRTC / low-latency
     - Dolby Digital — broadcast use
     - passthrough — no re-encode
     x-enum-varnames:
-    - DefaultAudioCodec
     - AudioCodecAAC
     - AudioCodecMP3
     - AudioCodecOpus
@@ -623,7 +620,6 @@ definitions:
   domain.HWAccel:
     enum:
     - none
-    - none
     - nvenc
     - vaapi
     - videotoolbox
@@ -636,14 +632,12 @@ definitions:
       HWAccelVAAPI: Intel/AMD GPU via VA-API (Linux)
       HWAccelVideoToolbox: Apple GPU (macOS)
     x-enum-descriptions:
-    - ""
     - CPU only (libx264, libx265)
     - NVIDIA GPU (h264_nvenc, hevc_nvenc)
     - Intel/AMD GPU via VA-API (Linux)
     - Apple GPU (macOS)
     - Intel Quick Sync Video
     x-enum-varnames:
-    - DefaultHWAccel
     - HWAccelNone
     - HWAccelNVENC
     - HWAccelVAAPI
@@ -900,7 +894,6 @@ definitions:
   domain.ResizeMode:
     enum:
     - pad
-    - pad
     - crop
     - stretch
     - fit
@@ -911,13 +904,11 @@ definitions:
       ResizeModePad: 'letterbox: keep aspect, fill remainder with black'
       ResizeModeStretch: 'distort: scale to W:H, ignore source aspect'
     x-enum-descriptions:
-    - ""
     - 'letterbox: keep aspect, fill remainder with black'
     - 'fill: keep aspect, crop excess'
     - 'distort: scale to W:H, ignore source aspect'
     - keep aspect, no padding (output may be smaller than W:H)
     x-enum-varnames:
-    - DefaultVideoResizeMode
     - ResizeModePad
     - ResizeModeCrop
     - ResizeModeStretch
@@ -1211,6 +1202,110 @@ definitions:
     x-enum-varnames:
     - WatermarkTypeText
     - WatermarkTypeImage
+  handler.configDefaultsResponse:
+    properties:
+      buffer:
+        properties:
+          capacity:
+            type: integer
+        type: object
+      dvr:
+        properties:
+          segment_duration:
+            description: SegmentDuration is in seconds.
+            type: integer
+          storage_path_template:
+            description: |-
+              StoragePathTemplate uses {streamCode} as the placeholder for
+              the stream code — frontend must substitute it client-side.
+            type: string
+        type: object
+      hook:
+        properties:
+          max_retries:
+            type: integer
+          timeout_sec:
+            type: integer
+        type: object
+      ingestor:
+        properties:
+          hls_playlist_timeout_sec:
+            type: integer
+          hls_segment_timeout_sec:
+            type: integer
+        type: object
+      listeners:
+        properties:
+          rtmp:
+            $ref: '#/definitions/handler.listenerDefaults'
+          rtsp:
+            $ref: '#/definitions/handler.rtspListenerDefaults'
+          srt:
+            $ref: '#/definitions/handler.listenerDefaults'
+        type: object
+      manager:
+        properties:
+          input_packet_timeout_sec:
+            type: integer
+        type: object
+      publisher:
+        properties:
+          dash:
+            $ref: '#/definitions/handler.liveSegmentDefaults'
+          hls:
+            $ref: '#/definitions/handler.liveSegmentDefaults'
+        type: object
+      push:
+        properties:
+          retry_timeout_sec:
+            type: integer
+          timeout_sec:
+            type: integer
+        type: object
+      transcoder:
+        properties:
+          audio:
+            properties:
+              bitrate_k:
+                type: integer
+              codec:
+                $ref: '#/definitions/domain.AudioCodec'
+            type: object
+          global:
+            properties:
+              hw:
+                $ref: '#/definitions/domain.HWAccel'
+            type: object
+          video:
+            properties:
+              bitrate_k:
+                type: integer
+              resize_mode:
+                $ref: '#/definitions/domain.ResizeMode'
+            type: object
+        type: object
+    type: object
+  handler.listenerDefaults:
+    properties:
+      port:
+        type: integer
+    type: object
+  handler.liveSegmentDefaults:
+    properties:
+      live_history:
+        type: integer
+      live_segment_sec:
+        type: integer
+      live_window:
+        type: integer
+    type: object
+  handler.rtspListenerDefaults:
+    properties:
+      port:
+        type: integer
+      transport:
+        type: string
+    type: object
   manager.InputHealthSnapshot:
     properties:
       bitrate_kbps:
@@ -1425,6 +1520,20 @@ paths:
           schema:
             $ref: '#/definitions/apidocs.ErrorResponse'
       summary: Partially update server configuration.
+      tags:
+      - system
+  /config/defaults:
+    get:
+      description: Static values the server fills in for unset configuration fields.
+        Use as form placeholders so users see real defaults instead of "default" text.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handler.configDefaultsResponse'
+      summary: Get system configuration defaults.
       tags:
       - system
   /config/yaml:
