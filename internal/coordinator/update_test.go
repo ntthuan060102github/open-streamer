@@ -132,6 +132,14 @@ func (t *spyTC) StartProfile(_ domain.StreamCode, idx int, _ transcoder.Renditio
 	return nil
 }
 
+// SetUnhealthyCallback / SetHealthyCallback are no-ops on the spy —
+// tests that need to drive transcoder health transitions invoke the
+// coordinator's handleTranscoderUnhealthy / handleTranscoderHealthy
+// directly rather than going through the spy. Match the interface
+// surface so the spy still satisfies tcDep.
+func (t *spyTC) SetUnhealthyCallback(_ func(domain.StreamCode, string)) {}
+func (t *spyTC) SetHealthyCallback(_ func(domain.StreamCode))           {}
+
 // spyPub records calls to the publisher interface.
 type spyPub struct {
 	mu               sync.Mutex

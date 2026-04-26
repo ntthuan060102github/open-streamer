@@ -32,6 +32,8 @@ type tcDep interface {
 	Stop(domain.StreamCode)
 	StopProfile(domain.StreamCode, int)
 	StartProfile(domain.StreamCode, int, transcoder.RenditionTarget) error
+	SetUnhealthyCallback(func(streamID domain.StreamCode, reason string))
+	SetHealthyCallback(func(streamID domain.StreamCode))
 }
 
 // pubDep is the subset of publisher.Service the coordinator needs.

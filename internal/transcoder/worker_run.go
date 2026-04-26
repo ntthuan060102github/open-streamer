@@ -17,6 +17,19 @@ import (
 const (
 	restartBaseDelay = 2 * time.Second
 	restartMaxDelay  = 30 * time.Second
+
+	// healthDegradeThreshold is the count of consecutive crashes (with
+	// runOnce returning under healthSustainDur) before we mark the
+	// stream's transcoder as unhealthy. Three matches the existing
+	// log-suppression cap (visibleConsecutiveCap) — the operator has
+	// already seen 3 visible warns by the time degradation fires.
+	healthDegradeThreshold = 3
+
+	// healthSustainDur is the minimum runOnce duration that counts as
+	// "FFmpeg ran stably" — long enough to assume a real session was
+	// established (decoder warmup + a few seconds of packets), short
+	// enough that recovery is detected promptly.
+	healthSustainDur = 30 * time.Second
 )
 
 // runProfileEncoder is one FFmpeg process: raw MPEG-TS in → one profile MPEG-TS out → buffer.
@@ -58,14 +71,34 @@ func (s *Service) runProfileEncoder(
 	var lastErrMsg string
 	consecutiveSame := 0
 	const visibleConsecutiveCap = 3
+	// consecutiveFastCrashes counts back-to-back crashes where runOnce
+	// returned in under healthSustainDur. Reset on every sustained run.
+	// When it crosses healthDegradeThreshold the stream's transcoder is
+	// reported as unhealthy to the coordinator (status → Degraded).
+	consecutiveFastCrashes := 0
 
 	for {
+		startedAt := time.Now()
 		crashed, runErr := s.runOnce(ctx, logStream, outBufferID, track, sub, args)
+		runDur := time.Since(startedAt)
 		if ctx.Err() != nil {
 			return // clean shutdown
 		}
 		if !crashed {
-			return // graceful exit (buffer closed, etc.)
+			// Graceful exit. If we'd previously marked this profile
+			// unhealthy, declare it healthy on the way out so the
+			// coordinator's status flips back even though the loop
+			// is exiting (caller may be tearing down).
+			s.fireHealthyIfTransitioned(logStream, profileIndex)
+			return
+		}
+
+		// Sustained run before this crash → operator likely fixed
+		// the config / transient issue cleared. Reset the fast-crash
+		// counter and clear unhealthy flag if it was set.
+		if runDur >= healthSustainDur {
+			consecutiveFastCrashes = 0
+			s.fireHealthyIfTransitioned(logStream, profileIndex)
 		}
 
 		attempt++
@@ -78,6 +111,15 @@ func (s *Service) runProfileEncoder(
 		// rate even when logs are suppressed.
 		s.recordProfileError(logStream, profileIndex, errMsg)
 		s.m.TranscoderRestartsTotal.WithLabelValues(string(logStream)).Inc()
+
+		// Count fast (sub-sustain) crashes; cross threshold → mark
+		// the stream's transcoder unhealthy.
+		if runDur < healthSustainDur {
+			consecutiveFastCrashes++
+			if consecutiveFastCrashes >= healthDegradeThreshold {
+				s.fireUnhealthyIfTransitioned(logStream, profileIndex, errMsg)
+			}
+		}
 
 		if errMsg == lastErrMsg {
 			consecutiveSame++

@@ -47,7 +47,28 @@ type Coordinator struct {
 	abrMixers map[domain.StreamCode]*abrMixerEntry // streams currently running as ABR mixer (mirror video ladder + audio fan-out)
 
 	statusMu sync.RWMutex
-	status   map[domain.StreamCode]domain.StreamStatus // runtime status per running stream
+	// degradation tracks per-stream "what's broken right now" so the
+	// derived StreamStatus can reflect both input failover state AND
+	// transcoder crash loops. Status is Active iff the stream has no
+	// entry in the map (or the entry has all flags false). The
+	// presence of an entry with any flag set → StatusDegraded.
+	degradation map[domain.StreamCode]*streamDegradation
+}
+
+// streamDegradation flags the discrete failure modes that should pull a
+// stream into StatusDegraded. Multiple flags can be true at once
+// (transcoder crashing AND inputs exhausted) — the stream stays
+// degraded until ALL flags clear.
+type streamDegradation struct {
+	inputsExhausted     bool // manager: every input is in StatusDegraded
+	transcoderUnhealthy bool // transcoder: FFmpeg crashing in a loop
+}
+
+// any reports whether the degradation entry currently warrants
+// StatusDegraded. Returns false when every flag is cleared so the
+// caller can drop the map entry and let the default (Active) take over.
+func (d *streamDegradation) any() bool {
+	return d.inputsExhausted || d.transcoderUnhealthy
 }
 
 // New registers a Coordinator with the DI injector.
@@ -69,13 +90,15 @@ func New(i do.Injector) (*Coordinator, error) {
 			}
 			return s, true
 		},
-		renditions: make(map[domain.StreamCode][]string),
-		abrCopies:  make(map[domain.StreamCode]*abrCopyEntry),
-		abrMixers:  make(map[domain.StreamCode]*abrMixerEntry),
-		status:     make(map[domain.StreamCode]domain.StreamStatus),
+		renditions:  make(map[domain.StreamCode][]string),
+		abrCopies:   make(map[domain.StreamCode]*abrCopyEntry),
+		abrMixers:   make(map[domain.StreamCode]*abrMixerEntry),
+		degradation: make(map[domain.StreamCode]*streamDegradation),
 	}
 	c.mgr.SetExhaustedCallback(c.handleAllInputsExhausted)
 	c.mgr.SetRestoredCallback(c.handleInputRestored)
+	c.tc.SetUnhealthyCallback(c.handleTranscoderUnhealthy)
+	c.tc.SetHealthyCallback(c.handleTranscoderHealthy)
 	return c, nil
 }
 
@@ -90,17 +113,17 @@ func newForTesting(
 	m *metrics.Metrics,
 ) *Coordinator {
 	c := &Coordinator{
-		buf:        buf,
-		mgr:        mgr,
-		tc:         tc,
-		pub:        pub,
-		dvr:        dvr,
-		bus:        bus,
-		m:          m,
-		renditions: make(map[domain.StreamCode][]string),
-		abrCopies:  make(map[domain.StreamCode]*abrCopyEntry),
-		abrMixers:  make(map[domain.StreamCode]*abrMixerEntry),
-		status:     make(map[domain.StreamCode]domain.StreamStatus),
+		buf:         buf,
+		mgr:         mgr,
+		tc:          tc,
+		pub:         pub,
+		dvr:         dvr,
+		bus:         bus,
+		m:           m,
+		renditions:  make(map[domain.StreamCode][]string),
+		abrCopies:   make(map[domain.StreamCode]*abrCopyEntry),
+		abrMixers:   make(map[domain.StreamCode]*abrMixerEntry),
+		degradation: make(map[domain.StreamCode]*streamDegradation),
 	}
 	c.mgr.SetExhaustedCallback(c.handleAllInputsExhausted)
 	c.mgr.SetRestoredCallback(c.handleInputRestored)
@@ -117,28 +140,47 @@ func (c *Coordinator) SetUpstreamLookupForTesting(fn func(domain.StreamCode) (*d
 // It is derived purely from in-memory state — never read from the store.
 //
 //   - StatusStopped  — pipeline is not registered (never started, or was stopped)
-//   - StatusActive   — pipeline is running and at least one input is live
-//   - StatusDegraded — pipeline is running but all inputs are currently exhausted
+//   - StatusActive   — pipeline is running and no degradation source is active
+//   - StatusDegraded — pipeline is running but at least one degradation source
+//     is active (all inputs exhausted, OR transcoder crashing in a loop)
 func (c *Coordinator) StreamStatus(code domain.StreamCode) domain.StreamStatus {
 	if !c.IsRunning(code) {
 		return domain.StatusStopped
 	}
 	c.statusMu.RLock()
-	st := c.status[code]
+	d := c.degradation[code]
 	c.statusMu.RUnlock()
-	if st == "" {
-		return domain.StatusActive
+	if d != nil && d.any() {
+		return domain.StatusDegraded
 	}
-	return st
+	return domain.StatusActive
 }
 
-func (c *Coordinator) setStatus(code domain.StreamCode, st domain.StreamStatus) {
+// updateDegradation toggles a single degradation flag and prunes the
+// map entry when no flag remains set, so the default-Active path stays
+// allocation-free for healthy streams. mutator receives the current
+// (or freshly created) degradation entry under the lock.
+func (c *Coordinator) updateDegradation(code domain.StreamCode, mutator func(*streamDegradation)) {
 	c.statusMu.Lock()
-	if st == "" || st == domain.StatusActive {
-		delete(c.status, code) // active is the default; no need to store it explicitly
-	} else {
-		c.status[code] = st
+	defer c.statusMu.Unlock()
+	d := c.degradation[code]
+	if d == nil {
+		d = &streamDegradation{}
 	}
+	mutator(d)
+	if d.any() {
+		c.degradation[code] = d
+	} else {
+		delete(c.degradation, code)
+	}
+}
+
+// clearDegradation drops every flag for a stream — used by the Start
+// paths so a fresh pipeline never inherits stale degraded state from a
+// prior run with the same code.
+func (c *Coordinator) clearDegradation(code domain.StreamCode) {
+	c.statusMu.Lock()
+	delete(c.degradation, code)
 	c.statusMu.Unlock()
 }
 
@@ -251,7 +293,7 @@ func (c *Coordinator) Start(ctx context.Context, stream *domain.Stream) error {
 		c.m.StreamStartTimeSeconds.WithLabelValues(string(stream.Code)).Set(float64(time.Now().Unix()))
 	}
 
-	c.setStatus(stream.Code, domain.StatusActive)
+	c.clearDegradation(stream.Code)
 
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStarted,
@@ -365,7 +407,7 @@ func (c *Coordinator) Stop(ctx context.Context, streamID domain.StreamCode) {
 		c.m.StreamStartTimeSeconds.DeleteLabelValues(string(streamID))
 	}
 
-	c.setStatus(streamID, domain.StatusActive)
+	c.clearDegradation(streamID)
 
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStopped,
@@ -653,9 +695,14 @@ func (c *Coordinator) reloadDVRIfBufferChanged(ctx context.Context, old, new *do
 }
 
 // handleAllInputsExhausted is called by the manager when all inputs are degraded.
+// Sets the input-source degradation flag; the transcoder flag is left
+// untouched so a stream that was ALSO transcoder-broken stays degraded
+// after inputs recover.
 func (c *Coordinator) handleAllInputsExhausted(streamCode domain.StreamCode) {
 	slog.Warn("coordinator: all inputs exhausted, stream degraded", "stream_code", streamCode)
-	c.setStatus(streamCode, domain.StatusDegraded)
+	c.updateDegradation(streamCode, func(d *streamDegradation) {
+		d.inputsExhausted = true
+	})
 	c.bus.Publish(context.Background(), domain.Event{
 		Type:       domain.EventInputDegraded,
 		StreamCode: streamCode,
@@ -664,10 +711,50 @@ func (c *Coordinator) handleAllInputsExhausted(streamCode domain.StreamCode) {
 }
 
 // handleInputRestored is called by the manager when failover succeeds after all inputs
-// were previously exhausted.
+// were previously exhausted. Clears ONLY the input flag — if transcoder
+// is also unhealthy the stream stays degraded.
 func (c *Coordinator) handleInputRestored(streamCode domain.StreamCode) {
-	slog.Info("coordinator: input restored, stream active", "stream_code", streamCode)
-	c.setStatus(streamCode, domain.StatusActive)
+	slog.Info("coordinator: input restored", "stream_code", streamCode)
+	c.updateDegradation(streamCode, func(d *streamDegradation) {
+		d.inputsExhausted = false
+	})
+}
+
+// handleTranscoderUnhealthy is called by the transcoder when one of its
+// FFmpeg workers has crashed N consecutive times — signal that downstream
+// publishers (HLS / DASH / RTMP) are receiving no packets and the stream
+// is effectively broken even though inputs may still be flowing.
+//
+// reason carries the latest error message ("ffmpeg exit: status 234; …")
+// for ops visibility via slog. UI sees only the StatusDegraded
+// transition; the per-profile error history (already populated via
+// recordProfileError) provides the detailed crash trail.
+func (c *Coordinator) handleTranscoderUnhealthy(streamCode domain.StreamCode, reason string) {
+	slog.Warn("coordinator: transcoder unhealthy, stream degraded",
+		"stream_code", streamCode, "reason", reason)
+	c.updateDegradation(streamCode, func(d *streamDegradation) {
+		d.transcoderUnhealthy = true
+	})
+	c.bus.Publish(context.Background(), domain.Event{
+		Type:       domain.EventTranscoderError,
+		StreamCode: streamCode,
+		Payload: map[string]any{
+			"reason":  "consecutive_crashes",
+			"message": reason,
+		},
+	})
+}
+
+// handleTranscoderHealthy is called by the transcoder when an FFmpeg
+// worker has run continuously past the sustain threshold after a prior
+// degradation — indicates the crash loop has resolved (operator fixed
+// config, transient resource pressure cleared, etc.). Clears ONLY the
+// transcoder flag.
+func (c *Coordinator) handleTranscoderHealthy(streamCode domain.StreamCode) {
+	slog.Info("coordinator: transcoder recovered", "stream_code", streamCode)
+	c.updateDegradation(streamCode, func(d *streamDegradation) {
+		d.transcoderUnhealthy = false
+	})
 }
 
 // BootstrapPersistedStreams starts the pipeline for every non-disabled stream that

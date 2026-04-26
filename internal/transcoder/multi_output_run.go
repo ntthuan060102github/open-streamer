@@ -87,14 +87,29 @@ func (s *Service) runStreamEncoder(
 	var lastErrMsg string
 	consecutiveSame := 0
 	const visibleConsecutiveCap = 3
+	// Multi-output runs ONE FFmpeg per stream so health is reported
+	// against profile index 0 (the synthetic "stream encoder" entry —
+	// same index spawnMultiOutput uses in the streamWorker map).
+	consecutiveFastCrashes := 0
+	const healthProfileIdx = 0
 
 	for {
+		startedAt := time.Now()
 		crashed, runErr := s.runOnceMultiOutput(ctx, logStream, sub, args, targets)
+		runDur := time.Since(startedAt)
 		if ctx.Err() != nil {
 			return
 		}
 		if !crashed {
+			s.fireHealthyIfTransitioned(logStream, healthProfileIdx)
 			return
+		}
+
+		// Sustained run before this crash → reset fast-crash counter
+		// and clear unhealthy flag if previously set.
+		if runDur >= healthSustainDur {
+			consecutiveFastCrashes = 0
+			s.fireHealthyIfTransitioned(logStream, healthProfileIdx)
 		}
 
 		attempt++
@@ -109,6 +124,13 @@ func (s *Service) runStreamEncoder(
 			s.recordProfileError(logStream, i, errMsg)
 		}
 		s.m.TranscoderRestartsTotal.WithLabelValues(string(logStream)).Inc()
+
+		if runDur < healthSustainDur {
+			consecutiveFastCrashes++
+			if consecutiveFastCrashes >= healthDegradeThreshold {
+				s.fireUnhealthyIfTransitioned(logStream, healthProfileIdx, errMsg)
+			}
+		}
 
 		if errMsg == lastErrMsg {
 			consecutiveSame++

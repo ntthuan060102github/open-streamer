@@ -173,7 +173,7 @@ func (c *Coordinator) startABRCopy(ctx context.Context, downstream, upstream *do
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(time.Now().Unix()))
 	}
-	c.setStatus(downstream.Code, domain.StatusActive)
+	c.clearDegradation(downstream.Code)
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStarted,
 		StreamCode: downstream.Code,
@@ -202,7 +202,7 @@ func (c *Coordinator) stopABRCopy(ctx context.Context, code domain.StreamCode, a
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.DeleteLabelValues(string(code))
 	}
-	c.setStatus(code, domain.StatusActive) // clears the per-stream status entry
+	c.clearDegradation(code) // clears the per-stream status entry
 
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStopped,

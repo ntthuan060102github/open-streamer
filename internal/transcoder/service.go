@@ -155,6 +155,25 @@ type Service struct {
 	m       *metrics.Metrics
 	mu      sync.Mutex
 	workers map[domain.StreamCode]*streamWorker
+
+	// Health callbacks fired when ANY profile of a stream transitions
+	// between "crashing in a loop" and "running stably". Coordinator
+	// uses these to flip stream status between Active and Degraded.
+	// Fired strictly on transition (not on every crash) so the
+	// coordinator only sees state changes.
+	//
+	// Both callbacks may be nil — Service operates fine without them.
+	onUnhealthy func(streamID domain.StreamCode, reason string)
+	onHealthy   func(streamID domain.StreamCode)
+
+	// unhealthyProfiles tracks which (stream, profile) pairs are
+	// currently in a crash loop. A stream is "unhealthy" iff its set
+	// is non-empty. Per-profile granularity is needed because legacy
+	// mode runs N independent FFmpeg processes — one profile failing
+	// doesn't mean all are failing, and we shouldn't fire onHealthy
+	// until EVERY failing profile has recovered.
+	healthMu          sync.Mutex
+	unhealthyProfiles map[domain.StreamCode]map[int]struct{}
 }
 
 // New creates a Service and registers it with the DI injector.
@@ -165,12 +184,119 @@ func New(i do.Injector) (*Service, error) {
 	m := do.MustInvoke[*metrics.Metrics](i)
 
 	return &Service{
-		cfg:     cfg,
-		buf:     buf,
-		bus:     bus,
-		m:       m,
-		workers: make(map[domain.StreamCode]*streamWorker),
+		cfg:               cfg,
+		buf:               buf,
+		bus:               bus,
+		m:                 m,
+		workers:           make(map[domain.StreamCode]*streamWorker),
+		unhealthyProfiles: make(map[domain.StreamCode]map[int]struct{}),
 	}, nil
+}
+
+// SetUnhealthyCallback registers a function the Service calls the
+// FIRST time a stream transitions to "transcoder unhealthy" (any
+// profile has crashed enough consecutive times that it is in a hot
+// retry loop). reason is the latest crash error string.
+//
+// Subsequent crashes on already-unhealthy streams do NOT re-fire — the
+// coordinator only needs to see edges. Pair with SetHealthyCallback to
+// be notified when the stream recovers.
+func (s *Service) SetUnhealthyCallback(fn func(streamID domain.StreamCode, reason string)) {
+	s.mu.Lock()
+	s.onUnhealthy = fn
+	s.mu.Unlock()
+}
+
+// SetHealthyCallback registers a function the Service calls the FIRST
+// time every previously-failing profile in a stream has run stably for
+// the sustain threshold. Pair with SetUnhealthyCallback for the
+// degraded → active edge.
+func (s *Service) SetHealthyCallback(fn func(streamID domain.StreamCode)) {
+	s.mu.Lock()
+	s.onHealthy = fn
+	s.mu.Unlock()
+}
+
+// markProfileUnhealthy adds (streamID, profileIndex) to the unhealthy
+// set. Returns true when the stream JUST transitioned from healthy
+// (set was empty) — caller fires onUnhealthy in that case so the
+// coordinator only sees the edge, not every crash.
+func (s *Service) markProfileUnhealthy(streamID domain.StreamCode, profileIndex int) bool {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	set, ok := s.unhealthyProfiles[streamID]
+	if !ok {
+		set = make(map[int]struct{})
+		s.unhealthyProfiles[streamID] = set
+	}
+	wasEmpty := len(set) == 0
+	if _, already := set[profileIndex]; already {
+		return false
+	}
+	set[profileIndex] = struct{}{}
+	return wasEmpty
+}
+
+// markProfileHealthy removes (streamID, profileIndex) from the
+// unhealthy set. Returns true when the stream JUST transitioned to
+// fully healthy (set became empty) — caller fires onHealthy on that
+// edge.
+func (s *Service) markProfileHealthy(streamID domain.StreamCode, profileIndex int) bool {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	set, ok := s.unhealthyProfiles[streamID]
+	if !ok {
+		return false
+	}
+	if _, present := set[profileIndex]; !present {
+		return false
+	}
+	delete(set, profileIndex)
+	if len(set) == 0 {
+		delete(s.unhealthyProfiles, streamID)
+		return true
+	}
+	return false
+}
+
+// fireUnhealthyIfTransitioned consults the callback under the service
+// lock and invokes it outside the lock to avoid holding state.mu /
+// service.mu across third-party code (coordinator handler may call
+// back into us via setStatus).
+func (s *Service) fireUnhealthyIfTransitioned(streamID domain.StreamCode, profileIndex int, reason string) {
+	if !s.markProfileUnhealthy(streamID, profileIndex) {
+		return
+	}
+	s.mu.Lock()
+	cb := s.onUnhealthy
+	s.mu.Unlock()
+	if cb != nil {
+		cb(streamID, reason)
+	}
+}
+
+// fireHealthyIfTransitioned mirrors fireUnhealthyIfTransitioned for
+// the recovery edge.
+func (s *Service) fireHealthyIfTransitioned(streamID domain.StreamCode, profileIndex int) {
+	if !s.markProfileHealthy(streamID, profileIndex) {
+		return
+	}
+	s.mu.Lock()
+	cb := s.onHealthy
+	s.mu.Unlock()
+	if cb != nil {
+		cb(streamID)
+	}
+}
+
+// dropHealthState clears every profile entry for a stream — used by
+// Stop so a fresh Start with the same code starts from a healthy
+// baseline (the previous run's unhealthy markers must not leak across
+// pipeline restarts).
+func (s *Service) dropHealthState(streamID domain.StreamCode) {
+	s.healthMu.Lock()
+	delete(s.unhealthyProfiles, streamID)
+	s.healthMu.Unlock()
 }
 
 // SetConfig hot-swaps the cached transcoder config. Used by runtime.Manager
@@ -355,6 +481,10 @@ func (s *Service) Stop(streamID domain.StreamCode) {
 
 	s.m.TranscoderWorkersActive.WithLabelValues(string(streamID)).Set(0)
 	s.m.TranscoderQualitiesActive.WithLabelValues(string(streamID)).Set(0)
+	// Drop unhealthy markers so a fresh Start with the same code
+	// observes a healthy baseline. Done after goroutine wait so any
+	// in-flight crash records can finish before we wipe state.
+	s.dropHealthState(streamID)
 	//nolint:contextcheck // baseCtx is cancelled; publish must outlive it
 	s.bus.Publish(context.Background(), domain.Event{
 		Type:       domain.EventTranscoderStopped,

@@ -159,7 +159,7 @@ func (c *Coordinator) startABRMixer(ctx context.Context, downstream, videoUp, au
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(time.Now().Unix()))
 	}
-	c.setStatus(downstream.Code, domain.StatusActive)
+	c.clearDegradation(downstream.Code)
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStarted,
 		StreamCode: downstream.Code,
@@ -188,7 +188,7 @@ func (c *Coordinator) stopABRMixer(ctx context.Context, code domain.StreamCode, 
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.DeleteLabelValues(string(code))
 	}
-	c.setStatus(code, domain.StatusActive)
+	c.clearDegradation(code)
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStopped,
 		StreamCode: code,
