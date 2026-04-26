@@ -378,32 +378,32 @@ recover the moment the upstream returns, regardless of probe cadence.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Loop as runProfileEncoder
+    participant Worker as runProfileEncoder
     participant FFmpeg
     participant Tx as transcoder.Service
     participant Coord as Coordinator
     participant Bus as EventBus
 
     loop until ctx cancelled
-        Loop->>FFmpeg: spawn via runOnce
-        FFmpeg-->>Loop: exit — crashed plus runDur
+        Worker->>FFmpeg: spawn via runOnce
+        FFmpeg-->>Worker: exit — crashed plus runDur
 
         alt runDur >= 30s
-            Loop->>Tx: fireHealthyIfTransitioned
+            Worker->>Tx: fireHealthyIfTransitioned
             Tx->>Coord: onHealthy if transitioned
             Coord->>Coord: status to Active
         end
 
-        Loop->>Tx: recordProfileError
-        Loop->>Bus: transcoder.error — visible attempts only
+        Worker->>Tx: recordProfileError
+        Worker->>Bus: transcoder.error — visible attempts only
 
         alt fast crash count >= 3
-            Loop->>Tx: fireUnhealthyIfTransitioned
+            Worker->>Tx: fireUnhealthyIfTransitioned
             Tx->>Coord: onUnhealthy
             Coord->>Coord: status to Degraded
         end
 
-        Note over Loop: sleep delay 2s to 30s exponential
+        Note over Worker: sleep delay 2s to 30s exponential
     end
 ```
 
