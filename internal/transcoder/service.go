@@ -293,10 +293,31 @@ func (s *Service) fireHealthyIfTransitioned(streamID domain.StreamCode, profileI
 // Stop so a fresh Start with the same code starts from a healthy
 // baseline (the previous run's unhealthy markers must not leak across
 // pipeline restarts).
+//
+// Fires onHealthy if the stream had unhealthy entries at drop time so
+// the coordinator's mirrored degradation flag also clears. Without
+// this, hot-restart paths (Update → Stop → Start to swap config) leave
+// the coordinator stuck reporting StatusDegraded — the new transcoder
+// process starts clean and never has anything to "recover" from, so
+// it would never fire onHealthy on its own.
+//
+// Safe to fire on full teardown too: caller checks IsRunning before
+// returning StreamStatus, so degradation flags become irrelevant once
+// the pipeline is gone (StatusStopped wins).
 func (s *Service) dropHealthState(streamID domain.StreamCode) {
 	s.healthMu.Lock()
+	_, hadEntries := s.unhealthyProfiles[streamID]
 	delete(s.unhealthyProfiles, streamID)
 	s.healthMu.Unlock()
+	if !hadEntries {
+		return
+	}
+	s.mu.Lock()
+	cb := s.onHealthy
+	s.mu.Unlock()
+	if cb != nil {
+		cb(streamID)
+	}
 }
 
 // SetConfig hot-swaps the cached transcoder config. Used by runtime.Manager

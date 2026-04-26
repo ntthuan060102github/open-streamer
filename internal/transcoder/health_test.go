@@ -98,9 +98,17 @@ func TestFireUnhealthy_CoalesceMultipleCrashes(t *testing.T) {
 	mu.Unlock()
 }
 
-// dropHealthState must wipe a stream's tracking entry without firing
-// callbacks (Stop is the lifecycle event, not a recovery event).
-func TestDropHealthState_DoesNotFireCallback(t *testing.T) {
+// dropHealthState must fire onHealthy when the stream had unhealthy
+// entries at drop time. Hot restart (Update → Stop → Start to swap
+// transcoder config) relies on this — without the callback the
+// coordinator's mirrored transcoderUnhealthy flag stays true forever
+// because the new transcoder process starts clean and has nothing to
+// "recover" from.
+//
+// Regression: changing bframes from 10000 (crashes) → 0 (valid) used
+// to leave status stuck at Degraded even though the new FFmpeg ran
+// healthy.
+func TestDropHealthState_FiresHealthyWhenEntriesExist(t *testing.T) {
 	t.Parallel()
 	s := newHealthService()
 	healthyCalls := 0
@@ -109,11 +117,29 @@ func TestDropHealthState_DoesNotFireCallback(t *testing.T) {
 	s.markProfileUnhealthy("s1", 0)
 	s.dropHealthState("s1")
 
-	assert.Equal(t, 0, healthyCalls,
-		"Stop / dropHealthState must not synthesise a recovery event")
-	// And subsequent unhealthy mark must fire as a fresh edge.
+	assert.Equal(t, 1, healthyCalls,
+		"dropHealthState must fire onHealthy so coordinator clears its mirrored flag")
+	// Subsequent unhealthy mark must fire as a fresh edge (state was
+	// fully wiped, not just transitioned).
 	assert.True(t, s.markProfileUnhealthy("s1", 0),
 		"after dropHealthState the stream is back to baseline; new failure is a fresh edge")
+}
+
+// dropHealthState on a healthy stream (no entries) must NOT fire
+// onHealthy — would be a synthetic recovery event with no semantic
+// meaning. Stop on healthy streams is common (graceful shutdown) so
+// suppressing the callback keeps the coordinator's event log clean.
+func TestDropHealthState_NoFireOnHealthyStream(t *testing.T) {
+	t.Parallel()
+	s := newHealthService()
+	healthyCalls := 0
+	s.SetHealthyCallback(func(_ domain.StreamCode) { healthyCalls++ })
+
+	// No prior markProfileUnhealthy → no entries.
+	s.dropHealthState("s1")
+
+	assert.Equal(t, 0, healthyCalls,
+		"dropHealthState on a stream that was never unhealthy must not fire")
 }
 
 // nil callbacks must be safe — Service operates without coordinator
