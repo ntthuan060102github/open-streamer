@@ -89,80 +89,84 @@ func TestMuxerPresent(t *testing.T) {
 	assert.False(t, muxerPresent(sample, "Muxers:"))
 }
 
-// optionalEncodersFor: HW-specific filter — must return ONLY encoders
-// relevant to that backend + the HW-independent audio set. Without this
-// the probe response would force the UI to client-filter (the original
-// pain point that motivated the hw parameter).
-func TestOptionalEncodersFor_PerHW(t *testing.T) {
+// optionalEncodersForBackends: filter by host's available HW backends.
+// Server passes hwdetect.Available() — UI does not pick. Result must
+// be union across all listed backends + audio (HW-independent).
+func TestOptionalEncodersForBackends_PerHostMix(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		hw          domain.HWAccel
+		name        string
+		hws         []domain.HWAccel
 		mustInclude []string
 		mustExclude []string
 	}{
 		{
-			hw:          domain.HWAccelNVENC,
-			mustInclude: []string{"h264_nvenc", "hevc_nvenc", "libopus", "libmp3lame", "ac3"},
-			mustExclude: []string{"h264_qsv", "h264_vaapi", "libx265", "libvpx-vp9"},
+			name:        "nvidia host (None+NVENC)",
+			hws:         []domain.HWAccel{domain.HWAccelNone, domain.HWAccelNVENC},
+			mustInclude: []string{"h264_nvenc", "hevc_nvenc", "libx265", "libvpx-vp9", "libopus"},
+			mustExclude: []string{"h264_qsv", "h264_vaapi", "h264_videotoolbox"},
 		},
 		{
-			hw:          domain.HWAccelNone,
-			mustInclude: []string{"libx265", "libvpx-vp9", "libsvtav1", "libopus"},
+			name:        "cpu-only host (None)",
+			hws:         []domain.HWAccel{domain.HWAccelNone},
+			mustInclude: []string{"libx265", "libvpx-vp9", "libsvtav1", "libopus", "ac3"},
 			mustExclude: []string{"h264_nvenc", "h264_qsv", "h264_vaapi", "h264_videotoolbox"},
 		},
 		{
-			hw:          domain.HWAccelQSV,
-			mustInclude: []string{"h264_qsv", "hevc_qsv", "libopus"},
-			mustExclude: []string{"h264_nvenc", "h264_vaapi", "libx265"},
+			name:        "intel host (None+VAAPI+QSV)",
+			hws:         []domain.HWAccel{domain.HWAccelNone, domain.HWAccelVAAPI, domain.HWAccelQSV},
+			mustInclude: []string{"h264_vaapi", "h264_qsv", "libx265", "libopus"},
+			mustExclude: []string{"h264_nvenc", "h264_videotoolbox"},
 		},
 		{
-			hw:          domain.HWAccelVAAPI,
-			mustInclude: []string{"h264_vaapi", "hevc_vaapi"},
-			mustExclude: []string{"h264_nvenc", "h264_qsv"},
-		},
-		{
-			hw:          domain.HWAccelVideoToolbox,
-			mustInclude: []string{"h264_videotoolbox", "hevc_videotoolbox"},
-			mustExclude: []string{"h264_nvenc", "h264_qsv"},
+			name:        "macOS host (None+VideoToolbox)",
+			hws:         []domain.HWAccel{domain.HWAccelNone, domain.HWAccelVideoToolbox},
+			mustInclude: []string{"h264_videotoolbox", "libx265", "libopus"},
+			mustExclude: []string{"h264_nvenc", "h264_qsv", "h264_vaapi"},
 		},
 	}
 	for _, tc := range cases {
-		t.Run(string(tc.hw), func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := optionalEncodersFor(tc.hw)
+			got := optionalEncodersForBackends(tc.hws)
 			for _, want := range tc.mustInclude {
-				assert.Contains(t, got, want, "%s set must include %s", tc.hw, want)
+				assert.Contains(t, got, want, "host %v must include %s", tc.hws, want)
 			}
 			for _, unwanted := range tc.mustExclude {
-				assert.NotContains(t, got, unwanted, "%s set must NOT include %s", tc.hw, unwanted)
+				assert.NotContains(t, got, unwanted, "host %v must NOT include %s", tc.hws, unwanted)
 			}
 		})
 	}
 }
 
-// Empty hw → boot-check / show-all view: union of every backend's
-// encoders + audio. Must never return empty (regression guard against
-// "missing case" returning nil).
-func TestOptionalEncodersFor_EmptyHWReturnsUnion(t *testing.T) {
+// Empty backend slice → defensive fallback to full union (every
+// known HW + audio). Never empty.
+func TestOptionalEncodersForBackends_EmptyReturnsUnion(t *testing.T) {
 	t.Parallel()
-	got := optionalEncodersFor("")
+	got := optionalEncodersForBackends(nil)
 	for _, want := range []string{
 		"h264_nvenc", "h264_vaapi", "h264_qsv", "h264_videotoolbox",
 		"libx265", "libvpx-vp9", "libsvtav1",
 		"libopus", "libmp3lame", "ac3",
 	} {
-		assert.Contains(t, got, want, "empty hw must include %s in the union", want)
+		assert.Contains(t, got, want, "empty hws must include %s in the union", want)
 	}
 }
 
-// Unknown / typo'd HW value must fall back to a non-empty set rather
-// than dropping warnings entirely. Picking the CPU set keeps audio +
-// CPU video alternatives covered.
-func TestOptionalEncodersFor_UnknownHWFallsBack(t *testing.T) {
+// Audio + duplicate-prone overlaps must dedupe — passing the same
+// backend twice should not double-list its encoders.
+func TestOptionalEncodersForBackends_Dedupes(t *testing.T) {
 	t.Parallel()
-	got := optionalEncodersFor("not-a-real-backend")
-	assert.NotEmpty(t, got, "unknown hw must fall back, not return empty")
-	assert.Contains(t, got, "libopus", "audio set must always be present")
+	got := optionalEncodersForBackends([]domain.HWAccel{
+		domain.HWAccelNVENC, domain.HWAccelNVENC, domain.HWAccelNone,
+	})
+	seen := make(map[string]int)
+	for _, name := range got {
+		seen[name]++
+	}
+	for name, count := range seen {
+		assert.Equal(t, 1, count, "%s listed %d times — must dedupe", name, count)
+	}
 }
 
 // End-to-end probe against the real FFmpeg binary on PATH. Skip when
@@ -172,7 +176,7 @@ func TestProbe_RealFFmpeg(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not on PATH, skipping integration probe")
 	}
-	res, err := Probe(context.Background(), "", "")
+	res, err := Probe(context.Background(), "", nil)
 	require.NoError(t, err, "probe must not error when ffmpeg exists on PATH")
 	require.NotNil(t, res)
 	assert.True(t, res.OK, "ffmpeg on PATH must satisfy required capabilities; errors=%v", res.Errors)
@@ -185,26 +189,26 @@ func TestProbe_RealFFmpeg(t *testing.T) {
 	assert.True(t, res.Muxers["mpegts"], "mpegts must be present")
 }
 
-// hw filter end-to-end: response's optional map must contain only the
-// encoders relevant to the requested backend. Pin the contract the UI
-// depends on (no client-side filtering needed).
-func TestProbe_RealFFmpeg_FilterByHW(t *testing.T) {
+// Backend filter end-to-end: passing the host's actual HW set must
+// scope the optional map to those backends only. Mirrors what the
+// /probe endpoint sends from hwdetect.Available().
+func TestProbe_RealFFmpeg_FilterByBackends(t *testing.T) {
 	t.Parallel()
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not on PATH, skipping integration probe")
 	}
-	res, err := Probe(context.Background(), "", domain.HWAccelNone)
+	res, err := Probe(context.Background(), "", []domain.HWAccel{domain.HWAccelNone})
 	require.NoError(t, err)
 
 	opt := res.Encoders["optional"]
 	// Must include the CPU-pipeline alternatives + audio.
 	for _, want := range []string{"libx265", "libvpx-vp9", "libsvtav1", "libopus", "ac3"} {
-		assert.Contains(t, opt, want, "hw=none must report %s as optional", want)
+		assert.Contains(t, opt, want, "host=[None] must report %s as optional", want)
 	}
 	// Must NOT include other backends' encoders — that's the whole
 	// point of the filter.
 	for _, unwanted := range []string{"h264_nvenc", "hevc_nvenc", "h264_qsv", "h264_vaapi"} {
-		assert.NotContains(t, opt, unwanted, "hw=none must NOT report %s", unwanted)
+		assert.NotContains(t, opt, unwanted, "host=[None] must NOT report %s", unwanted)
 	}
 }
 
@@ -213,7 +217,7 @@ func TestProbe_RealFFmpeg_FilterByHW(t *testing.T) {
 // but capabilities incomplete" via err vs ProbeResult.Errors.
 func TestProbe_BinaryMissing(t *testing.T) {
 	t.Parallel()
-	_, err := Probe(context.Background(), "/nonexistent/path/to/ffmpeg-impossible", "")
+	_, err := Probe(context.Background(), "/nonexistent/path/to/ffmpeg-impossible", nil)
 	require.Error(t, err)
 }
 
@@ -226,7 +230,7 @@ func TestProbe_NotFFmpegBinary(t *testing.T) {
 	if err != nil {
 		t.Skip("echo not available")
 	}
-	_, perr := Probe(context.Background(), echo, "")
+	_, perr := Probe(context.Background(), echo, nil)
 	require.Error(t, perr, "non-FFmpeg binary must be rejected")
 	assert.Contains(t, perr.Error(), "not an FFmpeg binary")
 }

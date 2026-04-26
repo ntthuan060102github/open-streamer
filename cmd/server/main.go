@@ -24,6 +24,7 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/dvr"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
 	"github.com/ntt0601zcoder/open-streamer/internal/hooks"
+	"github.com/ntt0601zcoder/open-streamer/internal/hwdetect"
 	"github.com/ntt0601zcoder/open-streamer/internal/ingestor"
 	"github.com/ntt0601zcoder/open-streamer/internal/manager"
 	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
@@ -82,9 +83,9 @@ func run() error {
 	if gcfg.Transcoder != nil {
 		ffmpegPath = gcfg.Transcoder.FFmpegPath
 	}
-	// Empty hw → probe covers every backend's encoders so warnings
-	// surface for whatever HW any persisted stream might select.
-	probeRes, probeErr := transcoder.Probe(ctx, ffmpegPath, "")
+	// Auto-detect host hardware backends — probe warnings only cover
+	// what's actually installed (no NVENC noise on a CPU-only host).
+	probeRes, probeErr := transcoder.Probe(ctx, ffmpegPath, hwdetect.Available())
 	if probeErr != nil {
 		return fmt.Errorf("ffmpeg probe: %w", probeErr)
 	}

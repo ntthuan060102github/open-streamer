@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
+	"github.com/ntt0601zcoder/open-streamer/internal/hwdetect"
 	"github.com/ntt0601zcoder/open-streamer/internal/transcoder"
 )
 
@@ -16,13 +17,12 @@ import (
 // FFmpegPath empty → server probes "ffmpeg" via $PATH (matches the
 // runtime default at publisher.NewService and transcoder.Service).
 //
-// HW filters the OPTIONAL encoder set so the response only carries
-// encoders relevant to the operator's hardware selection — UI just
-// renders that list with no client-side filtering. Empty HW returns
-// every backend's encoders (used by "show all" views).
+// The set of encoders to inspect is auto-derived from the HOST'S
+// available hardware (hwdetect.Available()) — caller does not pick
+// which HW to probe for. Server with NVIDIA card → response includes
+// NVENC encoders; CPU-only host → response excludes them.
 type probeRequest struct {
-	FFmpegPath string         `json:"ffmpeg_path"`
-	HW         domain.HWAccel `json:"hw,omitempty"`
+	FFmpegPath string `json:"ffmpeg_path"`
 }
 
 // probeRequestTimeout caps the entire probe call (ffmpeg sub-invocations
@@ -60,7 +60,11 @@ func (h *ConfigHandler) ProbeTranscoder(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), probeRequestTimeout)
 	defer cancel()
 
-	res, err := transcoder.Probe(ctx, body.FFmpegPath, body.HW)
+	// Server auto-detects which HW backends the host actually exposes;
+	// the response's optional encoder set covers exactly those (plus
+	// audio + CPU). Frontend doesn't need to know what's installed —
+	// it just renders the list it gets back.
+	res, err := transcoder.Probe(ctx, body.FFmpegPath, hwdetect.Available())
 	if err != nil {
 		// Binary unusable (not found / not executable / not FFmpeg).
 		// 502 — the path the caller supplied points to something the
@@ -99,10 +103,11 @@ func (h *ConfigHandler) validateTranscoderPath(ctx context.Context, proposed *do
 	if proposed != nil && proposed.Transcoder != nil {
 		path = proposed.Transcoder.FFmpegPath
 	}
-	// Empty hw → probe covers every backend's encoders. Server-wide
-	// path swap could affect streams using any HW, so we validate
-	// against the union (REQUIRED set is the same regardless).
-	res, err := transcoder.Probe(probeCtx, path, "")
+	// Use host-detected backends — same scope as the probe endpoint.
+	// REQUIRED set is constant (libx264 + aac + mpegts) so save
+	// validation only really cares whether those three are present;
+	// optional warnings are informational.
+	res, err := transcoder.Probe(probeCtx, path, hwdetect.Available())
 	if err != nil {
 		return &putValidationError{
 			code:    "FFMPEG_UNUSABLE",

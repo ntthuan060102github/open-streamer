@@ -3112,9 +3112,6 @@ const docTemplate = `{
             "properties": {
                 "ffmpeg_path": {
                     "type": "string"
-                },
-                "hw": {
-                    "$ref": "#/definitions/domain.HWAccel"
                 }
             }
         },

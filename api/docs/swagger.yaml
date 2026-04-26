@@ -1334,8 +1334,6 @@ definitions:
     properties:
       ffmpeg_path:
         type: string
-      hw:
-        $ref: '#/definitions/domain.HWAccel'
     type: object
   handler.rtspListenerDefaults:
     properties:

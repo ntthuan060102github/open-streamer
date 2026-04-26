@@ -89,35 +89,43 @@ var audioOptionalEncoders = []string{
 	"ac3",
 }
 
-// optionalEncodersFor returns the optional encoder set the probe should
-// inspect for a given HW backend. Empty hw → union of every backend's
-// set + audio (used by the boot check so warnings cover everything).
-func optionalEncodersFor(hw domain.HWAccel) []string {
-	if hw == "" {
-		// Union: every HW-specific encoder + audio. Order is fixed so
-		// the response is deterministic and JSON output is stable.
-		var all []string
-		for _, key := range []domain.HWAccel{
+// optionalEncodersForBackends returns the union of optional encoders
+// across the given HW backends, plus the HW-independent audio set.
+//
+// Caller is expected to pass the set of backends actually present on
+// the host (typically hwdetect.Available()). Empty slice → full union
+// across every known backend (used as a defensive fallback).
+//
+// Order is preserved across the input slice so the response stays
+// deterministic — frontend caching depends on byte-stable output.
+func optionalEncodersForBackends(hws []domain.HWAccel) []string {
+	if len(hws) == 0 {
+		hws = []domain.HWAccel{
 			domain.HWAccelNone,
 			domain.HWAccelNVENC,
 			domain.HWAccelVAAPI,
 			domain.HWAccelQSV,
 			domain.HWAccelVideoToolbox,
-		} {
-			all = append(all, hwOptionalEncoders[key]...)
 		}
-		return append(all, audioOptionalEncoders...)
 	}
-	hwSet, known := hwOptionalEncoders[hw]
-	if !known {
-		// Unknown HW backend — fall back to CPU set + audio rather than
-		// returning empty (operator picked a typo'd value; still report
-		// something useful instead of "no optionals at all").
-		hwSet = hwOptionalEncoders[domain.HWAccelNone]
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(audioOptionalEncoders)+len(hws)*2)
+	for _, hw := range hws {
+		for _, name := range hwOptionalEncoders[hw] {
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, name)
+		}
 	}
-	out := make([]string, 0, len(hwSet)+len(audioOptionalEncoders))
-	out = append(out, hwSet...)
-	out = append(out, audioOptionalEncoders...)
+	for _, name := range audioOptionalEncoders {
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
 	return out
 }
 
@@ -140,19 +148,19 @@ var versionRE = regexp.MustCompile(`(?i)^ffmpeg version\s+(\S+)`)
 // Empty path is normalised to "ffmpeg" (PATH lookup) — matches the
 // runtime default at publisher.NewService and transcoder.Service.
 //
-// hw filters the OPTIONAL encoder set to only those relevant to the
-// caller's chosen backend (e.g. hw=nvenc → h264_nvenc/hevc_nvenc + audio
-// codecs; hw=none → libx265/libvpx-vp9/libsvtav1 + audio). Empty hw
-// includes every backend's encoders — used by the boot check so
-// warnings cover whatever any future stream might select.
+// hws filters the OPTIONAL encoder set to encoders relevant to the
+// host's available backends. Caller passes the result of
+// hwdetect.Available() — server auto-detects the hardware, the client
+// (UI / boot) does NOT pick. Empty slice → union across every backend
+// (defensive fallback).
 //
 // REQUIRED set (libx264, aac, mpegts) is constant — independent of hw.
-func Probe(ctx context.Context, path string, hw domain.HWAccel) (*ProbeResult, error) {
+func Probe(ctx context.Context, path string, hws []domain.HWAccel) (*ProbeResult, error) {
 	if strings.TrimSpace(path) == "" {
 		path = "ffmpeg"
 	}
 
-	optionalEncoders := optionalEncodersFor(hw)
+	optionalEncoders := optionalEncodersForBackends(hws)
 
 	res := &ProbeResult{
 		Path:     path,
