@@ -52,11 +52,27 @@ PAYLOAD="$BENCH_ROOT/payloads/${PROFILE}.json"
 
 [[ ! -f "$PAYLOAD" ]] && { echo "[create-streams] missing payload: $PAYLOAD"; exit 1; }
 
+# wait_registered polls /streams/<code> until the pipeline reports a non-stopped
+# runtime status — that means the push slot is registered and a publisher can
+# now connect without being rejected with "no stream registered for key".
+wait_registered() {
+  local code=$1 deadline=$(( $(date +%s) + 15 ))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    local status
+    status=$(curl -fs "$API/streams/$code" 2>/dev/null \
+      | grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+      | sed 's/.*"\([^"]*\)"$/\1/' 2>/dev/null || true)
+    [[ -n "$status" && "$status" != "stopped" ]] && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 echo "[create-streams] creating $N streams from $PAYLOAD..."
 fail=0
 for i in $(seq 1 "$N"); do
   code="${PREFIX}${i}"
-  body=$(sed "s/{{CODE}}/$code/g" "$PAYLOAD")
+  body=$(sed -e "s/{{CODE}}/$code/g" -e "s/{{RTMP_PORT}}/$RTMP_PORT/g" "$PAYLOAD")
   http=$(curl -s -o /tmp/cs.out -w "%{http_code}" \
     -XPOST "$API/streams/$code" \
     -H 'Content-Type: application/json' \
@@ -65,9 +81,14 @@ for i in $(seq 1 "$N"); do
     echo "  $code → HTTP $http"
     cat /tmp/cs.out
     fail=$((fail + 1))
+    continue
+  fi
+  if ! wait_registered "$code"; then
+    echo "  $code → registered timeout (still 'stopped' after 15s)"
+    fail=$((fail + 1))
   fi
 done
 
 ok=$((N - fail))
-echo "[create-streams] done: $ok ok, $fail failed"
+echo "[create-streams] done: $ok ok, $fail failed (after registration check)"
 [[ $fail -eq 0 ]]
