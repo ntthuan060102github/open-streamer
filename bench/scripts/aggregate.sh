@@ -228,14 +228,23 @@ cat <<EOF
 | --- | --- | --- | --- | --- |
 EOF
 
-# Auto-emit any FAIL-suggested runs
+# Auto-emit any FAIL-marked runs.
+# A/B/C summary format: line `**FAIL** — <reason>`
+# Phase D summary format: table row `| Verdict | **FAIL** |` plus a separate
+#                          `| Result | **<result>** |` line we surface as reason.
 for r in "${RUNS_FOUND[@]}"; do
   sum=$RESULTS/$r/summary.md
   [[ ! -f "$sum" ]] && continue
+  reason=""
   if grep -q '^\*\*FAIL\*\*' "$sum" 2>/dev/null; then
     reason=$(grep '^\*\*FAIL\*\*' "$sum" | head -1 | sed 's/^\*\*FAIL\*\* — //')
-    echo "| <TODO> | $r | $reason | [runs/$r.md](runs/$r.md) | <TODO> |"
+  elif grep -qE '\| Verdict \| \*\*FAIL\*\* \|' "$sum" 2>/dev/null; then
+    reason=$(grep -E '\| Result \| \*\*' "$sum" | head -1 \
+      | sed -E 's/.*\| \*\*([^*]+)\*\* \|.*/\1/')
+    [[ -z "$reason" ]] && reason="(see runs/$r.md)"
   fi
+  [[ -n "$reason" ]] && \
+    echo "| <TODO> | $r | $reason | [runs/$r.md](runs/$r.md) | <TODO> |"
 done
 
 cat <<EOF

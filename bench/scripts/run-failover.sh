@@ -157,6 +157,10 @@ setup_dir() {
   mkdir -p "$DIR"
   TIMELINE=$DIR/timeline.txt
   : >"$TIMELINE"
+  # Pre-emit a fallback FAIL summary so aggregate.sh always sees this case
+  # even if the case function returns early (create_stream / push timeout).
+  # The case body overwrites this with the real result on a normal completion.
+  emit_summary "$RUN_ID" "(case did not complete)" "—" "did not run" "FAIL"
 }
 
 # ============================================================================
