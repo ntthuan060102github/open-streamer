@@ -78,11 +78,23 @@ for i in $(seq 1 "$N"); do
     -H 'Content-Type: application/json' \
     -d "$body")
   if [[ "$http" != "200" && "$http" != "201" ]]; then
-    echo "  $code → HTTP $http"
+    echo "  $code → save HTTP $http"
     cat /tmp/cs.out
     fail=$((fail + 1))
     continue
   fi
+
+  # POST /streams/<code> only persists; starting the pipeline requires an
+  # explicit restart call.
+  http=$(curl -s -o /tmp/cs.out -w "%{http_code}" \
+    -XPOST "$API/streams/$code/restart")
+  if [[ "$http" != "200" && "$http" != "204" ]]; then
+    echo "  $code → restart HTTP $http"
+    cat /tmp/cs.out
+    fail=$((fail + 1))
+    continue
+  fi
+
   if ! wait_registered "$code"; then
     echo "  $code → registered timeout (still 'stopped' after 15s)"
     fail=$((fail + 1))
