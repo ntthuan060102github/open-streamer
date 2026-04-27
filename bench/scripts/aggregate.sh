@@ -142,13 +142,31 @@ on the benchmarking host.
 
 ## 3. Methodology
 
-- Warm-up: 60s discarded at start of every run.
-- Steady window: 300s (5 min).
+- Warm-up: 30s discarded at start of every run.
+- Steady window: 120s (2 min).
 - Sample interval: 2s.
 - Cooldown between runs: see \`run-all.log\`.
-- Stop conditions for FAIL: CPU p95 > 90%, transcoder restart > 0,
-  any stream ended Degraded, packet drop in log, HLS jitter > 15%.
+- Stop conditions per run:
+  - **SATURATED**: CPU p95 > 90%, transcoder restart > 0, or any stream ended Degraded.
+  - **FAIL**: bench script error (no summary, behavior test failed).
+- Sweep aborts on first FAIL; SATURATED only skips the rest of its phase.
 - Repeat for production sign-off: 3× per run, take median.
+
+### Metric conventions
+
+- **CPU%, RAM%, GPU%, Enc%, Dec%, VRAM(MB)** are scoped to **open-streamer
+  + its direct child processes (transcoder ffmpegs)**. Bench-side load
+  generators (RTMP source publishers, parent = bash) and unrelated host
+  processes are excluded.
+- **CPU%** is **host-relative**: \`Σ ps -o pcpu / nproc\`, so 100% means
+  the entire host CPU is consumed. Matches \`top\` / Grafana node-exporter
+  semantics; comparable across hosts of different core counts.
+- **RAM%** is \`Σ RSS / MemTotal × 100\` (same convention).
+- **GPU/Enc/Dec/VRAM** come from \`nvidia-smi pmon\` and \`--query-compute-apps\`
+  filtered to the same PID set.
+- **Net Rx/Tx** are interface-level (cannot be split per-process on Linux
+  without root + cgroup tagging) and reflect total NIC throughput including
+  source publishers.
 
 ---
 
