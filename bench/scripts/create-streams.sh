@@ -16,6 +16,7 @@ set -euo pipefail
 BENCH_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
 API=${API:-http://127.0.0.1:8080}
 PREFIX=${PREFIX:-bench}
+RTMP_PORT=${RTMP_PORT:-1935}
 
 usage() {
   echo "Usage: $0 <N> <profile>           # profile: passthrough | abr3-legacy | abr3-multi"
