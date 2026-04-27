@@ -44,7 +44,23 @@ create_stream() {
   local http
   http=$(curl -s -o /tmp/d.out -w "%{http_code}" \
     -XPOST "$API/streams/$code" -H 'Content-Type: application/json' -d "$body")
-  [[ "$http" =~ ^20[01]$ ]] || { echo "create $code → HTTP $http"; cat /tmp/d.out; return 1; }
+  [[ "$http" =~ ^20[01]$ ]] || { echo "create $code → save HTTP $http"; cat /tmp/d.out; return 1; }
+  # POST /streams/<code> only persists; pipeline starts on /restart.
+  http=$(curl -s -o /tmp/d.out -w "%{http_code}" -XPOST "$API/streams/$code/restart")
+  [[ "$http" =~ ^20[04]$ ]] || { echo "restart $code → HTTP $http"; cat /tmp/d.out; return 1; }
+  # Wait until the pipeline has flipped out of "stopped" so push slots are
+  # registered before the publisher tries to connect.
+  local deadline=$(( $(date +%s) + 10 ))
+  while [[ $(date +%s) -lt $deadline ]]; do
+    local status
+    status=$(curl -fs "$API/streams/$code" 2>/dev/null \
+      | grep -oE '"status"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+      | sed 's/.*"\([^"]*\)"$/\1/' 2>/dev/null || true)
+    [[ -n "$status" && "$status" != "stopped" ]] && return 0
+    sleep 0.2
+  done
+  echo "[d] $code: register timeout"
+  return 1
 }
 
 delete_stream() {
