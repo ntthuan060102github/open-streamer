@@ -45,7 +45,9 @@ if [[ -z "${SWEEP:-}" ]]; then
   fi
 fi
 
-COOLDOWN=${COOLDOWN:-30}
+COOLDOWN=${COOLDOWN:-10}
+WARMUP=${WARMUP:-30}
+SAMPLE_SEC=${SAMPLE_SEC:-120}
 API=${API:-http://127.0.0.1:8080}
 SKIP_FAILOVER=${SKIP_FAILOVER:-0}
 LOGDIR=$BENCH_ROOT/results/$SWEEP
@@ -171,7 +173,7 @@ Reason: case did not produce a summary (likely create_stream / push setup error 
     body=$(format_kv "$row" "Case" "Description" "Measure" "Result" "Verdict")
   else
     body=$(format_kv "$row" \
-      "Run" "N" "Ladder" "CPU%" "RAM(MB)" "GPU%" "Enc%" "Dec%" "VRAM(MB)" "Restart" "Verdict")
+      "Run" "N" "Ladder" "CPU%" "RAM(MB)" "RAM%" "GPU%" "Enc%" "Dec%" "VRAM(MB)" "Restart" "Verdict")
   fi
 
   notify "$emoji \`$id\` $verdict — ${desc}${reason_line}
@@ -195,52 +197,61 @@ set_multi_output() {
 # Full plan — (id N profile [pre-hook])
 # Pre-hook flips global config: legacy → multi_output=false, multi → true.
 #
-# Phases B, C, F, H are "load-ceiling" phases — execution auto-stops after
-# the FIRST FAIL within that phase (no point pushing further once the ceiling
-# is found). Phases A and D always run every entry.
+# Phases A, B, C, F, H are "load-ceiling" phases — execution auto-stops on
+# the first SATURATED (resource ceiling found) or FAIL. Phase D is behavior
+# testing — every case runs unless a FAIL aborts the whole sweep.
+#
+# Steps were widened (B/C/F/H step 4 instead of 2) because the previous CPU
+# accounting bug under-reported capacity; with the fix in sample.sh, the
+# real ceiling is much higher than the original 8-stream cap suggested.
 declare -a PLAN_ALL=(
-  # Phase A — passthrough (3 runs, always all)
-  "A1 1   passthrough           noop"
-  "A2 10  passthrough           noop"
-  "A3 25  passthrough           noop"
+  # Phase A — passthrough, runs until first ceiling (max 6)
+  "A1 1    passthrough           noop"
+  "A2 25   passthrough           noop"
+  "A3 50   passthrough           noop"
+  "A4 100  passthrough           noop"
+  "A5 150  passthrough           noop"
+  "A6 200  passthrough           noop"
 
-  # Phase B — Legacy ABR NVENC, step 2, runs until first FAIL (max 7)
-  "B1 2   abr2-legacy           legacy"
-  "B2 4   abr2-legacy           legacy"
-  "B3 6   abr2-legacy           legacy"
-  "B4 8   abr2-legacy           legacy"
-  "B5 10  abr2-legacy           legacy"
-  "B6 12  abr2-legacy           legacy"
-  "B7 16  abr2-legacy           legacy"
+  # Phase B — Legacy ABR NVENC, step 4 (max 7)
+  "B1 2    abr2-legacy           legacy"
+  "B2 6    abr2-legacy           legacy"
+  "B3 10   abr2-legacy           legacy"
+  "B4 14   abr2-legacy           legacy"
+  "B5 18   abr2-legacy           legacy"
+  "B6 22   abr2-legacy           legacy"
+  "B7 28   abr2-legacy           legacy"
 
-  # Phase C — Multi-output NVENC, step 2, runs until first FAIL (max 7)
-  "C1 2   abr2-multi            multi"
-  "C2 4   abr2-multi            multi"
-  "C3 6   abr2-multi            multi"
-  "C4 8   abr2-multi            multi"
-  "C5 10  abr2-multi            multi"
-  "C6 12  abr2-multi            multi"
-  "C7 16  abr2-multi            multi"
+  # Phase C — Multi-output NVENC, step 4 (max 7)
+  "C1 2    abr2-multi            multi"
+  "C2 6    abr2-multi            multi"
+  "C3 10   abr2-multi            multi"
+  "C4 14   abr2-multi            multi"
+  "C5 18   abr2-multi            multi"
+  "C6 22   abr2-multi            multi"
+  "C7 28   abr2-multi            multi"
 
-  # Phase F — CPU encoder fallback (libx264), runs until first FAIL (max 4)
-  "F1 1   abr2-x264             legacy"
-  "F2 2   abr2-x264             legacy"
-  "F3 4   abr2-x264             legacy"
-  "F4 6   abr2-x264             legacy"
+  # Phase F — CPU encoder fallback (libx264), step 2 (heavy, finer) (max 5)
+  "F1 1    abr2-x264             legacy"
+  "F2 2    abr2-x264             legacy"
+  "F3 4    abr2-x264             legacy"
+  "F4 6    abr2-x264             legacy"
+  "F5 8    abr2-x264             legacy"
 
-  # Phase H — Multi-protocol HLS+DASH overhead, runs until first FAIL (max 4)
-  "H1 1   abr2-multi-hlsdash    multi"
-  "H2 4   abr2-multi-hlsdash    multi"
-  "H3 8   abr2-multi-hlsdash    multi"
-  "H4 12  abr2-multi-hlsdash    multi"
+  # Phase H — Multi-protocol HLS+DASH overhead, step 4 (max 5)
+  "H1 1    abr2-multi-hlsdash    multi"
+  "H2 4    abr2-multi-hlsdash    multi"
+  "H3 8    abr2-multi-hlsdash    multi"
+  "H4 12   abr2-multi-hlsdash    multi"
+  "H5 16   abr2-multi-hlsdash    multi"
 )
 
-# Phases that should stop after first FAIL (load-ceiling search).
-# Other phases (A, D) always run every entry regardless of verdict.
+# Phases that auto-stop on the first SATURATED/FAIL within them.
+# Phase D is behavior tests — every case is independent and always runs.
 auto_stop_phase() {
   case "$1" in
-    B|C|F|H) return 0 ;;
-    *)       return 1 ;;
+    A|B|C|F|H) return 0 ;;
+    *)         return 1 ;;
   esac
 }
 
@@ -266,7 +277,7 @@ run_one() {
     *) ;;
   esac
 
-  if "$SCRIPTS"/run-bench.sh "$id" "$n" "$profile" >>"$LOG" 2>&1; then
+  if "$SCRIPTS"/run-bench.sh "$id" "$n" "$profile" "$SAMPLE_SEC" "$WARMUP" >>"$LOG" 2>&1; then
     log "  run completed"
   else
     log "  RUN FAILED — see $LOG (continuing sweep)"

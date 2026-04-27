@@ -93,13 +93,13 @@ What it does:
 
 Plan + auto-stop behavior:
 
-| Phase | Profile | N (capped at first FAIL) | Auto-stop? |
+| Phase | Profile | N (stops at first ceiling) | Auto-stop? |
 | --- | --- | --- | --- |
-| A | passthrough | 1, 10, 25 | no — always runs all |
-| B | NVENC ABR legacy | 2, 4, 6, 8, 10, 12, 16 | **yes** — stops at first FAIL |
-| C | NVENC ABR multi-output | 2, 4, 6, 8, 10, 12, 16 | **yes** |
-| F | libx264 ABR (CPU encoder) | 1, 2, 4, 6 | **yes** |
-| H | NVENC multi-output + HLS+DASH | 1, 4, 8, 12 | **yes** |
+| A | passthrough | 1, 25, 50, 100, 150, 200 | **yes** — stops at first SATURATED |
+| B | NVENC ABR legacy (step 4) | 2, 6, 10, 14, 18, 22, 28 | **yes** |
+| C | NVENC ABR multi-output (step 4) | 2, 6, 10, 14, 18, 22, 28 | **yes** |
+| F | libx264 ABR (step 2, heavy) | 1, 2, 4, 6, 8 | **yes** |
+| H | NVENC multi-output + HLS+DASH (step 4) | 1, 4, 8, 12, 16 | **yes** |
 | D | failover scenarios | 1 each (4 cases) | no — every case is independent |
 
 ### Verdict semantics
@@ -122,7 +122,9 @@ Knobs:
 | --- | --- | --- |
 | `SWEEP` | `<date>-<gpu>-<note>` | full override; bypasses auto-compose |
 | `NOTE` | first positional arg, else git short SHA | the `<note>` part of auto-compose |
-| `COOLDOWN` | `30` | seconds between A/B/C runs |
+| `WARMUP` | `30` | seconds discarded at start of each run |
+| `SAMPLE_SEC` | `120` | length of the steady-state measurement window |
+| `COOLDOWN` | `10` | seconds between runs |
 | `PLAN` | (all 10 in A/B/C) | space-separated subset, e.g. `PLAN="B3 C3" run-all.sh` |
 | `SKIP_FAILOVER` | `0` | set to `1` to skip Phase D |
 | `TELEGRAM_BOT_TOKEN` | _(unset)_ | enable Telegram start/done/fail notifications |

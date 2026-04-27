@@ -185,8 +185,8 @@ for phase in A B C D E F H; do
 EOF
   else
     cat <<EOF
-| Run | N | Ladder | CPU% | RAM (MB) | GPU% | Enc% | Dec% | VRAM (MB) | Restart | Verdict |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Run | N | Ladder | CPU% | RAM (MB) | RAM% | GPU% | Enc% | Dec% | VRAM (MB) | Restart | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 EOF
   fi
 
@@ -199,12 +199,12 @@ EOF
       elif [[ "$phase" == "D" ]]; then
         echo "| $r | - | - | - | <missing> |"
       else
-        echo "| $r | - | - | - | - | - | - | - | - | - | <missing> |"
+        echo "| $r | - | - | - | - | - | - | - | - | - | - | <missing> |"
       fi
     elif [[ "$phase" == "D" ]]; then
       echo "| $r | - | - | - | <no summary> |"
     else
-      echo "| $r | - | - | - | - | - | - | - | - | - | <no summary> |"
+      echo "| $r | - | - | - | - | - | - | - | - | - | - | <no summary> |"
     fi
   done
 
