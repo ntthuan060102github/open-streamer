@@ -18,7 +18,8 @@ bench/
 │   ├── run-failover.sh   ← Phase D — d1/d2/d3/d4 fully scripted
 │   ├── summarize.sh      ← read results/<id>/* → emit summary.md
 │   ├── run-all.sh        ← execute A+B+C+D plan, summarise + aggregate
-│   └── aggregate.sh      ← combine every summary.md into one master report.md
+│   ├── aggregate.sh      ← combine every summary.md into one master report.md
+│   └── notify.sh         ← optional Telegram notifier (start / done / fail)
 ├── payloads/             ← stream JSON templates ({{CODE}} placeholder)
 │   ├── passthrough.json
 │   ├── abr3-legacy.json
@@ -98,6 +99,32 @@ Knobs:
 | `COOLDOWN` | `30` | seconds between A/B/C runs |
 | `PLAN` | (all 10 in A/B/C) | space-separated subset, e.g. `PLAN="B3 C3" run-all.sh` |
 | `SKIP_FAILOVER` | `0` | set to `1` to skip Phase D |
+| `TELEGRAM_BOT_TOKEN` | _(unset)_ | enable Telegram start/done/fail notifications |
+| `TELEGRAM_CHAT_ID` | _(unset)_ | destination chat (required together with the token) |
+| `TELEGRAM_THREAD_ID` | _(unset)_ | optional forum-topic id for supergroups |
+
+### Telegram notifications
+
+When both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, `run-all.sh`
+sends a Telegram message:
+
+- **🚀 start** — when the sweep begins (with run count + hostname)
+- **✅ per run PASS** — after each A/B/C/D run, with the metrics row
+- **⚠️ per run FAIL** — same, when the auto-suggested verdict is FAIL
+- **❓ per run UNKNOWN** — when summary is missing or verdict can't be parsed
+- **✅ done** — when every run passed (with duration + report path)
+- **⚠️ done with fails** — when one or more runs were marked FAIL (lists the run ids)
+- **❌ aborted** — on fatal error (api unreachable, missing sample, etc.)
+
+If either env var is missing, notifications are silently skipped — the
+benchmark itself never fails because notifications can't be sent.
+
+Set them once in `~/.profile` or pass per-invocation:
+
+```bash
+TELEGRAM_BOT_TOKEN=123:abc TELEGRAM_CHAT_ID=-100123 \
+  bench/scripts/run-all.sh baseline
+```
 
 Output:
 

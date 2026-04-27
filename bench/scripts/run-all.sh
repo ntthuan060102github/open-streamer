@@ -54,7 +54,55 @@ LOG=$LOGDIR/run-all.log
 mkdir -p "$LOGDIR"
 
 log()  { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
-fail() { log "FATAL: $*"; exit 1; }
+notify() { "$SCRIPTS"/notify.sh "$1" 2>/dev/null || true; }
+fail() {
+  log "FATAL: $*"
+  notify "❌ Bench *${SWEEP}* aborted
+$*
+
+Log: \`$LOG\`"
+  exit 1
+}
+
+# Extract the markdown row a per-run summary.md emits for aggregate.sh.
+extract_summary_row() {
+  awk '
+    /^## Row to paste into the master report/ {found=1; next}
+    found && /^```markdown/ {inblk=1; next}
+    inblk && /^```/ {exit}
+    inblk {print; exit}
+  ' "$1" 2>/dev/null
+}
+
+# Send a per-step notification by scanning the run's summary.md for verdict.
+notify_run() {
+  local id=$1
+  local sum="$BENCH_ROOT/results/$id/summary.md"
+  local emoji verdict row
+
+  if [[ ! -f "$sum" ]]; then
+    notify "❓ \`$id\` finished — no summary.md"
+    return
+  fi
+
+  if grep -qE '\| \*\*FAIL\*\* \||^\*\*FAIL\*\*' "$sum"; then
+    verdict="FAIL"; emoji="⚠️"
+  elif grep -qE '\| \*\*PASS\*\* \||^\*\*PASS\*\*' "$sum"; then
+    verdict="PASS"; emoji="✅"
+  else
+    verdict="UNKNOWN"; emoji="❓"
+  fi
+
+  row=$(extract_summary_row "$sum")
+  if [[ -n "$row" ]]; then
+    notify "$emoji \`$id\` $verdict
+\`\`\`
+$row
+\`\`\`"
+  else
+    notify "$emoji \`$id\` $verdict"
+  fi
+}
 
 api_check() {
   curl -fs --max-time 5 "$API/streams" >/dev/null \
@@ -120,15 +168,22 @@ run_one() {
     log "  WARN: summarize failed for $id"
   fi
 
+  notify_run "$id"
+
   log "  cooldown ${COOLDOWN}s..."
   sleep "$COOLDOWN"
 }
 
 # ===== preflight =====
-log "=== sweep '$SWEEP' starting (${#PLAN[@]} runs) ==="
+PHASE_D_NOTE=""
+[[ "$SKIP_FAILOVER" != "1" ]] && PHASE_D_NOTE=" + Phase D"
+log "=== sweep '$SWEEP' starting (${#PLAN[@]} A/B/C runs$PHASE_D_NOTE) ==="
 log "  log:    $LOG"
 log "  api:    $API"
 log "  report: $BENCH_ROOT/reports/$SWEEP/report.md (generated at end)"
+notify "🚀 Bench *${SWEEP}* started
+${#PLAN[@]} A/B/C runs${PHASE_D_NOTE}
+Host: \`$(hostname)\`"
 api_check
 
 if [[ ! -f "$BENCH_ROOT/assets/sample-1080p.ts" ]]; then
@@ -153,11 +208,15 @@ set_multi_output false
 # ===== Phase D — failover =====
 if [[ "$SKIP_FAILOVER" != "1" ]]; then
   log "=== Phase D — failover scenarios ==="
-  if "$SCRIPTS"/run-failover.sh all >>"$LOG" 2>&1; then
-    log "  failover scenarios completed"
-  else
-    log "  WARN: one or more failover cases failed — see $LOG"
-  fi
+  for d_case in d1 d2 d3 d4; do
+    log "  → $d_case"
+    if "$SCRIPTS"/run-failover.sh "$d_case" >>"$LOG" 2>&1; then
+      log "    $d_case completed"
+    else
+      log "    $d_case FAILED — see $LOG"
+    fi
+    notify_run "$(echo "$d_case" | tr a-z A-Z)"
+  done
 fi
 
 # ===== aggregate =====
@@ -169,7 +228,33 @@ else
 fi
 
 DUR=$(( $(date +%s) - START ))
+
+# Tally per-run verdicts from each results/<id>/summary.md
+PASS_COUNT=0; FAIL_COUNT=0; FAILED_RUNS=""
+for sum in "$BENCH_ROOT"/results/*/summary.md; do
+  [[ -f "$sum" ]] || continue
+  rid=$(basename "$(dirname "$sum")")
+  if grep -qE '^\| Verdict \| \*\*FAIL\*\*|^\*\*FAIL\*\*' "$sum" 2>/dev/null; then
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    FAILED_RUNS="$FAILED_RUNS $rid"
+  else
+    PASS_COUNT=$((PASS_COUNT + 1))
+  fi
+done
+
 log "=== sweep complete in $((DUR / 60))m $((DUR % 60))s ==="
+log "  PASS: $PASS_COUNT   FAIL: $FAIL_COUNT${FAILED_RUNS:+ ($FAILED_RUNS )}"
 log
 log "Committable report:  $BENCH_ROOT/reports/$SWEEP/report.md"
 log "Local raw artifacts: $LOGDIR/  (gitignored)"
+
+if [[ "$FAIL_COUNT" -eq 0 ]]; then
+  notify "✅ Bench *${SWEEP}* done in $((DUR/60))m $((DUR%60))s
+PASS: ${PASS_COUNT}  FAIL: 0
+Report: \`bench/reports/${SWEEP}/report.md\`"
+else
+  notify "⚠️ Bench *${SWEEP}* done in $((DUR/60))m $((DUR%60))s
+PASS: ${PASS_COUNT}  FAIL: ${FAIL_COUNT}
+Failed runs:${FAILED_RUNS}
+Report: \`bench/reports/${SWEEP}/report.md\`"
+fi
