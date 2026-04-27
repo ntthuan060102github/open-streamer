@@ -60,20 +60,25 @@ read_pids() {
   fi
 }
 
-# Sum CPU jiffies (utime + stime) across tracked PIDs. Caller computes
-# delta over INTERVAL to derive instantaneous %CPU.
+# Fill an associative array (passed by name) with pid -> utime+stime jiffies
+# for each tracked PID. The caller intersects this map with the prior tick's
+# map so only PIDs present in BOTH samples contribute to the CPU delta. This
+# avoids the spurious spike that would otherwise happen when a new ffmpeg
+# child appears mid-bench (its full lifetime jiffies would land entirely in
+# one interval) and the symmetric under-read when a child exits.
 read_proc_jiffies() {
-  local pids=$1
-  [[ -z "$pids" ]] && { echo 0; return; }
-  local total=0 jiff
+  local -n out=$1
+  local pids=$2
+  out=()
+  [[ -z "$pids" ]] && return
+  local jiff
   local IFS=,
   for pid in $pids; do
     [[ -r /proc/$pid/stat ]] || continue
     # /proc/<pid>/stat fields: utime=14, stime=15
-    jiff=$(awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null) || jiff=0
-    total=$((total + jiff))
+    jiff=$(awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null) || continue
+    out[$pid]=$jiff
   done
-  echo "$total"
 }
 
 # RSS + ffmpeg-child count from `ps`. RSS is instantaneous, no delta needed.
@@ -138,23 +143,39 @@ prev_rx=0; prev_tx=0
 if [[ -n "${NIC:-}" ]]; then
   read prev_rx prev_tx < <(read_net_bytes)
 fi
-prev_jiff=$(read_proc_jiffies "$(read_pids)")
+declare -A prev_jiff_map=()
+read_proc_jiffies prev_jiff_map "$(read_pids)"
 
 end=$(( $(date +%s) + DUR ))
 while [[ $(date +%s) -lt $end ]]; do
   ts=$(date +%s)
   pids=$(read_pids)
 
-  # CPU% = delta jiffies / max possible jiffies in interval
-  curr_jiff=$(read_proc_jiffies "$pids")
-  cpu_pct=$(awk -v d=$((curr_jiff - prev_jiff)) -v hz="$USER_HZ" \
+  # CPU% = delta jiffies (over the PID intersection of prev and curr ticks)
+  # divided by the max possible jiffies in this interval. New PIDs contribute
+  # 0 this tick — their first valid delta is reported on the next sample;
+  # dead PIDs are dropped naturally because we iterate curr_jiff_map's keys.
+  declare -A curr_jiff_map=()
+  read_proc_jiffies curr_jiff_map "$pids"
+  total_delta=0
+  for pid in "${!curr_jiff_map[@]}"; do
+    if [[ -n "${prev_jiff_map[$pid]:-}" ]]; then
+      d=$(( curr_jiff_map[$pid] - prev_jiff_map[$pid] ))
+      (( d > 0 )) && total_delta=$(( total_delta + d ))
+    fi
+  done
+  cpu_pct=$(awk -v d="$total_delta" -v hz="$USER_HZ" \
                 -v cores="$N_CORES" -v iv="$INTERVAL" '
     BEGIN {
       max = iv * hz * cores
-      if (max > 0 && d >= 0) printf "%.1f", d * 100 / max
-      else                   print "0.0"
+      if (max > 0) printf "%.1f", d * 100 / max
+      else         print "0.0"
     }')
-  prev_jiff=$curr_jiff
+  # Rotate: prev = curr.
+  prev_jiff_map=()
+  for pid in "${!curr_jiff_map[@]}"; do
+    prev_jiff_map[$pid]=${curr_jiff_map[$pid]}
+  done
 
   mem_line=$(read_proc_mem "$pids")
   gpu_line=$(read_gpu "$pids")
