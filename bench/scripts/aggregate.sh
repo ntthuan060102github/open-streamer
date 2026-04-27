@@ -157,7 +157,7 @@ on the benchmarking host.
 EOF
 
 # Group runs by phase letter and emit one table per phase
-for phase in A B C D E; do
+for phase in A B C D E F H; do
   runs_in_phase=()
   for r in "${RUNS_FOUND[@]}"; do
     [[ "$(phase_of "$r")" == "$phase" ]] && runs_in_phase+=("$r")
@@ -166,10 +166,12 @@ for phase in A B C D E; do
 
   case $phase in
     A) phase_title="Phase A — Passthrough" ;;
-    B) phase_title="Phase B — Legacy ABR transcoding" ;;
-    C) phase_title="Phase C — Multi-output" ;;
+    B) phase_title="Phase B — Legacy ABR transcoding (NVENC, 1 ffmpeg/rendition)" ;;
+    C) phase_title="Phase C — Multi-output (NVENC, 1 ffmpeg/stream)" ;;
     D) phase_title="Phase D — Failover & resilience" ;;
     E) phase_title="Phase E — DVR I/O" ;;
+    F) phase_title="Phase F — CPU encoder fallback (libx264)" ;;
+    H) phase_title="Phase H — Multi-protocol (HLS + DASH)" ;;
   esac
 
   echo

@@ -22,9 +22,11 @@ bench/
 │   ├── notify.sh         ← optional Telegram notifier (start / done / fail)
 │   └── push-report.sh    ← push reports/<sweep>/ to a dedicated GitHub branch
 ├── payloads/             ← stream JSON templates ({{CODE}} placeholder)
-│   ├── passthrough.json
-│   ├── abr3-legacy.json
-│   └── abr3-multi.json
+│   ├── passthrough.json          ← copy, no transcode
+│   ├── abr3-legacy.json          ← NVENC, 1 ffmpeg per rendition
+│   ├── abr3-multi.json           ← NVENC, 1 ffmpeg per stream (multi-output)
+│   ├── abr3-x264.json            ← libx264 CPU fallback
+│   └── abr3-multi-hlsdash.json   ← multi-output + HLS+DASH outputs
 ├── reports/              ← TRACKED — committable reports
 │   └── <sweep>/
 │       ├── report.md     ← master report (auto-generated)
@@ -89,7 +91,20 @@ What it does:
 3. After every run: `aggregate.sh` produces `results/<sweep>/report.md`.
 4. Logs progress to `results/<sweep>/run-all.log`.
 
-Default plan (14 runs): A1/A2/A3, B1/B2/B3/B4, C2/C3/C4, D1/D2/D3/D4.
+Plan + auto-stop behavior:
+
+| Phase | Profile | N (capped at first FAIL) | Auto-stop? |
+| --- | --- | --- | --- |
+| A | passthrough | 1, 10, 25 | no — always runs all |
+| B | NVENC ABR legacy | 2, 4, 6, 8, 10, 12, 16 | **yes** — stops at first FAIL |
+| C | NVENC ABR multi-output | 2, 4, 6, 8, 10, 12, 16 | **yes** |
+| F | libx264 ABR (CPU encoder) | 1, 2, 4, 6 | **yes** |
+| H | NVENC multi-output + HLS+DASH | 1, 4, 8, 12 | **yes** |
+| D | failover scenarios | 1 each (4 cases) | no — every case is independent |
+
+For load phases (B/C/F/H), once a run fails the verdict, every later entry
+in the same phase is skipped (Telegram emits ⏭️ for each skipped run).
+Worst case the sweep runs every entry; best case it stops early per phase.
 
 Knobs:
 

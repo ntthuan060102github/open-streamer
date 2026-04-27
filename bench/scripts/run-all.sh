@@ -78,7 +78,7 @@ extract_summary_row() {
 notify_run() {
   local id=$1
   local sum="$BENCH_ROOT/results/$id/summary.md"
-  local emoji verdict row
+  local emoji verdict row header
 
   if [[ ! -f "$sum" ]]; then
     notify "❓ \`$id\` finished — no summary.md"
@@ -93,10 +93,19 @@ notify_run() {
     verdict="UNKNOWN"; emoji="❓"
   fi
 
+  # Pick a header that matches the row format: Phase D rows have 5 columns,
+  # all other phases (A/B/C/F/H/...) share the 11-column metric format.
+  if [[ "$id" =~ ^D ]]; then
+    header="| Case | Description | Measure | Result | Verdict |"
+  else
+    header="| Run | N | Ladder | CPU% | RAM(MB) | GPU% | Enc% | Dec% | VRAM(MB) | Restart | Verdict |"
+  fi
+
   row=$(extract_summary_row "$sum")
   if [[ -n "$row" ]]; then
     notify "$emoji \`$id\` $verdict
 \`\`\`
+$header
 $row
 \`\`\`"
   else
@@ -118,21 +127,56 @@ set_multi_output() {
 }
 
 # Full plan — (id N profile [pre-hook])
+# Pre-hook flips global config: legacy → multi_output=false, multi → true.
+#
+# Phases B, C, F, H are "load-ceiling" phases — execution auto-stops after
+# the FIRST FAIL within that phase (no point pushing further once the ceiling
+# is found). Phases A and D always run every entry.
 declare -a PLAN_ALL=(
-  # Phase A — passthrough
-  "A1 1  passthrough  noop"
-  "A2 10 passthrough  noop"
-  "A3 25 passthrough  noop"
-  # Phase B — legacy ABR
-  "B1 1  abr3-legacy  legacy"
-  "B2 1  abr3-legacy  legacy"
-  "B3 4  abr3-legacy  legacy"
-  "B4 8  abr3-legacy  legacy"
-  # Phase C — multi-output
-  "C2 1  abr3-multi   multi"
-  "C3 4  abr3-multi   multi"
-  "C4 8  abr3-multi   multi"
+  # Phase A — passthrough (3 runs, always all)
+  "A1 1   passthrough           noop"
+  "A2 10  passthrough           noop"
+  "A3 25  passthrough           noop"
+
+  # Phase B — Legacy ABR NVENC, step 2, runs until first FAIL (max 7)
+  "B1 2   abr3-legacy           legacy"
+  "B2 4   abr3-legacy           legacy"
+  "B3 6   abr3-legacy           legacy"
+  "B4 8   abr3-legacy           legacy"
+  "B5 10  abr3-legacy           legacy"
+  "B6 12  abr3-legacy           legacy"
+  "B7 16  abr3-legacy           legacy"
+
+  # Phase C — Multi-output NVENC, step 2, runs until first FAIL (max 7)
+  "C1 2   abr3-multi            multi"
+  "C2 4   abr3-multi            multi"
+  "C3 6   abr3-multi            multi"
+  "C4 8   abr3-multi            multi"
+  "C5 10  abr3-multi            multi"
+  "C6 12  abr3-multi            multi"
+  "C7 16  abr3-multi            multi"
+
+  # Phase F — CPU encoder fallback (libx264), runs until first FAIL (max 4)
+  "F1 1   abr3-x264             legacy"
+  "F2 2   abr3-x264             legacy"
+  "F3 4   abr3-x264             legacy"
+  "F4 6   abr3-x264             legacy"
+
+  # Phase H — Multi-protocol HLS+DASH overhead, runs until first FAIL (max 4)
+  "H1 1   abr3-multi-hlsdash    multi"
+  "H2 4   abr3-multi-hlsdash    multi"
+  "H3 8   abr3-multi-hlsdash    multi"
+  "H4 12  abr3-multi-hlsdash    multi"
 )
+
+# Phases that should stop after first FAIL (load-ceiling search).
+# Other phases (A, D) always run every entry regardless of verdict.
+auto_stop_phase() {
+  case "$1" in
+    B|C|F|H) return 0 ;;
+    *)       return 1 ;;
+  esac
+}
 
 # Filter by env PLAN if provided (space-separated run IDs)
 declare -a PLAN
@@ -182,7 +226,8 @@ log "  log:    $LOG"
 log "  api:    $API"
 log "  report: $BENCH_ROOT/reports/$SWEEP/report.md (generated at end)"
 notify "🚀 Bench *${SWEEP}* started
-${#PLAN[@]} A/B/C runs${PHASE_D_NOTE}
+Plan: ${#PLAN[@]} runs${PHASE_D_NOTE}
+B/C/F/H auto-stop on first FAIL per phase.
 Host: \`$(hostname)\`"
 api_check
 
@@ -196,10 +241,32 @@ fi
 mv "$BENCH_ROOT"/results/sysinfo-*.txt "$LOGDIR/sysinfo.txt" 2>/dev/null || true
 
 # ===== execute plan =====
+# FAILED_PHASES is a string of phase letters that already hit FAIL — used to
+# skip subsequent runs of the same auto-stop phase (B/C/F/H) once the load
+# ceiling has been found.
 START=$(date +%s)
+FAILED_PHASES=""
 for line in "${PLAN[@]}"; do
   read -r id n profile hook <<<"$line"
+  phase=${id:0:1}
+
+  if auto_stop_phase "$phase" && [[ "$FAILED_PHASES" == *"$phase"* ]]; then
+    log "=== $id skipped — phase $phase already hit ceiling ==="
+    notify "⏭️ \`$id\` skipped — phase $phase ceiling already found"
+    continue
+  fi
+
   run_one "$id" "$n" "$profile" "$hook"
+
+  # If this run produced a FAIL summary, record the phase so subsequent
+  # entries get skipped.
+  sum="$BENCH_ROOT/results/$id/summary.md"
+  if [[ -f "$sum" ]] && \
+     grep -qE '\| \*\*FAIL\*\* \||^\*\*FAIL\*\*' "$sum" 2>/dev/null && \
+     auto_stop_phase "$phase"; then
+    FAILED_PHASES="$FAILED_PHASES$phase"
+    log "  ↑ phase $phase ceiling reached at N=$n; later $phase runs will be skipped"
+  fi
 done
 
 # Reset config to baseline

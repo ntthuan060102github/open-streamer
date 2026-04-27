@@ -1,0 +1,69 @@
+{
+  "code": "{{CODE}}",
+  "name": "bench abr3 multi-output HLS+DASH {{CODE}}",
+  "tags": ["bench", "abr3", "multi-output", "hls", "dash"],
+  "stream_key": "{{CODE}}",
+  "disabled": false,
+  "inputs": [
+    {
+      "url": "rtmp://0.0.0.0:{{RTMP_PORT}}/live/{{CODE}}",
+      "priority": 0,
+      "net": {
+        "reconnect": true,
+        "read_timeout_sec": 15,
+        "reconnect_delay_sec": 2,
+        "reconnect_max_delay_sec": 10
+      }
+    }
+  ],
+  "transcoder": {
+    "global": {
+      "hw": "nvenc",
+      "fps": 0,
+      "gop": 60,
+      "deviceid": 0
+    },
+    "decoder": { "name": "h264_cuvid" },
+    "video": {
+      "copy": false,
+      "profiles": [
+        {
+          "width": 1920, "height": 1080,
+          "bitrate": 5000, "max_bitrate": 6000,
+          "framerate": 30, "keyframe_interval": 2,
+          "codec": "h264", "preset": "p4",
+          "profile": "high", "level": "4.1"
+        },
+        {
+          "width": 1280, "height": 720,
+          "bitrate": 3000, "max_bitrate": 3500,
+          "framerate": 30, "keyframe_interval": 2,
+          "codec": "h264", "preset": "p4",
+          "profile": "high", "level": "4.0"
+        },
+        {
+          "width": 854, "height": 480,
+          "bitrate": 1200, "max_bitrate": 1500,
+          "framerate": 30, "keyframe_interval": 2,
+          "codec": "h264", "preset": "p4",
+          "profile": "main", "level": "3.1"
+        }
+      ]
+    },
+    "audio": {
+      "copy": false,
+      "codec": "aac",
+      "bitrate": 128,
+      "sample_rate": 48000,
+      "channels": 2
+    }
+  },
+  "protocols": {
+    "hls": true,
+    "dash": true,
+    "rtsp": false,
+    "rtmp": false,
+    "srt": false
+  },
+  "push": []
+}

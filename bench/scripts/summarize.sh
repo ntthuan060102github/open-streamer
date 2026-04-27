@@ -117,11 +117,13 @@ PROFILE=$( { grep -oE 'payloads/[a-z0-9-]+\.json' "$DIR/create.log" 2>/dev/null 
 
 # Map profile name to a human-readable ladder string for the master report row.
 case "$PROFILE" in
-  passthrough)  LADDER="copy" ;;
-  abr3-legacy)  LADDER="1080p+720p+480p (legacy)" ;;
-  abr3-multi)   LADDER="1080p+720p+480p (multi)" ;;
-  abr2-*)       LADDER="720p+480p" ;;
-  *)            LADDER="<unknown>" ;;
+  passthrough)         LADDER="copy" ;;
+  abr3-legacy)         LADDER="1080p+720p+480p (legacy)" ;;
+  abr3-multi)          LADDER="1080p+720p+480p (multi)" ;;
+  abr3-multi-hlsdash)  LADDER="1080p+720p+480p (multi, HLS+DASH)" ;;
+  abr3-x264)           LADDER="1080p+720p+480p (libx264)" ;;
+  abr2-*)              LADDER="720p+480p" ;;
+  *)                   LADDER="<unknown>" ;;
 esac
 
 # Suggest verdict — use awk for portable float comparison (no bc dependency)
