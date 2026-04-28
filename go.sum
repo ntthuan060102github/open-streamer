@@ -174,8 +174,8 @@ github.com/prometheus/procfs v0.16.1 h1:hZ15bTNuirocR6u0JZ6BAHHmwS1p8B4P6MRqxtzM
 github.com/prometheus/procfs v0.16.1/go.mod h1:teAbpZRB1iIAJYREa1LsoWUXykVXA1KlTmWl8x/U+Is=
 github.com/q191201771/lal v0.37.4 h1:yq1PuuHfyzOjGLsZOZIorI+FcmgKSJKEitG9rYAMpYk=
 github.com/q191201771/lal v0.37.4/go.mod h1:DNDsCng/5dZOira1v6Z/yR45l5K4+EmPC4BqciZGdgQ=
-github.com/q191201771/naza v0.30.48 h1:lbYUaa7A15kJKYwOiU4AbFS1Zo8oQwppl2tLEbJTqnw=
-github.com/q191201771/naza v0.30.48/go.mod h1:n+dpJjQSh90PxBwxBNuifOwQttywvSIN5TkWSSYCeBk=
+github.com/q191201771/naza v0.30.51 h1:uDQGQxWNHuGHR/miHHtyXWlDF3rIwqN8LM4ucKprv3I=
+github.com/q191201771/naza v0.30.51/go.mod h1:n+dpJjQSh90PxBwxBNuifOwQttywvSIN5TkWSSYCeBk=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/sagikazarmark/locafero v0.11.0 h1:1iurJgmM9G3PA/I+wWYIOw/5SyBtxapeHDcg+AAIFXc=

@@ -14,7 +14,7 @@ require (
 	github.com/pion/rtp v1.10.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/q191201771/lal v0.37.4
-	github.com/q191201771/naza v0.30.48
+	github.com/q191201771/naza v0.30.51
 	github.com/samber/do/v2 v2.0.0
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/spf13/viper v1.21.0
