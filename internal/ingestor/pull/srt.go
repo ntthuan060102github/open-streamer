@@ -27,6 +27,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"sync"
 	"time"
 
 	srt "github.com/datarhei/gosrt"
@@ -45,6 +46,7 @@ type SRTReader struct {
 	conn      srt.Conn
 	buf       []byte
 	stopWatch context.CancelFunc // cancels the ctx-watcher goroutine on Close
+	watchWG   sync.WaitGroup     // tracks the watchContext goroutine so Close can wait for it before mutating r.conn
 }
 
 // NewSRTReader constructs an SRTReader without opening a connection.
@@ -82,6 +84,7 @@ func (r *SRTReader) Open(ctx context.Context) error {
 	// goroutine when the caller's context is cancelled.
 	watchCtx, stopWatch := context.WithCancel(context.Background())
 	r.stopWatch = stopWatch
+	r.watchWG.Add(1)
 	go r.watchContext(ctx, watchCtx)
 
 	return nil
@@ -90,6 +93,7 @@ func (r *SRTReader) Open(ctx context.Context) error {
 // watchContext closes the SRT connection when the caller's ctx is cancelled.
 // It exits immediately when stopWatch() is called (e.g. from Close).
 func (r *SRTReader) watchContext(callerCtx, watchCtx context.Context) {
+	defer r.watchWG.Done()
 	select {
 	case <-callerCtx.Done():
 		if r.conn != nil {
@@ -134,11 +138,16 @@ func (r *SRTReader) Read(ctx context.Context) ([]byte, error) {
 
 // Close stops the context watcher and closes the SRT socket.
 // Safe to call before Open or more than once.
+//
+// Wait for the watcher goroutine to exit BEFORE nilling out r.conn — the
+// watcher may be inside `if r.conn != nil { r.conn.Close() }` when its
+// callerCtx fires; mutating r.conn without that wait would race the read.
 func (r *SRTReader) Close() error {
 	if r.stopWatch != nil {
 		r.stopWatch()
 		r.stopWatch = nil
 	}
+	r.watchWG.Wait()
 	if r.conn != nil {
 		err := r.conn.Close()
 		r.conn = nil

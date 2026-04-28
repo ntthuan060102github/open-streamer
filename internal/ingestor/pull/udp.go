@@ -162,6 +162,12 @@ func (r *UDPReader) Read(ctx context.Context) ([]byte, error) {
 
 // Close stops the pump goroutine, closes the UDP socket, and waits for clean
 // shutdown. Safe to call before Open or multiple times.
+//
+// Lifetime ordering matters under -race: pump() reads r.conn for SetReadDeadline
+// and ReadFromUDP, so r.conn = nil must NOT happen until wg.Wait() has returned.
+// The same applies to r.done / r.chunks — pump may still be in flight when
+// Close starts. We close the socket (which unblocks pump's syscall), wait
+// for pump to exit, and only then null out the shared fields.
 func (r *UDPReader) Close() error {
 	if r.done != nil {
 		select {
@@ -173,9 +179,10 @@ func (r *UDPReader) Close() error {
 	var err error
 	if r.conn != nil {
 		err = r.conn.Close()
-		r.conn = nil
 	}
 	r.wg.Wait()
+	// Pump has exited — safe to drop references now.
+	r.conn = nil
 	r.done = nil
 	r.chunks = nil
 	return err
