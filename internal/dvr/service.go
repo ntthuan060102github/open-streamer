@@ -188,6 +188,10 @@ func (s *Service) StartRecording(ctx context.Context, streamID domain.StreamCode
 	nextIdx := idx.SegmentCount
 	go s.record(workerCtx, sess, subscribeID, segDir, nextIdx, resuming, segDur)
 
+	if s.m != nil {
+		s.m.DVRRecordingActive.WithLabelValues(string(streamID)).Set(1)
+	}
+
 	s.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventRecordingStarted,
 		StreamCode: streamID,
@@ -221,6 +225,10 @@ func (s *Service) StopRecording(ctx context.Context, streamID domain.StreamCode)
 
 	if err := s.recRepo.Save(ctx, sess.recording); err != nil {
 		return fmt.Errorf("dvr: update recording: %w", err)
+	}
+
+	if s.m != nil {
+		s.m.DVRRecordingActive.WithLabelValues(string(streamID)).Set(0)
 	}
 
 	s.bus.Publish(ctx, domain.Event{

@@ -48,7 +48,10 @@ func (s *Service) serveDASH(ctx context.Context, streamID domain.StreamCode) {
 		cfg.LiveWindow,
 		cfg.LiveHistory,
 		cfg.LiveEphemeral,
-		nil,
+		&dashRunOpts{
+			packAudio: true,
+			segCount:  s.dashSegCounter(streamID, "main"),
+		},
 	)
 
 	slog.Info("publisher: DASH serve stopped", "stream_code", streamID)

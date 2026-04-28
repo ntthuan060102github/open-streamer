@@ -89,6 +89,9 @@ func newDVRTestMetrics() *metrics.Metrics {
 		DVRBytesWrittenTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "test_dvr_bytes_written_total",
 		}, []string{"stream_code"}),
+		DVRRecordingActive: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "test_dvr_recording_active",
+		}, []string{"stream_code"}),
 	}
 }
 

@@ -33,8 +33,20 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 )
+
+// batchMetrics holds the pre-bound Prometheus instruments for one batcher.
+// Pre-binding once (instead of WithLabelValues per write) keeps the hot
+// path map-lookup-free. Any field may be nil when metrics aren't injected.
+type batchMetrics struct {
+	deliverSuccess prometheus.Counter
+	deliverFailure prometheus.Counter
+	dropped        prometheus.Counter
+	queueDepth     prometheus.Gauge
+}
 
 // batchConfig snapshots the per-hook dispatch parameters at batcher
 // construction time. The values are resolved by mergeBatchConfig from
@@ -56,6 +68,7 @@ type batchConfig struct {
 type httpBatcher struct {
 	cfg    batchConfig
 	client *http.Client
+	m      batchMetrics // zero-value safe
 
 	mu          sync.Mutex
 	queue       []domain.Event
@@ -74,10 +87,11 @@ type httpBatcher struct {
 // newHTTPBatcher constructs a batcher and launches its flusher goroutine.
 // The goroutine returns when ctx is cancelled OR stop() is called; in
 // either case the queue is drained on the way out (best-effort POST).
-func newHTTPBatcher(ctx context.Context, cfg batchConfig, client *http.Client) *httpBatcher {
+func newHTTPBatcher(ctx context.Context, cfg batchConfig, client *http.Client, m batchMetrics) *httpBatcher {
 	b := &httpBatcher{
 		cfg:      cfg,
 		client:   client,
+		m:        m,
 		queue:    make([]domain.Event, 0, cfg.maxItems),
 		flushSig: make(chan struct{}, 1),
 		done:     make(chan struct{}),
@@ -94,19 +108,27 @@ func newHTTPBatcher(ctx context.Context, cfg batchConfig, client *http.Client) *
 func (b *httpBatcher) enqueue(ev domain.Event) {
 	b.mu.Lock()
 	b.queue = append(b.queue, ev)
+	dropped := 0
 	if len(b.queue) > b.cfg.maxQueue {
-		drop := len(b.queue) - b.cfg.maxQueue
-		b.queue = b.queue[drop:]
-		b.droppedSize += int64(drop)
+		dropped = len(b.queue) - b.cfg.maxQueue
+		b.queue = b.queue[dropped:]
+		b.droppedSize += int64(dropped)
 		slog.Warn("hooks: batch queue overflow — oldest events dropped",
 			"hook_id", b.cfg.hookID,
-			"dropped", drop,
+			"dropped", dropped,
 			"dropped_total", b.droppedSize,
 			"queue_cap", b.cfg.maxQueue,
 		)
 	}
-	full := len(b.queue) >= b.cfg.maxItems
+	depth := len(b.queue)
+	full := depth >= b.cfg.maxItems
 	b.mu.Unlock()
+	if dropped > 0 && b.m.dropped != nil {
+		b.m.dropped.Add(float64(dropped))
+	}
+	if b.m.queueDepth != nil {
+		b.m.queueDepth.Set(float64(depth))
+	}
 	if full {
 		b.signal()
 	}
@@ -164,7 +186,14 @@ func (b *httpBatcher) flushOnce(ctx context.Context) {
 		return
 	}
 	if err := b.deliverBatch(ctx, batch); err != nil {
+		if b.m.deliverFailure != nil {
+			b.m.deliverFailure.Inc()
+		}
 		b.requeue(batch, err)
+		return
+	}
+	if b.m.deliverSuccess != nil {
+		b.m.deliverSuccess.Inc()
 	}
 }
 
@@ -173,8 +202,8 @@ func (b *httpBatcher) flushOnce(ctx context.Context) {
 // events arrived than the batch can hold) preserve order for the next tick.
 func (b *httpBatcher) takeBatch() []domain.Event {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if len(b.queue) == 0 {
+		b.mu.Unlock()
 		return nil
 	}
 	n := len(b.queue)
@@ -184,6 +213,11 @@ func (b *httpBatcher) takeBatch() []domain.Event {
 	out := make([]domain.Event, n)
 	copy(out, b.queue[:n])
 	b.queue = b.queue[n:]
+	depth := len(b.queue)
+	b.mu.Unlock()
+	if b.m.queueDepth != nil {
+		b.m.queueDepth.Set(float64(depth))
+	}
 	return out
 }
 
@@ -197,19 +231,28 @@ func (b *httpBatcher) requeue(batch []domain.Event, deliverErr error) {
 	combined := make([]domain.Event, 0, len(batch)+len(b.queue))
 	combined = append(combined, batch...)
 	combined = append(combined, b.queue...)
+	dropped := 0
 	if len(combined) > b.cfg.maxQueue {
-		drop := len(combined) - b.cfg.maxQueue
-		combined = combined[drop:]
-		b.droppedSize += int64(drop)
+		dropped = len(combined) - b.cfg.maxQueue
+		combined = combined[dropped:]
+		b.droppedSize += int64(dropped)
 		slog.Warn("hooks: requeue overflow — oldest events dropped",
 			"hook_id", b.cfg.hookID,
-			"dropped", drop,
+			"dropped", dropped,
 			"dropped_total", b.droppedSize,
 			"queue_cap", b.cfg.maxQueue,
 		)
 	}
 	b.queue = combined
+	depth := len(b.queue)
 	b.mu.Unlock()
+
+	if dropped > 0 && b.m.dropped != nil {
+		b.m.dropped.Add(float64(dropped))
+	}
+	if b.m.queueDepth != nil {
+		b.m.queueDepth.Set(float64(depth))
+	}
 
 	slog.Warn("hooks: batch delivery failed, re-queued for next flush",
 		"hook_id", b.cfg.hookID,

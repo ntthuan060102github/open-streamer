@@ -17,13 +17,15 @@ import (
 	"sync"
 
 	"github.com/bluenviron/gortsplib/v5"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/samber/do/v2"
 
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
+	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
 	"github.com/ntt0601zcoder/open-streamer/internal/sessions"
-	"github.com/samber/do/v2"
 )
 
 // Compile-time assertion: rtspHandler implements the ServerHandler interfaces it claims.
@@ -79,6 +81,7 @@ type Service struct {
 	buf        *buffer.Service
 	bus        events.Bus
 	tracker    sessions.Tracker
+	m          *metrics.Metrics
 	ffmpegPath string
 
 	// hlsFailoverGen: incremented on each input.failover so every ABR variant segmenter
@@ -130,6 +133,12 @@ func New(i do.Injector) (*Service, error) {
 		tracker = t
 	}
 
+	// Metrics is also optional so unit tests can wire only the publisher.
+	var m *metrics.Metrics
+	if mm, err := do.Invoke[*metrics.Metrics](i); err == nil {
+		m = mm
+	}
+
 	ffmpegPath := tc.FFmpegPath
 	if ffmpegPath == "" {
 		ffmpegPath = domain.DefaultFFmpegPath
@@ -141,6 +150,7 @@ func New(i do.Injector) (*Service, error) {
 		buf:            buf,
 		bus:            bus,
 		tracker:        tracker,
+		m:              m,
 		ffmpegPath:     ffmpegPath,
 		hlsFailoverGen: make(map[domain.StreamCode]uint64),
 		streams:        make(map[domain.StreamCode]*streamState),
@@ -567,4 +577,31 @@ func (s *Service) mediaBufferFor(code domain.StreamCode) (domain.StreamCode, boo
 	defer s.mu.Unlock()
 	id, ok := s.mediaBuffer[code]
 	return id, ok
+}
+
+// hlsSegCounter pre-binds the per-(stream, profile) HLS segment counter. The
+// returned counter is nil-safe at the call site so segmenters work in tests
+// that don't wire metrics.
+func (s *Service) hlsSegCounter(streamID domain.StreamCode, profile string) prometheus.Counter {
+	if s.m == nil {
+		return nil
+	}
+	return s.m.PublisherSegmentsTotal.WithLabelValues(string(streamID), "hls", profile)
+}
+
+// dashSegCounter is the DASH counterpart to hlsSegCounter.
+func (s *Service) dashSegCounter(streamID domain.StreamCode, profile string) prometheus.Counter {
+	if s.m == nil {
+		return nil
+	}
+	return s.m.PublisherSegmentsTotal.WithLabelValues(string(streamID), "dash", profile)
+}
+
+// pushStateGauge pre-binds the per-(stream, dest_url) push state gauge.
+// Nil-safe — push workers tolerate a nil gauge in tests.
+func (s *Service) pushStateGauge(streamID domain.StreamCode, destURL string) prometheus.Gauge {
+	if s.m == nil {
+		return nil
+	}
+	return s.m.PublisherPushState.WithLabelValues(string(streamID), destURL)
 }

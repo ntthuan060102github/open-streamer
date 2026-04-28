@@ -26,13 +26,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/do/v2"
 
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
+	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
 	"github.com/ntt0601zcoder/open-streamer/internal/store"
 )
+
+// metricsHooks abstracts the Prometheus surface the dispatcher writes to.
+// Nil-safe: tests that wire only hooks can omit the metrics dependency.
+type metricsHooks struct {
+	delivery     *prometheus.CounterVec // {hook_id, hook_type, outcome}
+	eventDropped *prometheus.CounterVec // {hook_id}
+	queueDepth   *prometheus.GaugeVec   // {hook_id}
+}
 
 // ErrHookTestUnsupported is returned when the hook type cannot receive a synthetic test delivery.
 var ErrHookTestUnsupported = errors.New("hooks: test delivery not supported for this hook type")
@@ -47,6 +57,7 @@ type Service struct {
 	hookRepo store.HookRepository
 	bus      events.Bus
 	client   *http.Client
+	m        *metricsHooks
 
 	// HTTP batchers: lazy-created on first dispatch for an HTTP hook.
 	// Lifetime-tied to Start's ctx — every batcher is stopped + drained
@@ -75,6 +86,13 @@ func New(i do.Injector) (*Service, error) {
 		client:    &http.Client{},
 		batchers:  make(map[domain.HookID]*httpBatcher),
 		fileLocks: make(map[string]*sync.Mutex),
+	}
+	if m, err := do.Invoke[*metrics.Metrics](i); err == nil {
+		svc.m = &metricsHooks{
+			delivery:     m.HooksDeliveryTotal,
+			eventDropped: m.HooksEventsDroppedTotal,
+			queueDepth:   m.HooksBatchQueueDepth,
+		}
 	}
 	return svc, nil
 }
@@ -111,7 +129,13 @@ func (s *Service) DeliverTestEvent(ctx context.Context, id domain.HookID) error 
 		b.signal()
 		return nil
 	case domain.HookTypeFile:
-		return s.deliverFile(h, ev)
+		err := s.deliverFile(h, ev)
+		if err != nil {
+			s.observeDelivery(h, "failure")
+		} else {
+			s.observeDelivery(h, "success")
+		}
+		return err
 	default:
 		return fmt.Errorf("%w: %s", ErrHookTestUnsupported, h.Type)
 	}
@@ -191,6 +215,9 @@ func (s *Service) dispatch(ctx context.Context, event domain.Event) error {
 					"stream_code", event.StreamCode,
 					"err", err,
 				)
+				s.observeDelivery(h, "failure")
+			} else {
+				s.observeDelivery(h, "success")
 			}
 		default:
 			slog.Warn("hooks: unknown hook type", "hook_id", h.ID, "type", h.Type)
@@ -230,7 +257,7 @@ func (s *Service) batcherFor(_ context.Context, h *domain.Hook) *httpBatcher {
 	// Batcher must be tied to the SERVICE lifetime (s.startCtx), NOT the
 	// per-event dispatch ctx — using the dispatch ctx here would kill the
 	// batcher as soon as the bus worker that happened to create it returns.
-	b = newHTTPBatcher(bctx, cfg, s.client) //nolint:contextcheck // service-lifetime ctx, see comment above
+	b = newHTTPBatcher(bctx, cfg, s.client, s.batchMetricsFor(h)) //nolint:contextcheck // service-lifetime ctx, see comment above
 	s.batchers[h.ID] = b
 	slog.Info("hooks: HTTP batcher started",
 		"hook_id", h.ID,
@@ -314,6 +341,43 @@ func (s *Service) deliverFile(h *domain.Hook, event domain.Event) error {
 		return fmt.Errorf("file delivery: write %s: %w", target, err)
 	}
 	return nil
+}
+
+// observeDelivery bumps the per-hook delivery counter labelled with the
+// outcome ("success" / "failure"). Nil-safe: tests without metrics injection
+// pass through without writing anything.
+func (s *Service) observeDelivery(h *domain.Hook, outcome string) {
+	if s.m == nil {
+		return
+	}
+	s.m.delivery.With(prometheus.Labels{
+		"hook_id":   string(h.ID),
+		"hook_type": string(h.Type),
+		"outcome":   outcome,
+	}).Inc()
+}
+
+// batchMetricsFor pre-binds the per-hook Prometheus instruments the batcher
+// hot path uses so each enqueue/flush avoids a WithLabelValues map lookup.
+// Returns the zero value when the metrics dependency wasn't injected.
+func (s *Service) batchMetricsFor(h *domain.Hook) batchMetrics {
+	if s.m == nil {
+		return batchMetrics{}
+	}
+	return batchMetrics{
+		deliverSuccess: s.m.delivery.With(prometheus.Labels{
+			"hook_id":   string(h.ID),
+			"hook_type": string(h.Type),
+			"outcome":   "success",
+		}),
+		deliverFailure: s.m.delivery.With(prometheus.Labels{
+			"hook_id":   string(h.ID),
+			"hook_type": string(h.Type),
+			"outcome":   "failure",
+		}),
+		dropped:    s.m.eventDropped.WithLabelValues(string(h.ID)),
+		queueDepth: s.m.queueDepth.WithLabelValues(string(h.ID)),
+	}
 }
 
 // lockForFile returns the per-target mutex, lazy-creating one on first use.

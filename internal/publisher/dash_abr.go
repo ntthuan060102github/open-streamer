@@ -62,6 +62,7 @@ func (s *Service) serveDASHAdaptive(ctx context.Context, stream *domain.Stream) 
 			abrSlug:           slug,
 			videoBandwidthBps: r.BandwidthBps(),
 			packAudio:         i == bestIdx,
+			segCount:          s.dashSegCounter(stream.Code, slug),
 		}
 
 		sub, err := s.buf.Subscribe(r.BufferID)

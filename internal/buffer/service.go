@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/samber/do/v2"
+
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
-	"github.com/samber/do/v2"
+	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
 )
 
 // Subscriber is a read cursor into a stream's ring buffer.
@@ -21,9 +24,14 @@ type Subscriber struct {
 func (s *Subscriber) Recv() <-chan Packet { return s.ch }
 
 // ringBuffer is a bounded in-memory queue for a single stream.
+//
+// `drops` is a pre-bound Prometheus counter for this stream's drop events
+// — pre-binding once (instead of `WithLabelValues` per write) keeps the
+// hot path map-lookup-free. Nil when metrics aren't injected (tests).
 type ringBuffer struct {
-	mu   sync.Mutex
-	subs []*Subscriber
+	mu    sync.Mutex
+	subs  []*Subscriber
+	drops prometheus.Counter
 }
 
 func (rb *ringBuffer) write(pkt Packet) {
@@ -32,7 +40,9 @@ func (rb *ringBuffer) write(pkt Packet) {
 	}
 	// Hold the lock during fan-out so a concurrent unsubscribe can't close
 	// a subscriber channel while we're sending to it. Sends use `select default`
-	// so the writer still never blocks on slow consumers.
+	// so the writer still never blocks on slow consumers — the dropped packet
+	// is counted into rb.drops so operators can see slow-consumer pressure
+	// before users complain about frame drops.
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 	for _, s := range rb.subs {
@@ -40,6 +50,9 @@ func (rb *ringBuffer) write(pkt Packet) {
 		select {
 		case s.ch <- pc:
 		default:
+			if rb.drops != nil {
+				rb.drops.Inc()
+			}
 		}
 	}
 }
@@ -80,6 +93,7 @@ func (rb *ringBuffer) unsubscribeAll() {
 // Service manages ring buffers for all active streams.
 type Service struct {
 	cfg     config.BufferConfig
+	m       *metrics.Metrics
 	mu      sync.RWMutex
 	buffers map[domain.StreamCode]*ringBuffer
 }
@@ -90,8 +104,15 @@ func New(i do.Injector) (*Service, error) {
 	if cfg.Capacity <= 0 {
 		cfg.Capacity = domain.DefaultBufferCapacity
 	}
+	// Metrics is registered as a separate provider; tolerate absence so
+	// tests that wire only buffer can still construct the service.
+	var m *metrics.Metrics
+	if mm, err := do.Invoke[*metrics.Metrics](i); err == nil {
+		m = mm
+	}
 	return &Service{
 		cfg:     cfg,
+		m:       m,
 		buffers: make(map[domain.StreamCode]*ringBuffer),
 	}, nil
 }
@@ -109,7 +130,11 @@ func (s *Service) Create(id domain.StreamCode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.buffers[id]; !ok {
-		s.buffers[id] = &ringBuffer{}
+		rb := &ringBuffer{}
+		if s.m != nil {
+			rb.drops = s.m.BufferDropsTotal.WithLabelValues(string(id))
+		}
+		s.buffers[id] = rb
 	}
 }
 

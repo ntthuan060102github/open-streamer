@@ -23,6 +23,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/tsmux"
@@ -36,6 +38,10 @@ type hlsRunOpts struct {
 	width       int
 	height      int
 	failoverGen func() uint64
+	// segCount is incremented once per successful segment write. Pre-bound
+	// to {stream_code,format=hls,profile} so the hot path skips the
+	// WithLabelValues map lookup. Nil-safe.
+	segCount prometheus.Counter
 }
 
 // hlsSegEntry holds per-segment metadata kept in the sliding window.
@@ -71,6 +77,7 @@ func (s *Service) serveHLS(ctx context.Context, streamID domain.StreamCode) {
 	manifest := filepath.Join(streamDir, "index.m3u8")
 	opts := &hlsRunOpts{
 		failoverGen: func() uint64 { return s.hlsFailoverGenSnapshot(streamID) },
+		segCount:    s.hlsSegCounter(streamID, "main"),
 	}
 	runHLSSegmenter(
 		ctx, streamID, sub, streamDir, manifest,
@@ -120,6 +127,7 @@ func runHLSSegmenter(
 		p.width = opts.width
 		p.height = opts.height
 		p.failoverGen = opts.failoverGen
+		p.segCount = opts.segCount
 	}
 	if p.failoverGen == nil {
 		p.failoverGen = func() uint64 { return 0 }
@@ -160,6 +168,9 @@ type hlsSegmenter struct {
 	bwBps     int
 	width     int
 	height    int
+
+	// Pre-bound segment-write counter; nil-safe.
+	segCount prometheus.Counter
 }
 
 func (p *hlsSegmenter) run(ctx context.Context, sub *buffer.Subscriber) {
@@ -302,6 +313,10 @@ func (p *hlsSegmenter) flushLocked() {
 		slog.Warn("publisher: HLS write segment failed",
 			"stream_code", p.streamID, "segment", name, "err", err)
 		return
+	}
+
+	if p.segCount != nil {
+		p.segCount.Inc()
 	}
 
 	slog.Debug("publisher: HLS segment flushed",

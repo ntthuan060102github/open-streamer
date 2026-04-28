@@ -42,6 +42,7 @@ import (
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/hevc"
 	"github.com/Eyevinn/mp4ff/mp4"
+	"github.com/prometheus/client_golang/prometheus"
 	mpeg2 "github.com/yapingcat/gomedia/go-mpeg2"
 
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
@@ -64,6 +65,9 @@ type dashRunOpts struct {
 	abrSlug           string
 	videoBandwidthBps int
 	packAudio         bool
+	// segCount counts {video, audio} segment writes — pre-bound to
+	// {stream_code,format=dash,profile} so the hot path is map-lookup-free.
+	segCount prometheus.Counter
 }
 
 // runDASHFMP4Packager is the entry point used by both serveDASH and serveDASHAdaptive.
@@ -108,6 +112,7 @@ func runDASHFMP4Packager(
 			p.videoBW = opts.videoBandwidthBps
 		}
 		p.packAudio = opts.packAudio
+		p.segCount = opts.segCount
 	}
 
 	p.run(ctx, sub)
@@ -177,6 +182,9 @@ type dashFMP4Packager struct {
 	abrSlug   string
 	videoBW   int  // override bandwidth for ABR root MPD
 	packAudio bool // false for non-best ABR renditions
+
+	// Pre-bound DASH segment counter (covers both video + audio writes); nil-safe.
+	segCount prometheus.Counter
 }
 
 // run is the main goroutine: wires the TS pipe, demuxer, and flush ticker.
@@ -690,6 +698,10 @@ func (p *dashFMP4Packager) writeVideoSegmentLocked() error {
 		return fmt.Errorf("write video segment: %w", err)
 	}
 
+	if p.segCount != nil {
+		p.segCount.Inc()
+	}
+
 	slog.Debug("publisher: DASH video segment",
 		"stream_code", p.streamID, "segment", name,
 		"frames", len(p.vAnnex), "bytes", buf.Len())
@@ -748,6 +760,10 @@ func (p *dashFMP4Packager) writeAudioSegmentLocked() error {
 	if err := writeFileAtomic(path, buf.Bytes()); err != nil {
 		p.aSegN--
 		return fmt.Errorf("write audio segment: %w", err)
+	}
+
+	if p.segCount != nil {
+		p.segCount.Inc()
 	}
 
 	p.onDiskA = append(p.onDiskA, name)

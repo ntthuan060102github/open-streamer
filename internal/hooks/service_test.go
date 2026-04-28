@@ -128,7 +128,7 @@ func TestBatcherFlushOnSizeTrigger(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cfg := mergeBatchConfig(hook, batchGlobalDefaults{})
-	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second})
+	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second}, batchMetrics{})
 	defer b.stop()
 
 	for i := 0; i < 3; i++ {
@@ -160,7 +160,7 @@ func TestBatcherFlushOnTimerWhenBelowSize(t *testing.T) {
 	defer cancel()
 	cfg := mergeBatchConfig(fastBatchHook(srv.URL), batchGlobalDefaults{})
 	cfg.maxItems = 1000 // stays below cap
-	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second})
+	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second}, batchMetrics{})
 	defer b.stop()
 
 	// One event, well below batch cap. Timer (~1s) should ship it anyway.
@@ -200,7 +200,7 @@ func TestBatcherSendsArrayBodyWithHMACAndBatchSize(t *testing.T) {
 	cfg := mergeBatchConfig(hook, batchGlobalDefaults{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second})
+	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second}, batchMetrics{})
 	defer b.stop()
 
 	b.enqueue(domain.Event{ID: "a", Type: domain.EventStreamCreated})
@@ -265,7 +265,7 @@ func TestBatcherRequeuesFailedBatch(t *testing.T) {
 	cfg := mergeBatchConfig(hook, batchGlobalDefaults{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second})
+	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second}, batchMetrics{})
 	defer b.stop()
 
 	b.enqueue(domain.Event{ID: "x", Type: domain.EventStreamStarted})
@@ -296,7 +296,7 @@ func TestBatcherDropsOldestOnQueueOverflow(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 200 * time.Millisecond})
+	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 200 * time.Millisecond}, batchMetrics{})
 	defer b.stop()
 
 	for i := 0; i < 10; i++ {
@@ -325,7 +325,7 @@ func TestBatcherStopDrainsRemaining(t *testing.T) {
 	cfg := mergeBatchConfig(hook, batchGlobalDefaults{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second})
+	b := newHTTPBatcher(ctx, cfg, &http.Client{Timeout: 2 * time.Second}, batchMetrics{})
 
 	for i := 0; i < 3; i++ {
 		b.enqueue(domain.Event{ID: string(rune('a' + i)), Type: domain.EventStreamStarted})

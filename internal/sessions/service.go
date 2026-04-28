@@ -19,6 +19,7 @@ import (
 
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
+	"github.com/ntt0601zcoder/open-streamer/internal/metrics"
 )
 
 // Service is the public DI handle. It implements Tracker.
@@ -27,7 +28,8 @@ type Service struct {
 }
 
 // New constructs the Service for samber/do. GeoIPResolver is optional in DI —
-// if no provider is registered, NullGeoIP is used.
+// if no provider is registered, NullGeoIP is used. Metrics is also optional
+// so unit tests that wire only sessions can construct the service.
 func New(i do.Injector) (*Service, error) {
 	cfg := do.MustInvoke[config.SessionsConfig](i)
 	bus := do.MustInvoke[events.Bus](i)
@@ -37,7 +39,15 @@ func New(i do.Injector) (*Service, error) {
 		geo = NullGeoIP{}
 	}
 
-	return &Service{service: newService(cfg, bus, geo)}, nil
+	svc := newService(cfg, bus, geo)
+	if m, err := do.Invoke[*metrics.Metrics](i); err == nil {
+		svc.m = &metricsHooks{
+			active: m.SessionsActive,
+			opened: m.SessionsOpenedTotal,
+			closed: m.SessionsClosedTotal,
+		}
+	}
+	return &Service{service: svc}, nil
 }
 
 // Run starts the idle reaper. Always runs — the reaper itself checks the

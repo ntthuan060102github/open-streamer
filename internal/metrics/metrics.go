@@ -32,16 +32,6 @@ type Metrics struct {
 	// TranscoderQualitiesActive is the number of active ABR renditions per stream.
 	TranscoderQualitiesActive *prometheus.GaugeVec
 
-	// ── Buffer ────────────────────────────────────────────────────────────────
-	// BufferPackets is the current occupancy (packets) of the ring buffer.
-	BufferPackets *prometheus.GaugeVec
-
-	// ── Publisher ─────────────────────────────────────────────────────────────
-	// PublisherClientsActive is the number of active viewer connections.
-	PublisherClientsActive *prometheus.GaugeVec
-	// PublisherSegmentsTotal counts HLS/DASH segments packaged per stream.
-	PublisherSegmentsTotal *prometheus.CounterVec
-
 	// ── DVR ───────────────────────────────────────────────────────────────────
 	// DVRSegmentsWrittenTotal counts TS segments flushed to disk per stream.
 	DVRSegmentsWrittenTotal *prometheus.CounterVec
@@ -54,9 +44,60 @@ type Metrics struct {
 	// Uptime in Grafana: time() - open_streamer_stream_start_time_seconds
 	StreamStartTimeSeconds *prometheus.GaugeVec
 
+	// ── Buffer Hub ────────────────────────────────────────────────────────────
+	// BufferDropsTotal counts MPEG-TS packets dropped at the Buffer Hub
+	// fan-out because a subscriber's channel was full. This is the canonical
+	// signal that the "write never blocks" invariant is shielding the writer
+	// from a slow consumer — alert on `rate(...) > 0` to catch quality
+	// regressions before users complain.
+	BufferDropsTotal *prometheus.CounterVec
+
+	// ── Publisher ─────────────────────────────────────────────────────────────
+	// PublisherSegmentsTotal counts HLS / DASH media segments successfully
+	// packaged. format=hls|dash; profile is the rendition slug (track_1…) or
+	// "main" for single-rendition streams. Rate sanity-checks output bitrate.
+	PublisherSegmentsTotal *prometheus.CounterVec
+	// PublisherPushState reports the state of each RTMP/RTMPS push destination
+	// as a small enum cast to int: 0=failed, 1=reconnecting, 2=starting, 3=active.
+	// Per-destination labels let alerts target individual sinks.
+	PublisherPushState *prometheus.GaugeVec
+
+	// ── Sessions ──────────────────────────────────────────────────────────────
+	// SessionsActive is the number of currently-tracked play sessions per
+	// stream and protocol. Reset to 0 on restart (in-memory tracker), but
+	// converges back as viewers reconnect — Prometheus gauge semantics
+	// match this exactly.
+	SessionsActive *prometheus.GaugeVec
+	// SessionsOpenedTotal counts every session creation per stream and proto.
+	// Pair with rate() / increase() over a window for "viewer churn".
+	SessionsOpenedTotal *prometheus.CounterVec
+	// SessionsClosedTotal counts session terminations per stream, proto and
+	// reason (idle, client_gone, kicked, shutdown). Pair with opened_total
+	// to compute average session lifetime; spike of `kicked` could indicate
+	// abuse mitigation kicking in.
+	SessionsClosedTotal *prometheus.CounterVec
+
 	// ── Hooks ─────────────────────────────────────────────────────────────────
-	// HooksDeliveryFailedTotal counts hook deliveries that exhausted all retries.
-	HooksDeliveryFailedTotal *prometheus.CounterVec
+	// HooksDeliveryTotal counts hook deliveries per hook, type and outcome
+	// (success / failure). For HTTP hooks each batch counts as ONE delivery
+	// regardless of batch size — divide events_dropped_total by this to
+	// derive lost-event rate.
+	HooksDeliveryTotal *prometheus.CounterVec
+	// HooksEventsDroppedTotal counts events evicted from the per-hook batch
+	// queue when it overflowed `BatchMaxQueueItems`. Non-zero rate means a
+	// downstream HTTP target is stalled long enough to threaten data loss —
+	// alert immediately.
+	HooksEventsDroppedTotal *prometheus.CounterVec
+	// HooksBatchQueueDepth is the current per-hook in-memory queue depth.
+	// Together with HooksEventsDroppedTotal this gives the early-warning
+	// signal: queue rising → target back-pressuring; queue at cap → drops imminent.
+	HooksBatchQueueDepth *prometheus.GaugeVec
+
+	// ── DVR ───────────────────────────────────────────────────────────────────
+	// DVRRecordingActive is 1 while a DVR recording is being written for a
+	// stream, 0 otherwise. Combine with rate(DVRSegmentsWrittenTotal) to
+	// alert on "DVR enabled but no segments flowing".
+	DVRRecordingActive *prometheus.GaugeVec
 }
 
 // New registers all metrics and returns a Metrics instance.
@@ -103,21 +144,6 @@ func New(i do.Injector) (*Metrics, error) {
 			Help: "Number of active ABR rendition profiles per stream.",
 		}, []string{"stream_code"}),
 
-		BufferPackets: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "open_streamer_buffer_packets",
-			Help: "Current number of packets in the ring buffer per stream.",
-		}, []string{"stream_code"}),
-
-		PublisherClientsActive: promauto.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "open_streamer_publisher_clients_active",
-			Help: "Number of active viewer connections per stream and protocol.",
-		}, []string{"stream_code", "protocol"}),
-
-		PublisherSegmentsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "open_streamer_publisher_segments_total",
-			Help: "Total HLS/DASH segments packaged per stream and profile.",
-		}, []string{"stream_code", "profile"}),
-
 		DVRSegmentsWrittenTotal: promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "open_streamer_dvr_segments_written_total",
 			Help: "Total TS segments successfully written to disk per stream.",
@@ -133,10 +159,55 @@ func New(i do.Injector) (*Metrics, error) {
 			Help: "Unix timestamp when the stream pipeline was last started. Absent when stopped. Uptime = time() - this value.",
 		}, []string{"stream_code"}),
 
-		HooksDeliveryFailedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
-			Name: "open_streamer_hooks_delivery_failed_total",
-			Help: "Total hook deliveries that exhausted all retries per hook.",
-		}, []string{"hook_id", "hook_type"}),
+		BufferDropsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "open_streamer_buffer_drops_total",
+			Help: "Total MPEG-TS packets dropped by the Buffer Hub fan-out because a subscriber channel was full.",
+		}, []string{"stream_code"}),
+
+		PublisherSegmentsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "open_streamer_publisher_segments_total",
+			Help: "Total HLS/DASH segments packaged per stream, format and rendition profile.",
+		}, []string{"stream_code", "format", "profile"}),
+
+		PublisherPushState: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "open_streamer_publisher_push_state",
+			Help: "RTMP/RTMPS push destination state: 0=failed, 1=reconnecting, 2=starting, 3=active.",
+		}, []string{"stream_code", "dest_url"}),
+
+		SessionsActive: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "open_streamer_sessions_active",
+			Help: "Currently-tracked play sessions per stream and protocol.",
+		}, []string{"stream_code", "proto"}),
+
+		SessionsOpenedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "open_streamer_sessions_opened_total",
+			Help: "Total play sessions opened per stream and protocol.",
+		}, []string{"stream_code", "proto"}),
+
+		SessionsClosedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "open_streamer_sessions_closed_total",
+			Help: "Total play sessions closed per stream, protocol and reason (idle|client_gone|kicked|shutdown).",
+		}, []string{"stream_code", "proto", "reason"}),
+
+		HooksDeliveryTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "open_streamer_hooks_delivery_total",
+			Help: "Total hook delivery attempts per hook, type and outcome (success|failure). For HTTP hooks each batch is one delivery.",
+		}, []string{"hook_id", "hook_type", "outcome"}),
+
+		HooksEventsDroppedTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "open_streamer_hooks_events_dropped_total",
+			Help: "Total events evicted from the per-hook batch queue on overflow (target unreachable too long).",
+		}, []string{"hook_id"}),
+
+		HooksBatchQueueDepth: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "open_streamer_hooks_batch_queue_depth",
+			Help: "Current per-hook in-memory batch queue depth.",
+		}, []string{"hook_id"}),
+
+		DVRRecordingActive: promauto.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "open_streamer_dvr_recording_active",
+			Help: "1 while a DVR recording is being written for the stream, 0 otherwise.",
+		}, []string{"stream_code"}),
 	}
 
 	return m, nil

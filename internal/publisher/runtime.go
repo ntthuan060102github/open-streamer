@@ -107,6 +107,27 @@ func (s *Service) setPushStatus(streamID domain.StreamCode, url string, status P
 		st.connectedAt = time.Time{}
 	}
 	st.mu.Unlock()
+	if g := s.pushStateGauge(streamID, url); g != nil {
+		g.Set(float64(pushStatusToInt(status)))
+	}
+}
+
+// pushStatusToInt encodes PushStatus as the small integer reported by the
+// open_streamer_publisher_push_state gauge. The mapping mirrors the help
+// text in metrics.go (0=failed, 1=reconnecting, 2=starting, 3=active).
+func pushStatusToInt(s PushStatus) int {
+	switch s {
+	case PushStatusActive:
+		return 3
+	case PushStatusStarting:
+		return 2
+	case PushStatusReconnecting:
+		return 1
+	case PushStatusFailed:
+		return 0
+	default:
+		return 0
+	}
 }
 
 // setPushAttempt records the current retry counter. serveRTMPPush calls this
@@ -131,12 +152,15 @@ func (s *Service) recordPushError(streamID domain.StreamCode, url, msg string) {
 // serveRTMPPush so a fully-stopped destination disappears from the API.
 func (s *Service) removePushState(streamID domain.StreamCode, url string) {
 	s.pushMu.Lock()
-	defer s.pushMu.Unlock()
 	if m, ok := s.pushStates[streamID]; ok {
 		delete(m, url)
 		if len(m) == 0 {
 			delete(s.pushStates, streamID)
 		}
+	}
+	s.pushMu.Unlock()
+	if s.m != nil {
+		s.m.PublisherPushState.DeleteLabelValues(string(streamID), url)
 	}
 }
 

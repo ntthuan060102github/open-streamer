@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
@@ -196,6 +197,7 @@ type service struct {
 	bus        events.Bus
 	geo        GeoIPResolver
 	now        func() time.Time // hookable for tests
+	m          *metricsHooks    // pluggable metrics sink; nil-safe for tests
 
 	mu       sync.RWMutex
 	sessions map[string]*domain.PlaySession // id → live record
@@ -204,6 +206,16 @@ type service struct {
 	closedTotal     atomic.Int64
 	idleClosedTotal atomic.Int64
 	kickedTotal     atomic.Int64
+}
+
+// metricsHooks abstracts the Prometheus surface so the tracker file
+// doesn't import the metrics package directly (avoiding a heavier coupling
+// for what is conceptually an observation hook). The DI wiring in
+// service.go fills this in from the injected *metrics.Metrics.
+type metricsHooks struct {
+	active *prometheus.GaugeVec
+	opened *prometheus.CounterVec
+	closed *prometheus.CounterVec
 }
 
 // runtimeConfig is the resolved subset of config.SessionsConfig the hot
@@ -267,6 +279,7 @@ func (s *service) TrackHTTP(ctx context.Context, h HTTPHit) *domain.PlaySession 
 		sess = s.openHTTP(id, h, now)
 		s.sessions[id] = sess
 		s.mu.Unlock()
+		s.observeOpened(sess)
 		s.publishOpened(ctx, sess)
 		snap := *sess
 		return &snap
@@ -352,6 +365,7 @@ func (s *service) OpenConn(ctx context.Context, h ConnHit) (*domain.PlaySession,
 	s.sessions[id] = sess
 	s.mu.Unlock()
 	s.openedTotal.Add(1)
+	s.observeOpened(sess)
 	s.publishOpened(ctx, sess)
 	snap := *sess
 	return &snap, &connCloser{svc: s, id: id}
@@ -400,6 +414,7 @@ func (s *service) closeByIDCtx(ctx context.Context, id string, reason domain.Ses
 	case domain.SessionCloseClient, domain.SessionCloseShutdown:
 		// Counted only via closedTotal; no per-reason counter today.
 	}
+	s.observeClosed(&snap, reason)
 	s.publishClosed(ctx, &snap)
 }
 
@@ -481,6 +496,40 @@ func (f Filter) matches(sess *domain.PlaySession) bool {
 		// no narrowing — fall through and match
 	}
 	return true
+}
+
+// ─── metrics helpers ─────────────────────────────────────────────────────────
+
+// observeOpened bumps SessionsActive and SessionsOpenedTotal for the labels
+// derived from sess. Nil-safe so tests that don't wire metrics keep working.
+func (s *service) observeOpened(sess *domain.PlaySession) {
+	if s.m == nil {
+		return
+	}
+	labels := prometheus.Labels{
+		"stream_code": string(sess.StreamCode),
+		"proto":       string(sess.Protocol),
+	}
+	s.m.active.With(labels).Inc()
+	s.m.opened.With(labels).Inc()
+}
+
+// observeClosed mirrors observeOpened: decrements the active gauge and
+// increments the closed counter with the reason label.
+func (s *service) observeClosed(sess *domain.PlaySession, reason domain.SessionCloseReason) {
+	if s.m == nil {
+		return
+	}
+	streamLabels := prometheus.Labels{
+		"stream_code": string(sess.StreamCode),
+		"proto":       string(sess.Protocol),
+	}
+	s.m.active.With(streamLabels).Dec()
+	s.m.closed.With(prometheus.Labels{
+		"stream_code": string(sess.StreamCode),
+		"proto":       string(sess.Protocol),
+		"reason":      string(reason),
+	}).Inc()
 }
 
 // ─── publishing helpers ──────────────────────────────────────────────────────
