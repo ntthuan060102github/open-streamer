@@ -53,11 +53,22 @@ func applyWatermark(base string, wm *domain.WatermarkConfig, onGPU bool) string 
 // appendTextWatermark composes a single-chain filter (no labels needed)
 // because drawtext takes one input and produces one output. On GPU
 // pipelines we wrap with hwdownload / hwupload_cuda.
+//
+// Resize=true replaces the static FontSize pixel value with `h*ratio`
+// where h is the main frame height — drawtext exposes h as a built-in
+// variable, so the substitution makes glyphs scale proportionally with
+// each ABR rendition's resolution.
 func appendTextWatermark(base string, r *domain.WatermarkConfig, onGPU bool) string {
 	x, y := resolveTextCoords(r)
+	fontsize := itoa(r.FontSize)
+	if r.Resize {
+		// r.ResizeRatio is filled by WatermarkConfig.Resolved() — defaults
+		// to defaultWatermarkResizeRatio when the operator left it 0.
+		fontsize = ffmpegQuote(fmt.Sprintf("h*%.4f", r.ResizeRatio))
+	}
 	dt := strings.Join([]string{
 		"drawtext=text=" + ffmpegQuote(r.Text),
-		"fontsize=" + itoa(r.FontSize),
+		"fontsize=" + fontsize,
 		"fontcolor=" + ffmpegQuote(fmt.Sprintf("%s@%.2f", r.FontColor, r.Opacity)),
 		"x=" + ffmpegQuote(x),
 		"y=" + ffmpegQuote(y),
@@ -76,11 +87,27 @@ func appendTextWatermark(base string, r *domain.WatermarkConfig, onGPU bool) str
 // via `movie=` (avoids an extra `-i` input which would complicate the
 // multi-output args builder), and overlays it on the main stream.
 //
-// Layout:
+// Layout (Resize=false, native pixel size):
 //
 //	<base>[,hwdownload,format=nv12][mid];
 //	movie=...,format=rgba,colorchannelmixer=aa=...[wm];
 //	[mid][wm]overlay=x=…:y=…[,hwupload_cuda]
+//
+// Layout (Resize=true) — adds a scale2ref pass so the overlay scales
+// relative to the main frame's width. scale2ref takes two inputs (the
+// reference + the source) and emits two outputs (reference unchanged +
+// scaled source); we feed [mid][wm] in and recapture as [mid][wm]:
+//
+//	<base>...[mid];
+//	movie=...,format=rgba...[wm];
+//	[wm][mid]scale2ref=oh*mdar:W*ratio[wm][mid];
+//	[mid][wm]overlay=x=…:y=…[,hwupload_cuda]
+//
+// `oh*mdar` keeps the watermark's aspect ratio (output_height *
+// main_display_aspect_ratio computes the matching width). We pass the
+// reference second in the scale2ref input order because the filter wants
+// "scale this [first] using ref [second]" — we want to scale the image
+// (wm) using main video (mid) as ref.
 //
 // Each `;`-separated segment is its own chain; explicit labels wire them
 // together. The implicit `-vf` input feeds the first chain (no `[in]`
@@ -105,6 +132,28 @@ func appendImageWatermark(base string, r *domain.WatermarkConfig, onGPU bool) st
 	overlay := fmt.Sprintf("[mid][wm]overlay=x=%s:y=%s", ffmpegQuote(x), ffmpegQuote(y))
 	if onGPU {
 		overlay += ",hwupload_cuda"
+	}
+
+	// Two-chain default; insert a scale2ref chain between source and overlay
+	// when proportional resize is on.
+	//
+	// scale2ref takes [scale_target][reference] and emits [scaled][reference].
+	// We pass [wm][mid] so the watermark gets scaled while [mid] passes
+	// through unchanged, then feed both into the overlay below.
+	//
+	// Width expression `main_w*ratio` reads main video width from the
+	// reference (FFmpeg exposes main_w / main_h inside scale2ref expressions).
+	// Height `ow/iw*ih` keeps the watermark's original aspect ratio: target
+	// height = (target_width / source_width) * source_height — using `ow`/`iw`
+	// avoids a divide-by-zero edge that `-1` triggers on some libavfilter
+	// builds when the source is non-square-pixel.
+	if r.Resize {
+		scaleChain := fmt.Sprintf(
+			"[wm][mid]scale2ref=%s:%s[wm][mid]",
+			ffmpegQuote(fmt.Sprintf("main_w*%.4f", r.ResizeRatio)),
+			ffmpegQuote("ow/iw*ih"),
+		)
+		return leading + ";" + srcChain + ";" + scaleChain + ";" + overlay
 	}
 
 	return leading + ";" + srcChain + ";" + overlay

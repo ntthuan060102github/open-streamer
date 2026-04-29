@@ -89,6 +89,43 @@ func TestMuxerPresent(t *testing.T) {
 	assert.False(t, muxerPresent(sample, "Muxers:"))
 }
 
+// `ffmpeg -filters` prefixes each filter line with three flag chars
+// (timeline / slice / command), then NAME, then the I/O signature
+// (containing "->"). Parser must match the NAME exactly and skip the
+// header rows (which lack the "->" signature).
+func TestFilterPresent(t *testing.T) {
+	t.Parallel()
+	const sample = `Filters:
+  T.. = Timeline support
+  .S. = Slice threading
+  ..C = Command support
+  A = Audio input/output
+  V = Video input/output
+  N = Dynamic number and/or type of input/output
+  | = Source or sink filter
+ T.. drawtext          V->V       Draw text on top of video frames using libfreetype.
+ ... overlay           VV->V      Overlay a video source on top of the input.
+ ... scale2ref         VV->VV     Scale the input video size to the reference video.
+ ... movie             |->V       Read from a movie source.
+ ... colorchannelmixer V->V       Adjust colors by mixing color channels.
+ ... hwdownload        V->V       Download a hardware frame to a normal frame.
+ ... hwupload_cuda     V->V       Upload a system memory frame to a CUDA frame.
+ ... scale_cuda        V->V       GPU accelerated video resizer.
+`
+	for _, name := range []string{
+		"drawtext", "overlay", "scale2ref", "movie",
+		"colorchannelmixer", "hwdownload", "hwupload_cuda",
+	} {
+		assert.True(t, filterPresent(sample, name), "expected filter %q to be present", name)
+	}
+	// Must not partial-match: "scale" should not match scale2ref / scale_cuda.
+	assert.False(t, filterPresent(sample, "scale"))
+	// Must not match unlisted filters.
+	assert.False(t, filterPresent(sample, "vidstabdetect"))
+	// Header rows (no "->" in third column) must be skipped.
+	assert.False(t, filterPresent(sample, "Filters:"))
+}
+
 // optionalEncodersForBackends: filter by host's available HW backends.
 // Server passes hwdetect.Available() — UI does not pick. Result must
 // be union across all listed backends + audio (HW-independent).

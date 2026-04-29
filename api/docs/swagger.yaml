@@ -627,8 +627,6 @@ definitions:
     type: object
   domain.EventType:
     enum:
-    - session.opened
-    - session.closed
     - stream.created
     - stream.started
     - stream.stopped
@@ -645,6 +643,8 @@ definitions:
     - transcoder.started
     - transcoder.stopped
     - transcoder.error
+    - session.opened
+    - session.closed
     type: string
     x-enum-comments:
       EventInputConnected: source connected successfully
@@ -653,8 +653,6 @@ definitions:
       EventInputFailover: switched to lower-priority input
       EventInputReconnecting: transient error, retrying
     x-enum-descriptions:
-    - ""
-    - ""
     - ""
     - ""
     - ""
@@ -671,9 +669,9 @@ definitions:
     - ""
     - ""
     - ""
+    - ""
+    - ""
     x-enum-varnames:
-    - EventSessionOpened
-    - EventSessionClosed
     - EventStreamCreated
     - EventStreamStarted
     - EventStreamStopped
@@ -690,6 +688,8 @@ definitions:
     - EventTranscoderStarted
     - EventTranscoderStopped
     - EventTranscoderError
+    - EventSessionOpened
+    - EventSessionClosed
   domain.GlobalConfig:
     properties:
       buffer:
@@ -1508,6 +1508,31 @@ definitions:
             - custom: X / Y below are used as raw FFmpeg expressions —
               pixel ints ("100"), expressions ("main_w-overlay_w-50"), or
               time-aware fades ("if(gt(t,5),10,-100)") all work.
+      resize:
+        description: |-
+          Resize, when true, scales the watermark proportionally to each output
+          rendition's frame dimensions so a single asset looks visually consistent
+          across an ABR ladder (e.g. 720p and 480p outputs render the watermark at
+          the same on-screen ratio). When false (default), the watermark uses its
+          native pixel size — drawtext FontSize as-is, image asset at file
+          dimensions — which makes it appear larger on lower-resolution profiles.
+
+          Image: applied via scale2ref so the overlay scales relative to main
+                 frame width (ResizeRatio fraction of frame width).
+          Text:  fontsize replaced with h*ResizeRatio so glyphs scale with frame height.
+        type: boolean
+      resize_ratio:
+        description: |-
+          ResizeRatio sets the watermark size as a fraction of the frame's
+          reference dimension when Resize=true. Image uses frame width as
+          reference, text uses frame height. Range (0, 1]; 0 = inherit the
+          per-server default (defaultWatermarkResizeRatio). Ignored when
+          Resize=false.
+
+          Per-stream — each WatermarkConfig may pick its own ratio so a station
+          logo (~5%) and a sponsor banner (~20%) on different streams coexist
+          without a global setting.
+        type: number
       text:
         description: |-
           Text is the string to render. Supports strftime directives for live timestamps.
@@ -1870,6 +1895,10 @@ definitions:
         items:
           type: string
         type: array
+      filters:
+        additionalProperties:
+          type: boolean
+        type: object
       muxers:
         additionalProperties:
           type: boolean

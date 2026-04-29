@@ -96,6 +96,18 @@ func TestWatermarkValidate(t *testing.T) {
 		"asset_id invalid chars": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeImage, AssetID: "../../etc/passwd",
 		}, true},
+		"resize_ratio in range": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true, ResizeRatio: 0.10,
+		}, false},
+		"resize_ratio negative": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true, ResizeRatio: -0.05,
+		}, true},
+		"resize_ratio too large": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true, ResizeRatio: 1.5,
+		}, true},
+		"resize_ratio zero ok": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true, ResizeRatio: 0,
+		}, false},
 	}
 	for name, c := range cases {
 		err := c.w.Validate()
@@ -133,5 +145,31 @@ func TestWatermarkResolved(t *testing.T) {
 	// Nil round-trip is safe.
 	if (*WatermarkConfig)(nil).Resolved() != nil {
 		t.Error("nil.Resolved() should be nil")
+	}
+
+	// ResizeRatio defaults only when Resize=true AND ratio is 0 — leaving
+	// it untouched on disabled-resize configs avoids surprising operators
+	// with phantom values in serialised state.
+	w3 := &WatermarkConfig{
+		Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true,
+	}
+	if r := w3.Resolved(); r.ResizeRatio != defaultWatermarkResizeRatio {
+		t.Errorf("Resize=true, ratio=0 should default to %v, got %v", defaultWatermarkResizeRatio, r.ResizeRatio)
+	}
+
+	// Operator override survives Resolved().
+	w4 := &WatermarkConfig{
+		Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true, ResizeRatio: 0.20,
+	}
+	if r := w4.Resolved(); r.ResizeRatio != 0.20 {
+		t.Errorf("operator-set ResizeRatio=0.20 lost, got %v", r.ResizeRatio)
+	}
+
+	// Resize=false should NOT inject the default — keep the field at 0.
+	w5 := &WatermarkConfig{
+		Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: false,
+	}
+	if r := w5.Resolved(); r.ResizeRatio != 0 {
+		t.Errorf("Resize=false should leave ResizeRatio=0, got %v", r.ResizeRatio)
 	}
 }

@@ -2590,8 +2590,6 @@ const docTemplate = `{
         "domain.EventType": {
             "type": "string",
             "enum": [
-                "session.opened",
-                "session.closed",
                 "stream.created",
                 "stream.started",
                 "stream.stopped",
@@ -2607,7 +2605,9 @@ const docTemplate = `{
                 "segment.written",
                 "transcoder.started",
                 "transcoder.stopped",
-                "transcoder.error"
+                "transcoder.error",
+                "session.opened",
+                "session.closed"
             ],
             "x-enum-comments": {
                 "EventInputConnected": "source connected successfully",
@@ -2617,8 +2617,6 @@ const docTemplate = `{
                 "EventInputReconnecting": "transient error, retrying"
             },
             "x-enum-descriptions": [
-                "",
-                "",
                 "",
                 "",
                 "",
@@ -2634,11 +2632,11 @@ const docTemplate = `{
                 "",
                 "",
                 "",
+                "",
+                "",
                 ""
             ],
             "x-enum-varnames": [
-                "EventSessionOpened",
-                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamStarted",
                 "EventStreamStopped",
@@ -2654,7 +2652,9 @@ const docTemplate = `{
                 "EventSegmentWritten",
                 "EventTranscoderStarted",
                 "EventTranscoderStopped",
-                "EventTranscoderError"
+                "EventTranscoderError",
+                "EventSessionOpened",
+                "EventSessionClosed"
             ]
         },
         "domain.GlobalConfig": {
@@ -3578,6 +3578,14 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "resize": {
+                    "description": "Resize, when true, scales the watermark proportionally to each output\nrendition's frame dimensions so a single asset looks visually consistent\nacross an ABR ladder (e.g. 720p and 480p outputs render the watermark at\nthe same on-screen ratio). When false (default), the watermark uses its\nnative pixel size — drawtext FontSize as-is, image asset at file\ndimensions — which makes it appear larger on lower-resolution profiles.\n\nImage: applied via scale2ref so the overlay scales relative to main\n       frame width (ResizeRatio fraction of frame width).\nText:  fontsize replaced with h*ResizeRatio so glyphs scale with frame height.",
+                    "type": "boolean"
+                },
+                "resize_ratio": {
+                    "description": "ResizeRatio sets the watermark size as a fraction of the frame's\nreference dimension when Resize=true. Image uses frame width as\nreference, text uses frame height. Range (0, 1]; 0 = inherit the\nper-server default (defaultWatermarkResizeRatio). Ignored when\nResize=false.\n\nPer-stream — each WatermarkConfig may pick its own ratio so a station\nlogo (~5%) and a sponsor banner (~20%) on different streams coexist\nwithout a global setting.",
+                    "type": "number"
+                },
                 "text": {
                     "description": "Text is the string to render. Supports strftime directives for live timestamps.\nE.g. \"LIVE %{localtime:%H:%M:%S}\"",
                     "type": "string"
@@ -4070,6 +4078,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                },
+                "filters": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "boolean"
                     }
                 },
                 "muxers": {

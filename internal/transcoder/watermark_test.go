@@ -7,6 +7,112 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 )
 
+// testBaseChain is the placeholder scale chain the watermark tests prepend
+// to. Kept identical across cases so changes in chain wrapping show up in
+// diff rather than via duplicated literals.
+const testBaseChain = "scale=1280:720"
+
+// TestApplyImageWatermarkResize verifies the scale2ref chain is injected
+// only when Resize=true, and that the width expression references main_w
+// (not the watermark's own iw — that bug would produce wrong sizing).
+func TestApplyImageWatermarkResize(t *testing.T) {
+	base := testBaseChain + ",setsar=1"
+	wm := &domain.WatermarkConfig{
+		Enabled:   true,
+		Type:      domain.WatermarkTypeImage,
+		ImagePath: "/tmp/logo.png",
+		Position:  domain.WatermarkTopRight,
+		Resize:    true,
+	}
+	got := applyWatermark(base, wm.Resolved(), false)
+
+	for _, frag := range []string{
+		"scale2ref=",
+		"main_w*",
+		"ow/iw*ih",
+		"[wm][mid]",
+	} {
+		if !strings.Contains(got, frag) {
+			t.Fatalf("expected %q in resize chain, got: %s", frag, got)
+		}
+	}
+
+	// Resize=false → scale2ref must NOT appear.
+	wm.Resize = false
+	got = applyWatermark(base, wm.Resolved(), false)
+	if strings.Contains(got, "scale2ref") {
+		t.Fatalf("scale2ref should be absent when Resize=false: %s", got)
+	}
+}
+
+// TestApplyImageWatermarkResizeRatioOverride verifies a per-stream
+// ResizeRatio overrides the package default in the scale2ref expression.
+func TestApplyImageWatermarkResizeRatioOverride(t *testing.T) {
+	base := testBaseChain
+	wm := &domain.WatermarkConfig{
+		Enabled:     true,
+		Type:        domain.WatermarkTypeImage,
+		ImagePath:   "/tmp/logo.png",
+		Position:    domain.WatermarkTopRight,
+		Resize:      true,
+		ResizeRatio: 0.20, // 20% banner-sized
+	}
+	got := applyWatermark(base, wm.Resolved(), false)
+	if !strings.Contains(got, "main_w*0.2000") {
+		t.Fatalf("expected main_w*0.2000 (20%% override), got: %s", got)
+	}
+	if strings.Contains(got, "main_w*0.0800") {
+		t.Fatalf("default 0.08 should not leak when ResizeRatio is set: %s", got)
+	}
+}
+
+// TestApplyTextWatermarkResizeRatioOverride mirrors the image override test
+// for the drawtext fontsize=h*ratio path.
+func TestApplyTextWatermarkResizeRatioOverride(t *testing.T) {
+	base := testBaseChain
+	wm := &domain.WatermarkConfig{
+		Enabled:     true,
+		Type:        domain.WatermarkTypeText,
+		Text:        "LIVE",
+		FontSize:    24,
+		Position:    domain.WatermarkTopRight,
+		Resize:      true,
+		ResizeRatio: 0.12,
+	}
+	got := applyWatermark(base, wm.Resolved(), false)
+	if !strings.Contains(got, "fontsize='h*0.1200'") {
+		t.Fatalf("expected fontsize=h*0.1200, got: %s", got)
+	}
+}
+
+// TestApplyTextWatermarkResize verifies fontsize switches from a fixed
+// pixel value to a frame-height fraction expression when Resize=true.
+func TestApplyTextWatermarkResize(t *testing.T) {
+	base := testBaseChain
+	wm := &domain.WatermarkConfig{
+		Enabled:  true,
+		Type:     domain.WatermarkTypeText,
+		Text:     "LIVE",
+		FontSize: 24,
+		Position: domain.WatermarkTopRight,
+		Resize:   true,
+	}
+	got := applyWatermark(base, wm.Resolved(), false)
+	if !strings.Contains(got, "fontsize='h*") {
+		t.Fatalf("expected fontsize=h*ratio when Resize=true, got: %s", got)
+	}
+	if strings.Contains(got, "fontsize=24") {
+		t.Fatalf("fixed fontsize=24 should not be present when Resize=true: %s", got)
+	}
+
+	// Resize=false → static FontSize.
+	wm.Resize = false
+	got = applyWatermark(base, wm.Resolved(), false)
+	if !strings.Contains(got, "fontsize=24") {
+		t.Fatalf("expected fixed fontsize=24 when Resize=false, got: %s", got)
+	}
+}
+
 func TestApplyWatermarkInactivePassthrough(t *testing.T) {
 	base := "scale=1920:1080,setsar=1"
 	cases := []*domain.WatermarkConfig{
@@ -143,7 +249,7 @@ func TestApplyTextWatermarkCustomPosition(t *testing.T) {
 		Position: domain.WatermarkCustom,
 		X:        "main_w-overlay_w-50", Y: "if(gt(t,5),10,-100)",
 	}
-	got := applyWatermark("scale=1280:720", wm, false)
+	got := applyWatermark(testBaseChain, wm, false)
 	if !strings.Contains(got, "x='main_w-overlay_w-50'") {
 		t.Errorf("custom x not forwarded: %q", got)
 	}

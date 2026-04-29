@@ -26,6 +26,7 @@ type ProbeResult struct {
 	Version  string                     `json:"version,omitempty"`
 	Encoders map[string]map[string]bool `json:"encoders"`
 	Muxers   map[string]bool            `json:"muxers"`
+	Filters  map[string]bool            `json:"filters,omitempty"`
 	Warnings []string                   `json:"warnings,omitempty"`
 	Errors   []string                   `json:"errors,omitempty"`
 }
@@ -46,6 +47,27 @@ var (
 // but the server still boots. UI surfaces these as warnings + can
 // disable the corresponding selections in dropdowns.
 var optionalMuxers = []string{"hls", "dash"}
+
+// optionalFilters are libavfilter filters this app uses for non-default
+// configurations. Each is independently optional — absence narrows what
+// stream configs work but the server still boots.
+//
+//   - drawtext / overlay / movie: text & image watermark filter graph.
+//   - scale2ref:                   image watermark proportional resize
+//     (WatermarkConfig.Resize=true).
+//   - hwdownload / hwupload_cuda:  GPU pipeline round-trip used when
+//     watermark runs on NVENC builds without
+//     enable-cuda-nvcc (the typical apt build).
+//   - colorchannelmixer:           image watermark Opacity < 1 alpha mix.
+var optionalFilters = []string{
+	"drawtext",
+	"overlay",
+	"movie",
+	"scale2ref",
+	"hwdownload",
+	"hwupload_cuda",
+	"colorchannelmixer",
+}
 
 // hwOptionalEncoders maps a hardware backend to the video encoders that
 // are relevant FOR THAT BACKEND. Used to filter probe output so the UI
@@ -166,6 +188,7 @@ func Probe(ctx context.Context, path string, hws []domain.HWAccel) (*ProbeResult
 		Path:     path,
 		Encoders: make(map[string]map[string]bool, 2),
 		Muxers:   make(map[string]bool, len(requiredMuxers)+len(optionalMuxers)),
+		Filters:  make(map[string]bool, len(optionalFilters)),
 	}
 	res.Encoders["required"] = make(map[string]bool, len(requiredEncoders))
 	res.Encoders["optional"] = make(map[string]bool, len(optionalEncoders))
@@ -189,6 +212,10 @@ func Probe(ctx context.Context, path string, hws []domain.HWAccel) (*ProbeResult
 	if err != nil {
 		return nil, fmt.Errorf("list muxers: %w", err)
 	}
+	filtOut, err := runProbe(ctx, path, "-hide_banner", "-filters")
+	if err != nil {
+		return nil, fmt.Errorf("list filters: %w", err)
+	}
 
 	for _, name := range requiredEncoders {
 		res.Encoders["required"][name] = encoderPresent(encOut, name)
@@ -201,6 +228,9 @@ func Probe(ctx context.Context, path string, hws []domain.HWAccel) (*ProbeResult
 	}
 	for _, name := range optionalMuxers {
 		res.Muxers[name] = muxerPresent(muxOut, name)
+	}
+	for _, name := range optionalFilters {
+		res.Filters[name] = filterPresent(filtOut, name)
 	}
 
 	for _, name := range requiredEncoders {
@@ -225,6 +255,12 @@ func Probe(ctx context.Context, path string, hws []domain.HWAccel) (*ProbeResult
 		if !res.Muxers[name] {
 			res.Warnings = append(res.Warnings,
 				fmt.Sprintf("optional muxer %q missing — corresponding output format will fail", name))
+		}
+	}
+	for _, name := range optionalFilters {
+		if !res.Filters[name] {
+			res.Warnings = append(res.Warnings,
+				fmt.Sprintf("optional filter %q missing — watermark / GPU round-trip configurations using it will fail", name))
 		}
 	}
 
@@ -304,6 +340,36 @@ func muxerPresent(out, name string) bool {
 			continue
 		}
 		if !strings.ContainsAny(fields[0], "DE") {
+			continue
+		}
+		if fields[1] == name {
+			return true
+		}
+	}
+	return false
+}
+
+// filterPresent reports whether `ffmpeg -filters` lists the given filter
+// name. The output format prefixes each line with three flag characters
+// (timeline / slice / command support) plus the I/O signature, e.g.:
+//
+//	T.. drawtext          V->V       Draw text on top of video frames using libfreetype.
+//	... overlay           VV->V      Overlay a video source on top of the input.
+//	... scale2ref         VV->VV     Scale the input video size to the reference video.
+//
+// We match the filter NAME (the second whitespace-delimited token) exactly.
+// The flag column always starts with three characters (or dots) and the
+// I/O signature contains "->", which gives us a cheap header-line guard.
+func filterPresent(out, name string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		// Expect: <flags> <name> <io_sig> <description...>
+		if len(fields) < 3 {
+			continue
+		}
+		// I/O signature column reliably contains "->" for real filter rows;
+		// the header lines printed by `-filters` don't include it.
+		if !strings.Contains(fields[2], "->") {
 			continue
 		}
 		if fields[1] == name {

@@ -93,6 +93,29 @@ type WatermarkConfig struct {
 	//   - overlay (image watermark):  W/H = main video size, w/h = overlay size
 	X string `json:"x,omitempty" yaml:"x,omitempty"`
 	Y string `json:"y,omitempty" yaml:"y,omitempty"`
+
+	// Resize, when true, scales the watermark proportionally to each output
+	// rendition's frame dimensions so a single asset looks visually consistent
+	// across an ABR ladder (e.g. 720p and 480p outputs render the watermark at
+	// the same on-screen ratio). When false (default), the watermark uses its
+	// native pixel size — drawtext FontSize as-is, image asset at file
+	// dimensions — which makes it appear larger on lower-resolution profiles.
+	//
+	// Image: applied via scale2ref so the overlay scales relative to main
+	//        frame width (ResizeRatio fraction of frame width).
+	// Text:  fontsize replaced with h*ResizeRatio so glyphs scale with frame height.
+	Resize bool `json:"resize,omitempty" yaml:"resize,omitempty"`
+
+	// ResizeRatio sets the watermark size as a fraction of the frame's
+	// reference dimension when Resize=true. Image uses frame width as
+	// reference, text uses frame height. Range (0, 1]; 0 = inherit the
+	// per-server default (defaultWatermarkResizeRatio). Ignored when
+	// Resize=false.
+	//
+	// Per-stream — each WatermarkConfig may pick its own ratio so a station
+	// logo (~5%) and a sponsor banner (~20%) on different streams coexist
+	// without a global setting.
+	ResizeRatio float64 `json:"resize_ratio,omitempty" yaml:"resize_ratio,omitempty"`
 }
 
 // Defaults that fill in when the operator leaves a field empty / zero.
@@ -102,6 +125,12 @@ const (
 	defaultWatermarkOpacity   = 1.0
 	defaultWatermarkPosition  = WatermarkBottomRight
 	defaultWatermarkOffset    = 10
+	// defaultWatermarkResizeRatio is the watermark size as a fraction of the
+	// main frame's reference dimension when Resize=true. Picked at 8% — small
+	// enough to feel like a station logo on 480p, big enough to stay legible
+	// on 1080p. Image uses width as reference; text uses height (matches
+	// FFmpeg variable conventions: W/H for overlay, h for drawtext).
+	defaultWatermarkResizeRatio = 0.08
 )
 
 // IsActive reports whether the watermark should actually be applied.
@@ -173,6 +202,9 @@ func (w *WatermarkConfig) Validate() error {
 	if w.FontSize < 0 {
 		return fmt.Errorf("watermark: font_size must be >= 0, got %d", w.FontSize)
 	}
+	if w.ResizeRatio < 0 || w.ResizeRatio > 1 {
+		return fmt.Errorf("watermark: resize_ratio must be in [0,1], got %.4f", w.ResizeRatio)
+	}
 	switch w.Position {
 	case "", WatermarkTopLeft, WatermarkTopRight,
 		WatermarkBottomLeft, WatermarkBottomRight, WatermarkCenter:
@@ -214,6 +246,12 @@ func (w *WatermarkConfig) Resolved() *WatermarkConfig {
 	}
 	if out.OffsetY == 0 && out.Position != WatermarkCenter {
 		out.OffsetY = defaultWatermarkOffset
+	}
+	// Resize ratio falls back to the package default only when proportional
+	// resize is enabled — leaving the field at zero when Resize=false avoids
+	// surprising operators with phantom values in serialised configs.
+	if out.Resize && out.ResizeRatio == 0 {
+		out.ResizeRatio = defaultWatermarkResizeRatio
 	}
 	return &out
 }
