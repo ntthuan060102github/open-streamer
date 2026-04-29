@@ -475,6 +475,9 @@ func decodeStreamBody(
 	if err := base.Watermark.Validate(); err != nil {
 		return nil, &putValidationError{code: "INVALID_WATERMARK", message: err.Error()}
 	}
+	if err := base.Transcoder.ValidateMode(); err != nil {
+		return nil, &putValidationError{code: "INVALID_TRANSCODER_MODE", message: err.Error()}
+	}
 	return &base, nil
 }
 

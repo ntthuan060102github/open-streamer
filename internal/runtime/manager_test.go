@@ -9,15 +9,16 @@ import (
 )
 
 // transcoderRequiresRestart is the gate that decides whether toggling a
-// transcoder field forces every running stream to bounce. The intent: only
-// fields that change in-flight FFmpeg behaviour cost a restart.
+// global transcoder field forces every running stream to bounce. The intent:
+// only fields that change in-flight FFmpeg behaviour cost a restart.
 //
-// MultiOutput flips the spawn shape (per-profile vs single multi-output
-// process) so it requires a restart. FFmpegPath swap also requires one
-// (we won't run a stale binary mid-stream). Future hot-swappable fields
-// should be added to this test alongside the field itself.
+// FFmpegPath is the only behaviour-affecting field left at the global level
+// since the multi-output toggle moved to per-stream config (Stream.Transcoder.Mode).
+// Future hot-swappable fields should be added alongside the field itself.
 func TestTranscoderRequiresRestart(t *testing.T) {
 	t.Parallel()
+
+	const defaultFFmpeg = "/usr/bin/ffmpeg"
 
 	cases := []struct {
 		name string
@@ -32,39 +33,27 @@ func TestTranscoderRequiresRestart(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "MultiOutput off → on requires restart",
-			old:  &config.TranscoderConfig{MultiOutput: false},
-			new:  &config.TranscoderConfig{MultiOutput: true},
-			want: true,
-		},
-		{
-			name: "MultiOutput on → off requires restart",
-			old:  &config.TranscoderConfig{MultiOutput: true},
-			new:  &config.TranscoderConfig{MultiOutput: false},
-			want: true,
-		},
-		{
-			name: "MultiOutput unchanged → no restart",
-			old:  &config.TranscoderConfig{MultiOutput: true, FFmpegPath: "/usr/bin/ffmpeg"},
-			new:  &config.TranscoderConfig{MultiOutput: true, FFmpegPath: "/usr/bin/ffmpeg"},
+			name: "FFmpegPath unchanged → no restart",
+			old:  &config.TranscoderConfig{FFmpegPath: defaultFFmpeg},
+			new:  &config.TranscoderConfig{FFmpegPath: defaultFFmpeg},
 			want: false,
 		},
 		{
 			name: "FFmpegPath swap requires restart",
-			old:  &config.TranscoderConfig{FFmpegPath: "/usr/bin/ffmpeg"},
+			old:  &config.TranscoderConfig{FFmpegPath: defaultFFmpeg},
 			new:  &config.TranscoderConfig{FFmpegPath: "/opt/ffmpeg/bin/ffmpeg"},
 			want: true,
 		},
 		{
-			name: "nil → set defaults treated as off→off",
+			name: "nil → empty config → no restart",
 			old:  nil,
-			new:  &config.TranscoderConfig{}, // zero values
+			new:  &config.TranscoderConfig{},
 			want: false,
 		},
 		{
-			name: "nil → set with MultiOutput=true requires restart",
+			name: "nil → FFmpegPath set requires restart",
 			old:  nil,
-			new:  &config.TranscoderConfig{MultiOutput: true},
+			new:  &config.TranscoderConfig{FFmpegPath: defaultFFmpeg},
 			want: true,
 		},
 	}

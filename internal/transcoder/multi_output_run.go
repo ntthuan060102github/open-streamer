@@ -1,5 +1,5 @@
 // multi_output_run.go — single FFmpeg per stream, N output pipes (one per
-// rendition). Activated by config.TranscoderConfig.MultiOutput=true.
+// rendition). Default mode; opt out per-stream via Stream.Transcoder.Mode="legacy".
 //
 // Architecture (vs legacy per-profile mode in worker_run.go):
 //

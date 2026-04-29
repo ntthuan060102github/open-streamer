@@ -48,7 +48,7 @@ func TestGetConfigDefaultsShape(t *testing.T) {
 	assert.Equal(t, domain.DefaultDVRSegmentDuration, got.DVR.SegmentDuration)
 
 	assert.Equal(t, domain.DefaultFFmpegPath, got.Transcoder.FFmpegPath)
-	assert.False(t, got.Transcoder.MultiOutput)
+	assert.Equal(t, domain.TranscoderModeMulti, got.Transcoder.Mode)
 	assert.Equal(t, domain.DefaultVideoBitrateK, got.Transcoder.Video.BitrateK)
 	assert.Equal(t, domain.ResizeModePad, got.Transcoder.Video.ResizeMode)
 	assert.Equal(t, domain.AudioCodecAAC, got.Transcoder.Audio.Codec)

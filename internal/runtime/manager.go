@@ -331,16 +331,21 @@ func (m *Manager) applyTranscoderChange(oldCfg, newCfg *config.TranscoderConfig)
 // affects already-running FFmpeg processes. Fields that only feed the next
 // Start() (and have no in-flight effect) can be hot-swapped without bouncing
 // streams.
+//
+// The only behaviour-affecting field left at the global level is FFmpegPath
+// (an in-flight ffmpeg subprocess can't pivot to a different binary). The
+// per-stream `transcoder.mode` is part of Stream config — the stream
+// handler stops/starts when it changes, so this function doesn't need to
+// observe it.
 func transcoderRequiresRestart(oldCfg, newCfg *config.TranscoderConfig) bool {
-	oldMO, oldFP := false, ""
+	oldFP, newFP := "", ""
 	if oldCfg != nil {
-		oldMO, oldFP = oldCfg.MultiOutput, oldCfg.FFmpegPath
+		oldFP = oldCfg.FFmpegPath
 	}
-	newMO, newFP := false, ""
 	if newCfg != nil {
-		newMO, newFP = newCfg.MultiOutput, newCfg.FFmpegPath
+		newFP = newCfg.FFmpegPath
 	}
-	return oldMO != newMO || oldFP != newFP
+	return oldFP != newFP
 }
 
 // restartStream stops the pipeline, reloads the persisted stream from

@@ -325,9 +325,9 @@ func (s *Service) dropHealthState(streamID domain.StreamCode) {
 // next Start uses the new value.
 //
 // Already-running streams are NOT restarted from here — caller must
-// stop+start them separately to materialize behaviour-changing fields like
-// MultiOutput. Holding s.mu prevents a Start in flight from observing a
-// torn (half-old, half-new) config.
+// stop+start them separately to materialize behaviour-changing fields.
+// Holding s.mu prevents a Start in flight from observing a torn
+// (half-old, half-new) config.
 func (s *Service) SetConfig(cfg config.TranscoderConfig) {
 	s.mu.Lock()
 	s.cfg = cfg
@@ -342,10 +342,11 @@ func (s *Service) Config() config.TranscoderConfig {
 	return s.cfg
 }
 
-// Start launches the transcoder pipeline for a stream. By default it spawns
-// one FFmpeg per RenditionTarget (legacy mode). When config.MultiOutput is
-// true, spawns ONE FFmpeg per stream that emits all renditions via separate
-// output pipes — see multi_output_run.go for rationale and trade-offs.
+// Start launches the transcoder pipeline for a stream. The Stream's
+// `transcoder.mode` selects topology: "" / "multi" (default) spawns ONE
+// FFmpeg per stream that emits all renditions via separate output pipes;
+// "legacy" spawns one FFmpeg per RenditionTarget. See multi_output_run.go
+// for rationale and trade-offs.
 func (s *Service) Start(
 	ctx context.Context,
 	logStreamCode domain.StreamCode,
@@ -374,8 +375,9 @@ func (s *Service) Start(
 	}
 	s.workers[logStreamCode] = sw
 
+	multi := tc.IsMultiOutput()
 	mode := "per_profile"
-	if s.cfg.MultiOutput {
+	if multi {
 		mode = "multi_output"
 	}
 
@@ -398,7 +400,7 @@ func (s *Service) Start(
 		},
 	})
 
-	if s.cfg.MultiOutput {
+	if multi {
 		// One goroutine, one FFmpeg, all profiles. Track as a synthetic
 		// "profile 0" entry so Stop / status APIs see a non-empty
 		// profiles map and behave consistently.

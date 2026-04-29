@@ -83,21 +83,6 @@ type BufferConfig struct {
 // accordingly rather than relying on application-level throttling.
 type TranscoderConfig struct {
 	FFmpegPath string `mapstructure:"ffmpeg_path" json:"ffmpeg_path" yaml:"ffmpeg_path"`
-
-	// MultiOutput, when true, runs ONE FFmpeg process per stream that emits
-	// every profile via its own output pipe (single decode, multi encode).
-	// When false (default), spawns one FFmpeg per profile (legacy mode).
-	//
-	// Multi-output cuts process count and decode work in half for ABR
-	// streams (2 profiles → 1 process instead of 2; 5 profiles → 1 instead
-	// of 5), saving ~40% RAM per stream and ~50% NVDEC sessions. Trade-off:
-	// a single input glitch (corrupt frame, source restart) brings down all
-	// profiles together for ~2-3 s instead of just one rendition. For
-	// stable upstreams the win is decisive; for flaky upstreams operators
-	// may prefer the per-profile isolation of legacy mode.
-	//
-	// Single-profile streams behave identically in both modes.
-	MultiOutput bool `mapstructure:"multi_output" json:"multi_output" yaml:"multi_output"`
 }
 
 // PublisherConfig controls filesystem-based output delivery (HLS, DASH).

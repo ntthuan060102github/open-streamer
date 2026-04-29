@@ -1,5 +1,7 @@
 package domain
 
+import "fmt"
+
 // HWAccel selects the hardware acceleration backend for encoding/decoding.
 type HWAccel string
 
@@ -194,8 +196,35 @@ type AudioTranscodeConfig struct {
 	Normalize bool `json:"normalize" yaml:"normalize"`
 }
 
+// TranscoderMode picks the FFmpeg process topology for a stream.
+//
+// Per-stream so operators can mix policies on the same server — e.g. a flaky
+// SRT source on legacy mode for per-rendition isolation, while stable studio
+// feeds run multi to halve decode work.
+type TranscoderMode string
+
+// TranscoderMode values.
+const (
+	// TranscoderModeMulti runs ONE FFmpeg per stream that decodes the input
+	// once and emits every rendition through its own output pipe. Default
+	// when Mode is empty. Saves ~40% RAM and ~50% NVDEC sessions on ABR
+	// streams; trade-off is that any FFmpeg-fatal input glitch (corrupt
+	// frame, source restart) takes down all renditions together for the
+	// 2–3 s it takes to respawn.
+	TranscoderModeMulti TranscoderMode = "multi"
+
+	// TranscoderModeLegacy runs ONE FFmpeg per rendition. Higher RAM /
+	// decode cost in exchange for per-rendition crash isolation: a single
+	// rendition's encoder failing doesn't disrupt the others. Recommended
+	// for upstreams known to deliver bursts of malformed packets.
+	TranscoderModeLegacy TranscoderMode = "legacy"
+)
+
 // TranscoderConfig is the complete transcoding configuration for a stream.
 type TranscoderConfig struct {
+	// Mode selects the FFmpeg process topology. Empty = TranscoderModeMulti.
+	Mode TranscoderMode `json:"mode,omitempty" yaml:"mode,omitempty"`
+
 	Video   VideoTranscodeConfig   `json:"video" yaml:"video"`
 	Audio   AudioTranscodeConfig   `json:"audio" yaml:"audio"`
 	Decoder DecoderConfig          `json:"decoder" yaml:"decoder"`
@@ -210,4 +239,30 @@ type TranscoderConfig struct {
 	// transcoder section (json/yaml "-") so the API surface keeps
 	// Stream.Watermark as the single source of truth.
 	Watermark *WatermarkConfig `json:"-" yaml:"-"`
+}
+
+// IsMultiOutput reports whether the resolved transcoder mode is multi-output.
+// Treats empty Mode as the default (multi). Hot path so callers don't have
+// to repeat the empty-string fallback.
+func (t *TranscoderConfig) IsMultiOutput() bool {
+	if t == nil {
+		return true
+	}
+	return t.Mode == "" || t.Mode == TranscoderModeMulti
+}
+
+// ValidateMode rejects unknown TranscoderMode values at save time so a
+// typo can't silently pin the stream into legacy / multi without operator
+// awareness. Empty Mode is allowed and routes to multi via IsMultiOutput.
+func (t *TranscoderConfig) ValidateMode() error {
+	if t == nil {
+		return nil
+	}
+	switch t.Mode {
+	case "", TranscoderModeMulti, TranscoderModeLegacy:
+		return nil
+	default:
+		return fmt.Errorf("transcoder: unknown mode %q (want %q or %q)",
+			t.Mode, TranscoderModeMulti, TranscoderModeLegacy)
+	}
 }

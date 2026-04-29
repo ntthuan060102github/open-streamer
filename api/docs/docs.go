@@ -2488,10 +2488,6 @@ const docTemplate = `{
             "properties": {
                 "ffmpeg_path": {
                     "type": "string"
-                },
-                "multi_output": {
-                    "description": "MultiOutput, when true, runs ONE FFmpeg process per stream that emits\nevery profile via its own output pipe (single decode, multi encode).\nWhen false (default), spawns one FFmpeg per profile (legacy mode).\n\nMulti-output cuts process count and decode work in half for ABR\nstreams (2 profiles → 1 process instead of 2; 5 profiles → 1 instead\nof 5), saving ~40% RAM per stream and ~50% NVDEC sessions. Trade-off:\na single input glitch (corrupt frame, source restart) brings down all\nprofiles together for ~2-3 s instead of just one rendition. For\nstable upstreams the win is decisive; for flaky upstreams operators\nmay prefer the per-profile isolation of legacy mode.\n\nSingle-profile streams behave identically in both modes.",
-                    "type": "boolean"
                 }
             }
         },
@@ -2590,6 +2586,8 @@ const docTemplate = `{
         "domain.EventType": {
             "type": "string",
             "enum": [
+                "session.opened",
+                "session.closed",
                 "stream.created",
                 "stream.started",
                 "stream.stopped",
@@ -2605,9 +2603,7 @@ const docTemplate = `{
                 "segment.written",
                 "transcoder.started",
                 "transcoder.stopped",
-                "transcoder.error",
-                "session.opened",
-                "session.closed"
+                "transcoder.error"
             ],
             "x-enum-comments": {
                 "EventInputConnected": "source connected successfully",
@@ -2617,6 +2613,8 @@ const docTemplate = `{
                 "EventInputReconnecting": "transient error, retrying"
             },
             "x-enum-descriptions": [
+                "",
+                "",
                 "",
                 "",
                 "",
@@ -2632,11 +2630,11 @@ const docTemplate = `{
                 "",
                 "",
                 "",
-                "",
-                "",
                 ""
             ],
             "x-enum-varnames": [
+                "EventSessionOpened",
+                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamStarted",
                 "EventStreamStopped",
@@ -2652,9 +2650,7 @@ const docTemplate = `{
                 "EventSegmentWritten",
                 "EventTranscoderStarted",
                 "EventTranscoderStopped",
-                "EventTranscoderError",
-                "EventSessionOpened",
-                "EventSessionClosed"
+                "EventTranscoderError"
             ]
         },
         "domain.GlobalConfig": {
@@ -3342,6 +3338,14 @@ const docTemplate = `{
                 "global": {
                     "$ref": "#/definitions/domain.TranscoderGlobalConfig"
                 },
+                "mode": {
+                    "description": "Mode selects the FFmpeg process topology. Empty = TranscoderModeMulti.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.TranscoderMode"
+                        }
+                    ]
+                },
                 "video": {
                     "$ref": "#/definitions/domain.VideoTranscodeConfig"
                 }
@@ -3371,6 +3375,17 @@ const docTemplate = `{
                     ]
                 }
             }
+        },
+        "domain.TranscoderMode": {
+            "type": "string",
+            "enum": [
+                "multi",
+                "legacy"
+            ],
+            "x-enum-varnames": [
+                "TranscoderModeMulti",
+                "TranscoderModeLegacy"
+            ]
         },
         "domain.VODMount": {
             "type": "object",
@@ -3768,8 +3783,13 @@ const docTemplate = `{
                                 }
                             }
                         },
-                        "multi_output": {
-                            "type": "boolean"
+                        "mode": {
+                            "description": "Mode is the per-stream FFmpeg topology default applied when\nStream.Transcoder.Mode is left empty. UI uses this as the\nplaceholder for the mode selector — operators see the real\napplied default (\"multi\") instead of generic \"default\" text.",
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/domain.TranscoderMode"
+                                }
+                            ]
                         },
                         "video": {
                             "type": "object",

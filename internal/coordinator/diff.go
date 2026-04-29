@@ -152,6 +152,16 @@ func diffTranscoder(old, new *domain.Stream, d *StreamDiff) {
 		return
 	}
 
+	// Mode change (multi ↔ legacy) flips the FFmpeg process topology, so
+	// the running pipeline must be torn down and rebuilt — no in-flight
+	// way to repipe stdout pipes between the two layouts. IsMultiOutput
+	// normalises empty Mode → multi so a config that just dropped the
+	// field doesn't trip a phantom restart.
+	if ot.IsMultiOutput() != nt.IsMultiOutput() {
+		d.TranscoderTopologyChanged = true
+		return
+	}
+
 	// If neither config needs FFmpeg, there are no profiles to diff.
 	if !needsFFmpeg(nt) {
 		return

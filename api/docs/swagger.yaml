@@ -534,22 +534,6 @@ definitions:
     properties:
       ffmpeg_path:
         type: string
-      multi_output:
-        description: |-
-          MultiOutput, when true, runs ONE FFmpeg process per stream that emits
-          every profile via its own output pipe (single decode, multi encode).
-          When false (default), spawns one FFmpeg per profile (legacy mode).
-
-          Multi-output cuts process count and decode work in half for ABR
-          streams (2 profiles → 1 process instead of 2; 5 profiles → 1 instead
-          of 5), saving ~40% RAM per stream and ~50% NVDEC sessions. Trade-off:
-          a single input glitch (corrupt frame, source restart) brings down all
-          profiles together for ~2-3 s instead of just one rendition. For
-          stable upstreams the win is decisive; for flaky upstreams operators
-          may prefer the per-profile isolation of legacy mode.
-
-          Single-profile streams behave identically in both modes.
-        type: boolean
     type: object
   config.WatermarksConfig:
     properties:
@@ -627,6 +611,8 @@ definitions:
     type: object
   domain.EventType:
     enum:
+    - session.opened
+    - session.closed
     - stream.created
     - stream.started
     - stream.stopped
@@ -643,8 +629,6 @@ definitions:
     - transcoder.started
     - transcoder.stopped
     - transcoder.error
-    - session.opened
-    - session.closed
     type: string
     x-enum-comments:
       EventInputConnected: source connected successfully
@@ -653,6 +637,8 @@ definitions:
       EventInputFailover: switched to lower-priority input
       EventInputReconnecting: transient error, retrying
     x-enum-descriptions:
+    - ""
+    - ""
     - ""
     - ""
     - ""
@@ -669,9 +655,9 @@ definitions:
     - ""
     - ""
     - ""
-    - ""
-    - ""
     x-enum-varnames:
+    - EventSessionOpened
+    - EventSessionClosed
     - EventStreamCreated
     - EventStreamStarted
     - EventStreamStopped
@@ -688,8 +674,6 @@ definitions:
     - EventTranscoderStarted
     - EventTranscoderStopped
     - EventTranscoderError
-    - EventSessionOpened
-    - EventSessionClosed
   domain.GlobalConfig:
     properties:
       buffer:
@@ -1293,6 +1277,10 @@ definitions:
         type: array
       global:
         $ref: '#/definitions/domain.TranscoderGlobalConfig'
+      mode:
+        allOf:
+        - $ref: '#/definitions/domain.TranscoderMode'
+        description: Mode selects the FFmpeg process topology. Empty = TranscoderModeMulti.
       video:
         $ref: '#/definitions/domain.VideoTranscodeConfig'
     type: object
@@ -1312,6 +1300,14 @@ definitions:
         - $ref: '#/definitions/domain.HWAccel'
         description: HW selects the acceleration backend.
     type: object
+  domain.TranscoderMode:
+    enum:
+    - multi
+    - legacy
+    type: string
+    x-enum-varnames:
+    - TranscoderModeMulti
+    - TranscoderModeLegacy
   domain.VODMount:
     properties:
       comment:
@@ -1662,8 +1658,14 @@ definitions:
               hw:
                 $ref: '#/definitions/domain.HWAccel'
             type: object
-          multi_output:
-            type: boolean
+          mode:
+            allOf:
+            - $ref: '#/definitions/domain.TranscoderMode'
+            description: |-
+              Mode is the per-stream FFmpeg topology default applied when
+              Stream.Transcoder.Mode is left empty. UI uses this as the
+              placeholder for the mode selector — operators see the real
+              applied default ("multi") instead of generic "default" text.
           video:
             properties:
               bitrate_k:
