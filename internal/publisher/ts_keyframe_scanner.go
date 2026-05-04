@@ -100,13 +100,13 @@ func (s *tsKeyframeScanner) process188(pkt []byte) {
 	pid := uint16(pkt[1]&0x1F)<<8 | uint16(pkt[2])
 
 	switch {
-	case pid == 0:
-		// Track every PAT packet's offset (not just the first PUSI=1) — the
-		// segment-split logic needs the most recent PAT before each IDR.
+	case pid == 0 && pusi:
+		// Track only PAT packets that start a new PAT section (PUSI=1) —
+		// continuation packets (PUSI=0) carry section-overflow bytes, not a
+		// natural segment boundary. Splitting on a continuation packet
+		// would put half of the previous PAT section into the next segment.
 		s.lastPATOffset = s.feedOffset
-		if pusi {
-			s.parsePAT(pkt)
-		}
+		s.parsePAT(pkt)
 	case s.pmtPID != 0 && pid == s.pmtPID && pusi:
 		s.parsePMT(pkt)
 	case s.videoPID != 0 && pid == s.videoPID:

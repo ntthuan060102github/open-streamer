@@ -196,6 +196,8 @@ func (s *Service) runOnce(
 		slog.Error("transcoder: stdin pipe failed", "stream_code", logStream, "profile", track, "err", err)
 		return true, fmt.Errorf("stdin pipe: %w", err)
 	}
+	// See pipe_size_linux.go for why this matters at high ingest bitrates.
+	setFFmpegStdinPipeSize(stdin)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		slog.Error("transcoder: stdout pipe failed", "stream_code", logStream, "profile", track, "err", err)

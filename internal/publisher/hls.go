@@ -395,6 +395,17 @@ func (p *hlsSegmenter) flushLocked() {
 	data := append(make([]byte, 0, len(p.segBuf)), p.segBuf...)
 	p.segBuf = p.segBuf[:0]
 	p.segStart = time.Time{}
+	// Re-anchor the segBuf-to-scanner offset mapping. The scanner has been
+	// fed every byte we just flushed, so the next byte appended to the
+	// (now-empty) segBuf will correspond to scanner.feedOffset. Without
+	// this, the next IDR offset the scanner reports gets translated through
+	// a stale segBufStartOffset and split lands far past len(segBuf) →
+	// tryFlushAtIDRLocked silently fails forever and we fall back to the
+	// non-keyframe-aligned wall-clock force-flush, breaking playback.
+	if p.scanner != nil {
+		p.segBufStartOffset = p.scanner.feedOffset
+		p.scannedOffset = p.scanner.feedOffset
+	}
 
 	disc := p.discNext
 	p.discNext = false

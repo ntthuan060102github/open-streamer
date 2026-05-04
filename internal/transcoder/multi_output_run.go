@@ -229,6 +229,11 @@ func (s *Service) runOnceMultiOutput(
 		cleanupPipes()
 		return true, fmt.Errorf("stdin pipe: %w", err)
 	}
+	// Bump the kernel pipe buffer past Linux's 64 KiB default. At high
+	// ingest bitrates (>20 Mbps) the default fills in tens of ms and our
+	// stdin.Write goroutine blocks → buffer-hub fan-out for the $raw$<code>
+	// subscriber drops packets silently → ffmpeg sees corrupted TS.
+	setFFmpegStdinPipeSize(stdin)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		cleanupPipes()
