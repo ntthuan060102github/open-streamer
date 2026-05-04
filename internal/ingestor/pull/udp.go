@@ -122,11 +122,12 @@ func (r *UDPReader) Open(_ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("udp: listen %q: %w", u.Host, err)
 	}
-	// SetReadBuffer is best-effort: kernel silently caps to net.core.rmem_max
-	// when the request exceeds it. Operators running high-bitrate (>50 Mbps)
-	// multicast must raise rmem_max via sysctl; the cap is not surfaced as an
-	// error here.
-	_ = conn.SetReadBuffer(r.opts.osBuf)
+	// On Linux this prefers SO_RCVBUFFORCE (bypasses net.core.rmem_max when
+	// the process has CAP_NET_ADMIN — root does) and falls back to plain
+	// SO_RCVBUF otherwise. Matches Flussonic / production media servers that
+	// don't require operators to raise rmem_max for high-bitrate multicast.
+	// Non-Linux builds use plain SetReadBuffer.
+	setUDPRecvBuffer(conn, r.opts.osBuf)
 
 	if err := r.joinMulticast(conn, addr); err != nil {
 		_ = conn.Close()

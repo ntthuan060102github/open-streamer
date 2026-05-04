@@ -30,6 +30,38 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// setUDPRecvBuffer sets the socket recv buffer, preferring SO_RCVBUFFORCE
+// (Linux capability-gated, requires CAP_NET_ADMIN — root has it) which
+// bypasses `net.core.rmem_max`. Falls back to plain SO_RCVBUF when the
+// process lacks the capability.
+//
+// Why this matters: at 120 Mbps multicast with a typical rmem_max of 8 MiB,
+// the kernel buffer holds only ~533 ms. Any pump-side hiccup (GC pause,
+// scheduler delay, busy CPU) past that → kernel drops UDP datagrams,
+// breaking TS continuity, and the transcoder downstream sees corrupted PES
+// headers (decode_slice_header errors, wild PTS jumps, garbled output).
+//
+// Production media servers like Flussonic use SO_RCVBUFFORCE for exactly
+// this reason — matching that behaviour means the operator doesn't have to
+// raise sysctls just to feed a high-bitrate multicast feed.
+//
+// Both errors are swallowed silently — caller proceeds with whatever buffer
+// size the kernel granted.
+func setUDPRecvBuffer(conn *net.UDPConn, n int) {
+	rawConn, err := conn.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = rawConn.Control(func(fd uintptr) {
+		// SO_RCVBUFFORCE bypasses rmem_max. Returns EPERM without CAP_NET_ADMIN.
+		if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, n); err == nil {
+			return
+		}
+		// Fallback respects rmem_max cap; better than nothing.
+		_ = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, n)
+	})
+}
+
 // joinIPv4ASMByIfaceName joins the IPv4 ASM (any-source multicast) group on
 // the named interface using purely ioctl + setsockopt — no netlink calls.
 func joinIPv4ASMByIfaceName(conn *net.UDPConn, group net.IP, ifaceName string) error {
@@ -75,7 +107,7 @@ func ifaceIndexByNameLinux(name string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("socket: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	ifr, err := unix.NewIfreq(name)
 	if err != nil {
 		return 0, fmt.Errorf("new ifreq: %w", err)

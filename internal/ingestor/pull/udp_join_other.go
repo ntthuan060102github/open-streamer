@@ -21,3 +21,11 @@ func joinIPv4ASMByIfaceName(conn *net.UDPConn, group net.IP, ifaceName string) e
 	}
 	return ipv4.NewPacketConn(conn).JoinGroup(iface, &net.UDPAddr{IP: group})
 }
+
+// setUDPRecvBuffer is the non-Linux fallback — uses the standard library's
+// SetReadBuffer (= setsockopt(SO_RCVBUF, n)). On macOS / BSD there is no
+// SO_RCVBUFFORCE equivalent, but those platforms also have far higher
+// kmem buffers configured by default, so the practical impact is small.
+func setUDPRecvBuffer(conn *net.UDPConn, n int) {
+	_ = conn.SetReadBuffer(n)
+}
