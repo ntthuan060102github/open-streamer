@@ -26,10 +26,12 @@ package pull
 //	udp://0.0.0.0:5000                     — unicast, bind all interfaces
 //	udp://239.1.1.1:5000                   — IPv4 multicast, any source
 //	udp://[ff02::1]:5000                   — IPv6 multicast
+//	udp://eth0@239.1.1.1:5000              — multicast on eth0 (FFmpeg syntax)
 //	udp://239.1.1.1:5000?iface=eth0        — multicast on specific interface
 //	udp://239.1.1.1:5000?source=10.0.0.1   — IPv4 source-specific multicast
 //	udp://host:5000?rtp=0                  — disable RTP auto-stripping
 //	udp://host:5000?pkt_size=65536         — override max datagram buffer size
+//	udp://host:5000?fifo_size=50000000     — OS recv buffer (50 MB); aliases: buffer_size, recv_buffer_size
 //
 // # Lifecycle for worker reconnection
 //
@@ -55,14 +57,16 @@ import (
 const (
 	udpDefaultPktSize = 188 * 7                // 1316 bytes — typical MPEG-TS datagram
 	udpMaxPktSize     = 65536                  // maximum useful UDP payload
-	udpChanBuf        = 128                    // datagrams buffered between pump and Read
-	udpOSBufSize      = 4 * 1024 * 1024        // 4 MiB OS receive buffer
+	udpDefaultChanBuf = 1024                   // datagrams buffered between pump and Read; ~88 ms at 120 Mbps with 1316-byte datagrams. Tunable via ?chan_buf=
+	udpDefaultOSBuf   = 16 * 1024 * 1024       // 16 MiB OS receive buffer; tunable via ?fifo_size= / ?buffer_size= / ?recv_buffer_size=. Kernel may cap below this — operator must raise net.core.rmem_max for the request to take full effect.
 	udpPollDeadline   = 400 * time.Millisecond // deadline for done-check polling
 )
 
 // udpOpts holds parsed URL query parameters for UDPReader.
 type udpOpts struct {
 	pktSize int    // max UDP read buffer size
+	osBuf   int    // OS receive buffer size (SetReadBuffer); aliased from fifo_size / buffer_size / recv_buffer_size
+	chanBuf int    // datagrams buffered between pump and Read goroutines
 	iface   string // network interface name for multicast join
 	source  string // SSM source address (empty = any-source multicast)
 	rtpAuto bool   // true = auto-detect and strip RTP headers
@@ -118,7 +122,11 @@ func (r *UDPReader) Open(_ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("udp: listen %q: %w", u.Host, err)
 	}
-	_ = conn.SetReadBuffer(udpOSBufSize)
+	// SetReadBuffer is best-effort: kernel silently caps to net.core.rmem_max
+	// when the request exceeds it. Operators running high-bitrate (>50 Mbps)
+	// multicast must raise rmem_max via sysctl; the cap is not surfaced as an
+	// error here.
+	_ = conn.SetReadBuffer(r.opts.osBuf)
 
 	if err := r.joinMulticast(conn, addr); err != nil {
 		_ = conn.Close()
@@ -126,7 +134,7 @@ func (r *UDPReader) Open(_ context.Context) error {
 	}
 
 	r.conn = conn
-	r.chunks = make(chan []byte, udpChanBuf)
+	r.chunks = make(chan []byte, r.opts.chanBuf)
 	r.done = make(chan struct{})
 	r.wg.Add(1)
 	go r.pump()
@@ -375,14 +383,29 @@ func (r *UDPReader) joinIPv6(conn *net.UDPConn, group *net.UDPAddr, iface *net.I
 
 // parseUDPOpts extracts recognised query parameters from rawURL.
 // Unknown parameters are silently ignored.
+//
+// FFmpeg-compatible aliases:
+//   - userinfo `iface@host:port` is parsed as the multicast interface name
+//     (overridden by explicit ?iface=)
+//   - ?fifo_size=, ?buffer_size=, ?recv_buffer_size= all set the OS recv
+//     buffer (SetReadBuffer); operator-side net.core.rmem_max may cap.
 func parseUDPOpts(rawURL string) udpOpts {
 	opts := udpOpts{
 		pktSize: udpDefaultPktSize,
+		osBuf:   udpDefaultOSBuf,
+		chanBuf: udpDefaultChanBuf,
 		rtpAuto: true,
 	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return opts
+	}
+	// FFmpeg syntax: udp://<iface>@<host>:<port>. Use as default; explicit
+	// ?iface= still wins.
+	if u.User != nil {
+		if name := u.User.Username(); name != "" {
+			opts.iface = name
+		}
 	}
 	q := u.Query()
 	if v := q.Get("iface"); v != "" {
@@ -391,13 +414,33 @@ func parseUDPOpts(rawURL string) udpOpts {
 	if v := q.Get("source"); v != "" {
 		opts.source = v
 	}
-	if v := q.Get("pkt_size"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= udpMaxPktSize {
-			opts.pktSize = n
-		}
+	if n, ok := positiveInt(q.Get("pkt_size")); ok && n <= udpMaxPktSize {
+		opts.pktSize = n
 	}
 	if v := q.Get("rtp"); v == "0" || v == "false" {
 		opts.rtpAuto = false
 	}
+	for _, k := range []string{"fifo_size", "buffer_size", "recv_buffer_size"} {
+		if n, ok := positiveInt(q.Get(k)); ok {
+			opts.osBuf = n
+			break
+		}
+	}
+	if n, ok := positiveInt(q.Get("chan_buf")); ok {
+		opts.chanBuf = n
+	}
 	return opts
+}
+
+// positiveInt parses s as a strictly-positive int. Empty / unparseable /
+// non-positive values return ok=false so the caller keeps its default.
+func positiveInt(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
