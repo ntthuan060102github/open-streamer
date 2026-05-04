@@ -361,17 +361,29 @@ func (r *UDPReader) joinMulticast(conn *net.UDPConn, addr *net.UDPAddr) error {
 }
 
 // joinIPv4 issues an IGMP join for the given group on conn.
-// When source is set in opts, a source-specific (SSM) join is used instead.
+//
+// SSM (source-specific multicast, ?source=) routes through the higher-level
+// golang.org/x/net/ipv4 API.
+//
+// Plain ASM with an explicit interface goes through joinIPv4ASMWithInterface
+// (Linux: raw setsockopt avoiding the netlink path that fails when the host
+// has IPv6 disabled via sysctl; other OSes: falls back to ipv4.PacketConn).
+// The netlink path was breaking joins on hosts with
+// `net.ipv6.conf.all.disable_ipv6=1` even though we're only doing IPv4 work
+// — the x/net library enumerates AF_INET6 routes during JoinGroup.
 func (r *UDPReader) joinIPv4(conn *net.UDPConn, group *net.UDPAddr, iface *net.Interface) error {
-	pc := ipv4.NewPacketConn(conn)
 	if r.opts.source != "" {
+		pc := ipv4.NewPacketConn(conn)
 		src := net.ParseIP(r.opts.source)
 		if src == nil {
 			return fmt.Errorf("invalid SSM source address %q", r.opts.source)
 		}
 		return pc.JoinSourceSpecificGroup(iface, &net.UDPAddr{IP: group.IP}, &net.UDPAddr{IP: src})
 	}
-	return pc.JoinGroup(iface, &net.UDPAddr{IP: group.IP})
+	if iface != nil {
+		return joinIPv4ASMWithInterface(conn, group.IP, iface)
+	}
+	return ipv4.NewPacketConn(conn).JoinGroup(nil, &net.UDPAddr{IP: group.IP})
 }
 
 // joinIPv6 issues an MLD join for the given group on conn.
