@@ -41,7 +41,7 @@ Legend:
 | REST API — streams CRUD + start/stop/restart | Complete | `chi/v5` router under `/streams` |
 | REST API — `PUT /streams/{code}` hot-reload | Complete | Diff-based; only changed components restart |
 | REST API — input switch | Complete | `POST /streams/{code}/inputs/switch` forces active priority |
-| REST API — recordings | Complete | CRUD + playlist.m3u8 + timeshift.m3u8 + segment serve + info |
+| REST API — recordings | Complete | CRUD + unified `/{file}` dispatch (playlist.m3u8 vs timeshift via `?from=` / `?offset_sec=` query) + segment serve + info |
 | REST API — hooks CRUD + test (HTTP & File) | Complete | `DeliverTestEvent` routes per hook type |
 | REST API — config GET/POST | Complete | `/config` static enums + GlobalConfig; POST hot-applies |
 | REST API — config defaults | Complete | `GET /config/defaults` returns implicit values for UI placeholders (incl. encoder routing table per HW) |
@@ -66,6 +66,7 @@ Legend:
 | Slow-consumer packet drop | Complete | `default:` in fan-out — ingestor never blocked |
 | `PlaybackBufferID` resolver | Complete | Picks best rendition for ABR, else logical stream code |
 | Capacity tunable | Complete | `buffer.capacity` (default 1024) |
+| `Delete` closes subscriber channels | Complete | Subscribers see `ok=false` on `<-Recv()` so mixer/copy taps observe upstream tear-down and reconnect — fix for the "downstream silently dies after upstream restart" class of bugs |
 
 ---
 
@@ -96,7 +97,7 @@ Legend:
 | Feature | Status | Notes |
 |---|---|---|
 | Multi-input failover (Go-level, no FFmpeg restart) | Complete | Old ingestor stops, new one starts; buffer continuity preserved |
-| Packet timeout detection | Complete | `manager.input_packet_timeout_sec` (default 30) |
+| Packet timeout detection | Complete | `manager.input_packet_timeout_sec` (default 30); hot-reload via `SetConfig` (atomic.Int64) — change applies on next health-check tick without pipeline restart |
 | Background failback probe | Complete | Cooldown 8s probe / 12s switch |
 | Bypass-probe recovery | Complete | When ingestor reader auto-reconnects faster than probe cycle, `RecordPacket` clears exhausted state + records recovery switch |
 | Switch history (last 20) | Complete | `runtime.switches[]` per stream with reason: `initial`, `error`, `timeout`, `manual`, `failback`, `recovery`, `input_added`, `input_removed`; from/to/at/detail |
@@ -114,7 +115,7 @@ Legend:
 |---|---|---|
 | FFmpeg subprocess (stdin TS → stdout TS) | Complete | `exec.CommandContext`; killed via context cancel |
 | Per-profile encoder pool | Complete | Each `track_N` is independent `profileWorker`; hot start/stop one without affecting others |
-| Multi-output mode | Complete | `transcoder.multi_output=true` runs ONE FFmpeg per stream emitting N rendition pipes (single decode, multi encode); ~50% NVDEC + ~40% RAM saved per ABR stream. Hot-toggle restarts running streams |
+| Transcoder mode (per-stream) | Complete | `Stream.TranscoderMode`: `multi_output` (default) runs ONE FFmpeg per stream emitting N rendition pipes — single decode + multi encode → ~50% NVDEC + ~40% RAM saved per ABR stream. `per_profile` runs one FFmpeg per ladder rung. Hot-switch restarts the affected stream only |
 | Shadow profile workers (multi-output) | Complete | All N ladder rungs appear in `RuntimeStatus.Profiles[]` even though one process drives them — error history accurate per rung |
 | ABR profile config | Complete | Resolution, bitrate, codec, preset, profile, level, framerate, GOP, B-frames, refs, SAR, resize_mode |
 | Encoder codec routing | Complete | `domain.ResolveVideoEncoder` maps user alias (`""`/`h264`/`h265`/`vp9`/`av1`) + HW backend → FFmpeg encoder name; explicit names (`h264_nvenc`, `h264_qsv`) preserved |
@@ -134,7 +135,7 @@ Legend:
 | Per-profile error history (last 5) | Complete | `runtime.transcoder.profiles[].errors[]` — stderr-tail context embedded ("No such filter X") |
 | Stderr filtering | Complete | Timestamp resync, packet-corrupt, MMCO chatter → debug; real errors → warn |
 | Health detection → coordinator | Complete | After 3 consecutive crashes (sub-30s) fires `onUnhealthy` → status Degraded; sustained run (>30s) fires `onHealthy` → status Active. Hot-restart (Update path) clears flag via `dropHealthState` callback |
-| Hot-swap config (`SetConfig`) | Complete | runtime updates `MultiOutput` / `FFmpegPath`; restarts running streams when behaviour-changing field flips |
+| Hot-swap config (`SetConfig`) | Complete | runtime updates `FFmpegPath`; per-stream `TranscoderMode` swap is handled by stream-level diff (restarts only the affected stream) |
 | `StopProfile` / `StartProfile` | Complete | Granular ladder control; multi-output mode loses granularity (must full-restart) |
 
 ---
@@ -151,8 +152,8 @@ Legend:
 | ABR ladder add/remove → `RestartHLSDASH` | Complete | Only HLS+DASH goroutines restart; RTSP/RTMP/SRT viewers preserved |
 | ABR profile metadata update | Complete | `UpdateABRMasterMeta` rewrites HLS master playlist in-place (no FFmpeg restart) |
 | Topology change → `reloadTranscoderFull` | Complete | Full pipeline rebuild when transcoder nil↔non-nil or mode changes |
-| ABR-copy pipeline (`copy://` upstream with ladder) | Complete | N tap goroutines re-publish each upstream rendition; bypasses ingest worker + transcoder |
-| ABR-mixer pipeline | Complete | Mirror video ladder + audio fan-out from two upstream streams |
+| ABR-copy pipeline (`copy://` upstream with ladder) | Complete | N tap goroutines re-publish each upstream rendition; bypasses ingest worker + transcoder; reconnects on upstream restart (relies on `buffer.Delete` channel-close signal) |
+| ABR-mixer pipeline | Complete | Mirror video ladder + audio fan-out from two upstream streams; reconnects on upstream restart; **PTS/DTS rebased per-source against shared wall-clock anchor** so video (upstream A) and audio (upstream B) collapse onto a common timeline — without this, divergent PCR bases between unrelated sources caused players to render black + silent |
 | Stream-level health reconciliation | Complete | `streamDegradation` flags (`inputsExhausted`, `transcoderUnhealthy`) — Degraded if either set, Active when all clear |
 | DVR hot-reload | Complete | Toggle on/off; restarts with new mediaBuf when best rendition shifts |
 | Narrow service interfaces (`deps.go`) | Complete | `mgrDep`, `tcDep`, `pubDep`, `dvrDep` — spy-based testing |
@@ -175,6 +176,7 @@ Legend:
 | Per-protocol independent context | Complete | Each output (`hls`, `dash`, `rtsp`, `push:<url>`) has its own cancel func |
 | `UpdateProtocols(old, new)` | Complete | Only changed protocols stop/start; live viewers preserved |
 | Per-push state tracking | Complete | `runtime.publisher.pushes[]` — status (`starting`/`active`/`reconnecting`/`failed`), attempt, connected_at, last 5 errors |
+| Listener hot-reload (RTMP / SRT / RTSP) | Complete | `publisher.SetListeners` + `ingestor.SetListeners` + `manager.SetConfig` swap `atomic.Pointer` snapshots before `diffService` restarts the affected goroutine — port / latency changes pick up on next restart cycle without losing other live viewers |
 
 ---
 
@@ -189,9 +191,7 @@ Legend:
 | Resume after restart | Complete | Playlist parsing rebuilds in-memory segment list |
 | `#EXT-X-PROGRAM-DATE-TIME` | Complete | Written before first segment + after every discontinuity |
 | Retention by time + size | Complete | Both `retention_sec` (0=forever) and `max_size_gb` (0=unlimited) |
-| VOD playlist endpoint | Complete | `GET /recordings/{rid}/playlist.m3u8` |
-| Timeshift (absolute / relative) | Complete | `?from=RFC3339&duration=N` or `?offset_sec=N&duration=N` |
-| Segment serve | Complete | `GET /recordings/{rid}/{file}` — path traversal sanitised |
+| VOD playlist + timeshift + segments | Complete | Unified `GET /recordings/{rid}/{file}` — `.m3u8` serves `playlist.m3u8` from disk by default, dispatches to dynamic timeshift slice when `?from=RFC3339` / `?offset_sec=N` (+ optional `?duration=N`) is present; `.ts` serves segment as-is. Path traversal sanitised |
 | Info endpoint | Complete | `GET /recordings/{rid}/info` — range, gaps, count, total bytes |
 | Configurable storage path | Complete | Per-stream `storage_path` overrides `./out/dvr/{streamCode}` default |
 
@@ -306,7 +306,6 @@ Tracking what is intentionally NOT done. Each row is a deliberate scope decision
 | Mid | GeoIP MaxMind reader | Schema only | Interface + `NullGeoIP` default exist; concrete MaxMind/IP2Location reader not wired. `sessions.geoip_db_path` config field reserved |
 | Mid | Sessions persistence (history beyond active set) | Not started | In-memory only — closed sessions disappear after the event is published. Hooks can persist downstream |
 | Mid | Local-packager error tracking (HLS/DASH) | Not started | Currently slog-only; analogous to push state pattern but per-stream-per-format |
-| Low | Per-input net config (read_timeout, reconnect_*, max_reconnects) | Schema only | Declared in domain.InputNetConfig, not consumed; either implement or remove |
 | Low | HLS / DASH push out | Not started | Only RTMP/RTMPS push exists |
 | Low | RTSP per-session bytes accuracy | Schema only | gortsplib mux is internal; current `bytes=0` for RTSP. Would need a custom `WritePacketRTP` wrapper or fork |
 | Low | RTMP `flashVer` capture | Schema only | gomedia doesn't expose `flashVer` from the connect command publicly; left empty in `PlayInfo.FlashVer` |
