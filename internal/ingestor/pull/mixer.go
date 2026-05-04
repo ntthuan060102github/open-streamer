@@ -120,11 +120,16 @@ func NewMixerReader(input domain.Input, bufSvc *buffer.Service, lookup StreamLoo
 		audioBufID:           buffer.PlaybackBufferID(audio, upA.Transcoder),
 		bufSvc:               bufSvc,
 	}
-	if streamHasRenditions(upV) {
+	// Use TS-demux-over-buffer mode whenever the upstream's playback buffer
+	// carries raw TS bytes. After the raw-TS-passthrough refactor that's true
+	// for ABR ladders AND for raw-TS sources (UDP / HLS / SRT / File).
+	// Direct AV mode is reserved for RTSP / RTMP single-stream upstreams
+	// whose main buffer still carries AVPackets.
+	if streamHasRenditions(upV) || domain.StreamMainBufferIsTS(upV) {
 		r.videoChunk = newBufferTSChunkReader(bufSvc, r.videoBufID)
 		r.videoInner = NewTSDemuxPacketReader(r.videoChunk)
 	}
-	if streamHasRenditions(upA) {
+	if streamHasRenditions(upA) || domain.StreamMainBufferIsTS(upA) {
 		r.audioChunk = newBufferTSChunkReader(bufSvc, r.audioBufID)
 		r.audioInner = NewTSDemuxPacketReader(r.audioChunk)
 	}

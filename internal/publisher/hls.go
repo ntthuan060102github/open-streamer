@@ -154,6 +154,15 @@ type hlsSegmenter struct {
 	segStart time.Time
 	discNext bool // schedule EXT-X-DISCONTINUITY for the next flushed segment
 
+	// segBufStartOffset is the absolute byte offset (within the lifetime of
+	// the raw-TS scanner) corresponding to segBuf[0]. Used to translate the
+	// scanner's stream-absolute IDR offsets into segBuf-relative positions
+	// when picking a keyframe-aligned split point.
+	segBufStartOffset int64
+	// scannedOffset is the highest scanner.LastIDROffset we have already
+	// considered for splitting. Prevents re-using the same IDR boundary.
+	scannedOffset int64
+
 	// Sliding-window manifest state.
 	segN   uint64
 	onDisk []hlsSegEntry
@@ -171,6 +180,13 @@ type hlsSegmenter struct {
 
 	// Pre-bound segment-write counter; nil-safe.
 	segCount prometheus.Counter
+
+	// scanner finds IDR boundaries in raw-TS chunks (UDP/HLS/SRT/File
+	// passthrough sources). Lazily allocated on the first raw-TS packet so
+	// AV-only paths and transcoder-output paths pay nothing. nil → caller
+	// falls back to wall-clock force-flush (acceptable for transcoder output
+	// because that path is GOP-aligned by ffmpeg).
+	scanner *tsKeyframeScanner
 }
 
 func (p *hlsSegmenter) run(ctx context.Context, sub *buffer.Subscriber) {
@@ -194,31 +210,59 @@ func (p *hlsSegmenter) run(ctx context.Context, sub *buffer.Subscriber) {
 				p.doFlush()
 				return
 			}
-			if pkt.AV != nil {
-				p.handleAVPacket(pkt.AV, segDur)
-				// On source switch, discard stale muxer state so the new source
-				// gets fresh PAT/PMT tables and clean continuity counters.
-				// FeedWirePacket lazily allocates a new FromAV on the next call.
-				if pkt.AV.Discontinuity {
-					avMux = nil
-					tsCarry = nil
-				}
-			}
-			tsmux.FeedWirePacket(pkt.TS, pkt.AV, &avMux, func(b []byte) {
-				alignedFeed(b, &tsCarry, func(pkt188 []byte) bool {
-					p.mu.Lock()
-					if p.segStart.IsZero() {
-						p.segStart = time.Now()
-					}
-					p.segBuf = append(p.segBuf, pkt188...)
-					p.mu.Unlock()
-					return true
-				})
-			})
+			p.handleIncoming(pkt, segDur, &avMux, &tsCarry)
 
 		case <-tick.C:
-			p.tickFlush(maxDur)
+			p.tickFlush(maxDur, segDur)
 		}
+	}
+}
+
+// handleIncoming dispatches one buffer packet through the AV / raw-TS path.
+// Extracted from run() to keep that function under the cognitive-complexity
+// ceiling. Mutates avMux / tsCarry via pointers — both are loop-local state.
+func (p *hlsSegmenter) handleIncoming(
+	pkt buffer.Packet,
+	segDur time.Duration,
+	avMux **tsmux.FromAV,
+	tsCarry *[]byte,
+) {
+	if pkt.AV != nil {
+		p.handleAVPacket(pkt.AV, segDur)
+		// On source switch, discard stale muxer state so the new source
+		// gets fresh PAT/PMT tables and clean continuity counters.
+		// FeedWirePacket lazily allocates a new FromAV on the next call.
+		if pkt.AV.Discontinuity {
+			*avMux = nil
+			*tsCarry = nil
+		}
+	}
+	rawTS := len(pkt.TS) > 0 && pkt.AV == nil
+	tsmux.FeedWirePacket(pkt.TS, pkt.AV, avMux, func(b []byte) {
+		alignedFeed(b, tsCarry, func(pkt188 []byte) bool {
+			p.appendSegment188(pkt188, rawTS)
+			return true
+		})
+	})
+}
+
+// appendSegment188 appends one TS packet to the active segment buffer and,
+// for raw-TS sources, feeds it to the keyframe scanner.
+func (p *hlsSegmenter) appendSegment188(pkt188 []byte, rawTS bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.segStart.IsZero() {
+		p.segStart = time.Now()
+	}
+	p.segBuf = append(p.segBuf, pkt188...)
+	if rawTS {
+		// Lazy-init keyframe scanner for raw-TS passthrough sources only —
+		// AV path doesn't need it (segments pre-aligned via handleAVPacket),
+		// and transcoder TS output is GOP-aligned by ffmpeg.
+		if p.scanner == nil {
+			p.scanner = newTSKeyframeScanner()
+		}
+		p.scanner.Feed(pkt188)
 	}
 }
 
@@ -248,10 +292,11 @@ func (p *hlsSegmenter) handleAVPacket(av *domain.AVPacket, segDur time.Duration)
 }
 
 // tickFlush is called every 50 ms by the ticker; it handles:
-//   - TS-path time-based segmenting
+//   - Raw-TS path: keyframe-aligned segmenting via the scanner (preferred)
+//   - TS-path time-based segmenting (transcoder output, GOP-aligned)
 //   - Fallback force-flush for stuck AV paths
 //   - Failover generation detection (TS path)
-func (p *hlsSegmenter) tickFlush(maxDur time.Duration) {
+func (p *hlsSegmenter) tickFlush(maxDur, segDur time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -269,11 +314,56 @@ func (p *hlsSegmenter) tickFlush(maxDur time.Duration) {
 	}
 
 	elapsed := time.Since(p.segStart)
+
+	// Raw-TS path: prefer keyframe-aligned split. Only flush at a fresh IDR
+	// boundary once we've buffered at least one segDur of wall-clock data —
+	// without the wall-clock check we'd flush on every IDR (mid-GOP segments
+	// far shorter than segDur).
+	if p.scanner != nil && elapsed >= segDur {
+		if p.tryFlushAtIDRLocked() {
+			return
+		}
+	}
+
 	if elapsed >= maxDur {
-		// Force-flush: either TS path (no IDR pre-flush) or an AV path without
-		// a keyframe for 1.5 × segSec (stream health issue).
+		// Force-flush: either TS path with no IDR seen in maxDur (degraded
+		// source — better one bad segment than indefinite buffering) or an
+		// AV path without a keyframe for 1.5 × segSec.
 		p.flushLocked()
 	}
+}
+
+// tryFlushAtIDRLocked splits the segment at the next IDR boundary the
+// scanner has reported since the last flush. Returns true when a flush
+// happened. Caller holds p.mu.
+//
+// The scanner reports IDR offsets in its own absolute (cumulative-fed-bytes)
+// coordinate. We translate that into a segBuf-relative split point via
+// segBufStartOffset, write [0:split) as the segment, then carry [split:end)
+// over as the start of the next segment. p.segStart is reset so the new
+// segment's wall-clock window begins at the IDR.
+func (p *hlsSegmenter) tryFlushAtIDRLocked() bool {
+	idrAbs := p.scanner.LastIDROffset
+	if idrAbs <= p.scannedOffset {
+		return false // no fresh IDR since last flush
+	}
+	split := int(idrAbs - p.segBufStartOffset)
+	if split <= 0 || split >= len(p.segBuf) {
+		// IDR is at or before segment start (already consumed) or hasn't
+		// landed in segBuf yet — nothing useful to split at.
+		p.scannedOffset = idrAbs
+		return false
+	}
+	carry := append([]byte(nil), p.segBuf[split:]...)
+	p.segBuf = p.segBuf[:split]
+	p.flushLocked()
+	// flushLocked resets segBuf + segStart; restore the carry as the new
+	// segment's first bytes and re-anchor wall-clock to now.
+	p.segBuf = carry
+	p.segStart = time.Now()
+	p.segBufStartOffset = idrAbs
+	p.scannedOffset = idrAbs
+	return true
 }
 
 // doFlush flushes any remaining segment data on shutdown.

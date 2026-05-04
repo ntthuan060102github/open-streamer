@@ -93,9 +93,13 @@ func NewCopyReader(input domain.Input, bufSvc *buffer.Service, lookup StreamLook
 	bufID := buffer.PlaybackBufferID(target, upstream.Transcoder)
 	r := &CopyReader{target: target, bufID: bufID, bufSvc: bufSvc}
 
-	if streamHasRenditions(upstream) {
-		// ABR mode: rendition buffer carries TS bytes. Wrap in a TS demuxer
-		// so the rest of the pipeline still gets AVPackets.
+	// Use the TS-demuxer-over-buffer path whenever the upstream's playback
+	// buffer carries raw TS bytes — true for ABR ladders (rendition buffers
+	// hold TS) AND for raw-TS sources (UDP/HLS/SRT/File) whose ingestor uses
+	// TSPassthroughPacketReader. Misclassifying as direct-AV silently drops
+	// the entire stream (pkt.AV is nil for raw TS, the AV-only branch
+	// rejects every packet).
+	if streamHasRenditions(upstream) || domain.StreamMainBufferIsTS(upstream) {
 		r.abrChunk = newBufferTSChunkReader(bufSvc, bufID)
 		r.abrInner = NewTSDemuxPacketReader(r.abrChunk)
 	}

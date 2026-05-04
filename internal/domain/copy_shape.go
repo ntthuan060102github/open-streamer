@@ -162,3 +162,66 @@ func streamHasRenditions(s *Stream) bool {
 	}
 	return len(s.Transcoder.Video.Profiles) > 0
 }
+
+// StreamMainBufferIsTS reports whether the stream's main playback buffer
+// contains raw MPEG-TS bytes (Packet.TS) rather than decoded AVPackets
+// (Packet.AV). Three sources of TS in the main buffer:
+//
+//   - any transcoder is active → buffer holds the transcoder's stdout TS;
+//   - source is a raw-TS protocol (UDP / HLS / SRT / File) → ingestor uses
+//     TSPassthroughPacketReader and writes Packet.TS directly;
+//   - rendition buffers always hold TS (transcoder per-profile output) — but
+//     this helper reports on the MAIN buffer; callers that need to know about
+//     rendition shape should use streamHasRenditions instead.
+//
+// Used by mixer / copy paths to decide whether to subscribe-and-read AV
+// packets vs run a TS demuxer over the buffer's chunks. Misclassifying the
+// shape silently drops audio (rare AV packets but a mode-mismatched consumer
+// filters them all out).
+func StreamMainBufferIsTS(s *Stream) bool {
+	if s == nil {
+		return false
+	}
+	if s.Transcoder != nil {
+		return true
+	}
+	if len(s.Inputs) == 0 {
+		return false
+	}
+	return inputSourceIsRawTS(s.Inputs[0].URL)
+}
+
+// inputSourceIsRawTS reports whether the URL scheme indicates a raw MPEG-TS
+// source (UDP / HLS / SRT / File) — those are the protocols whose ingest
+// reader uses TSPassthroughPacketReader.
+//
+// Inlined scheme prefixes (rather than importing pkg/protocol) to keep the
+// `domain` package free of upward dependencies.
+func inputSourceIsRawTS(rawURL string) bool {
+	switch {
+	case len(rawURL) >= 6 && rawURL[:6] == "udp://":
+		return true
+	case len(rawURL) >= 7 && rawURL[:7] == "http://":
+		return looksLikeHLS(rawURL)
+	case len(rawURL) >= 8 && rawURL[:8] == "https://":
+		return looksLikeHLS(rawURL)
+	case len(rawURL) >= 6 && rawURL[:6] == "srt://":
+		return true
+	case len(rawURL) >= 7 && rawURL[:7] == "file://":
+		return true
+	case len(rawURL) > 0 && rawURL[0] == '/':
+		return true // bare absolute path = file
+	}
+	return false
+}
+
+// looksLikeHLS does a coarse `.m3u8` substring check — matches the HLS reader's
+// own URL-classification rule and avoids pulling in pkg/protocol just for this.
+func looksLikeHLS(rawURL string) bool {
+	for i := 0; i < len(rawURL); i++ {
+		if i+5 <= len(rawURL) && rawURL[i:i+5] == ".m3u8" {
+			return true
+		}
+	}
+	return false
+}

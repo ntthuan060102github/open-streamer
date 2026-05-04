@@ -268,11 +268,22 @@ func (c *Coordinator) startABRMixer(ctx context.Context, downstream, videoUp, au
 	}
 	// 1 audio fan-out goroutine. Audio source is upstream B's PlaybackBufferID
 	// (main buffer for single-stream, best rendition for ABR).
+	//
+	// audioBufferIsTS controls how the fan-out goroutine reads packets:
+	//   - true  → wrap buffer with BufferTSDemuxReader (TS chunks → AVPackets)
+	//   - false → direct subscriber Recv() reading Packet.AV
+	//
+	// True when the upstream's main/rendition buffer is fed with raw TS bytes,
+	// which now covers ABR upstreams AND single-stream upstreams whose source
+	// is a raw-TS protocol (UDP / HLS / SRT / File — ingestor uses
+	// TSPassthroughPacketReader). Misclassifying as direct silently drops
+	// audio: pkt.AV is nil for raw TS, and the codec filter rejects every
+	// packet.
 	audioBufID := buffer.PlaybackBufferID(audioUp.Code, audioUp.Transcoder)
-	audioIsABR := upstreamHasABRLadder(audioUp)
+	audioBufferIsTS := upstreamHasABRLadder(audioUp) || domain.StreamMainBufferIsTS(audioUp)
 	wg.Add(1)
 	//nolint:contextcheck // tapCtx detached from request; cancelled by Stop()
-	go c.runABRMixerAudioFanOut(tapCtx, wg, entry, downstream.Code, audioBufID, audioIsABR, downBufIDs)
+	go c.runABRMixerAudioFanOut(tapCtx, wg, entry, downstream.Code, audioBufID, audioBufferIsTS, downBufIDs)
 
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(time.Now().Unix()))
@@ -288,7 +299,7 @@ func (c *Coordinator) startABRMixer(ctx context.Context, downstream, videoUp, au
 		"video_upstream", videoUp.Code,
 		"audio_upstream", audioUp.Code,
 		"renditions", len(downRends),
-		"audio_is_abr", audioIsABR,
+		"audio_buffer_is_ts", audioBufferIsTS,
 	)
 	return nil
 }
@@ -401,7 +412,7 @@ func (c *Coordinator) runABRMixerAudioFanOut(
 	wg *sync.WaitGroup,
 	entry *abrMixerEntry,
 	downstreamCode, audioBufID domain.StreamCode,
-	audioIsABR bool,
+	audioBufferIsTS bool,
 	downBufIDs []domain.StreamCode,
 ) {
 	defer wg.Done()
@@ -414,7 +425,7 @@ func (c *Coordinator) runABRMixerAudioFanOut(
 		if err := ctx.Err(); err != nil {
 			return
 		}
-		if c.abrMixerAudioForward(ctx, entry, audioBufID, audioIsABR, downBufIDs) {
+		if c.abrMixerAudioForward(ctx, entry, audioBufID, audioBufferIsTS, downBufIDs) {
 			return
 		}
 		slog.Info("coordinator: abr mixer audio fan-out reconnecting",
@@ -439,14 +450,21 @@ func (c *Coordinator) runABRMixerAudioFanOut(
 // abrMixerAudioForward runs one subscribe-or-demux cycle for the audio
 // source and fans audio AVPackets out to all downstream rendition buffers.
 // Returns true on ctx cancellation.
+//
+// audioBufferIsTS dispatches between two reader strategies. The "ABR" path is
+// just the TS-demuxer-over-buffer path — it works for any source whose buffer
+// holds raw TS bytes, not only ABR upstreams. The "Direct" path is the legacy
+// pkt.AV subscriber, used only when the upstream is RTSP/RTMP with no
+// transcoder (the only configuration where the main buffer carries
+// AVPackets after the raw-TS-passthrough refactor).
 func (c *Coordinator) abrMixerAudioForward(
 	ctx context.Context,
 	entry *abrMixerEntry,
 	audioBufID domain.StreamCode,
-	audioIsABR bool,
+	audioBufferIsTS bool,
 	downBufIDs []domain.StreamCode,
 ) bool {
-	if audioIsABR {
+	if audioBufferIsTS {
 		return c.abrMixerAudioForwardABR(ctx, entry, audioBufID, downBufIDs)
 	}
 	return c.abrMixerAudioForwardDirect(ctx, entry, audioBufID, downBufIDs)
