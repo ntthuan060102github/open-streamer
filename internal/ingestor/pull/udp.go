@@ -340,9 +340,33 @@ func stripRTPHeader(pkt []byte) []byte {
 
 // joinMulticast joins the multicast group encoded in addr when addr.IP is a
 // multicast address.  No-op for unicast addresses.
+//
+// IPv4 ASM with an explicit interface routes through joinIPv4ASMByIfaceName
+// — that helper avoids `net.InterfaceByName` (which itself enumerates
+// interfaces via netlink and fails on hosts with IPv6 disabled via sysctl)
+// and the x/net/ipv4 join path. Other paths (SSM, IPv6, no-iface) continue
+// to use the standard library.
 func (r *UDPReader) joinMulticast(conn *net.UDPConn, addr *net.UDPAddr) error {
 	if !addr.IP.IsMulticast() {
 		return nil
+	}
+
+	if addr.IP.To4() != nil {
+		if r.opts.source == "" && r.opts.iface != "" {
+			// Plain ASM with explicit interface — fast path that bypasses
+			// netlink entirely on Linux.
+			return joinIPv4ASMByIfaceName(conn, addr.IP, r.opts.iface)
+		}
+		// SSM, or no interface specified, or non-Linux — go through stdlib.
+		var iface *net.Interface
+		if r.opts.iface != "" {
+			var err error
+			iface, err = net.InterfaceByName(r.opts.iface)
+			if err != nil {
+				return fmt.Errorf("interface %q: %w", r.opts.iface, err)
+			}
+		}
+		return r.joinIPv4(conn, addr, iface)
 	}
 
 	var iface *net.Interface
@@ -353,37 +377,25 @@ func (r *UDPReader) joinMulticast(conn *net.UDPConn, addr *net.UDPAddr) error {
 			return fmt.Errorf("interface %q: %w", r.opts.iface, err)
 		}
 	}
-
-	if addr.IP.To4() != nil {
-		return r.joinIPv4(conn, addr, iface)
-	}
 	return r.joinIPv6(conn, addr, iface)
 }
 
-// joinIPv4 issues an IGMP join for the given group on conn.
+// joinIPv4 handles paths NOT covered by the joinMulticast fast-path:
+//   - SSM (?source=): always routed through golang.org/x/net/ipv4.
+//   - Plain ASM with no interface: nil iface → x/net/ipv4 doesn't touch netlink.
 //
-// SSM (source-specific multicast, ?source=) routes through the higher-level
-// golang.org/x/net/ipv4 API.
-//
-// Plain ASM with an explicit interface goes through joinIPv4ASMWithInterface
-// (Linux: raw setsockopt avoiding the netlink path that fails when the host
-// has IPv6 disabled via sysctl; other OSes: falls back to ipv4.PacketConn).
-// The netlink path was breaking joins on hosts with
-// `net.ipv6.conf.all.disable_ipv6=1` even though we're only doing IPv4 work
-// — the x/net library enumerates AF_INET6 routes during JoinGroup.
+// The "ASM + explicit iface" combination is handled directly in joinMulticast
+// via joinIPv4ASMByIfaceName so it never reaches this function.
 func (r *UDPReader) joinIPv4(conn *net.UDPConn, group *net.UDPAddr, iface *net.Interface) error {
+	pc := ipv4.NewPacketConn(conn)
 	if r.opts.source != "" {
-		pc := ipv4.NewPacketConn(conn)
 		src := net.ParseIP(r.opts.source)
 		if src == nil {
 			return fmt.Errorf("invalid SSM source address %q", r.opts.source)
 		}
 		return pc.JoinSourceSpecificGroup(iface, &net.UDPAddr{IP: group.IP}, &net.UDPAddr{IP: src})
 	}
-	if iface != nil {
-		return joinIPv4ASMWithInterface(conn, group.IP, iface)
-	}
-	return ipv4.NewPacketConn(conn).JoinGroup(nil, &net.UDPAddr{IP: group.IP})
+	return pc.JoinGroup(iface, &net.UDPAddr{IP: group.IP})
 }
 
 // joinIPv6 issues an MLD join for the given group on conn.
