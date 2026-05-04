@@ -70,18 +70,17 @@ func TestScanForH265IRAP_RejectsNonIRAP(t *testing.T) {
 
 // End-to-end: feed the scanner a synthetic TS stream containing PAT, PMT,
 // then a video PES whose payload is an IDR. After feeding, LastIDROffset
-// should point at the byte where the video PES BEGAN — that is what the
-// segmenter splits at.
-func TestTSKeyframeScanner_RecordsIDROffset(t *testing.T) {
+// should point at the PAT preceding the IDR — that is what the segmenter
+// splits at, so the next segment opens with PAT → PMT → IDR (the canonical
+// clean-start sequence a player needs to begin decoding from byte 0).
+func TestTSKeyframeScanner_RecordsIDROffsetAtPAT(t *testing.T) {
 	t.Parallel()
 	s := newTSKeyframeScanner()
 
-	patPkt := buildPATPacket(0x1000)            // PMT PID = 0x1000
-	pmtPkt := buildPMTPacket(0x1000, 0x101, 27) // video PID = 0x101, H.264
-	idrPesPkt := buildVideoPESWithIDR(0x101)
-	// A second PUSI=1 packet on the same video PID FINALIZES the previous
-	// PES — the scanner only checks completed PES.
-	nextPkt := buildVideoPESWithIDR(0x101)
+	patPkt := buildPATPacket(0x1000)            // packet 0  (PAT)
+	pmtPkt := buildPMTPacket(0x1000, 0x101, 27) // packet 1  (PMT)
+	idrPesPkt := buildVideoPESWithIDR(0x101)    // packet 2  (IDR PES start)
+	nextPkt := buildVideoPESWithIDR(0x101)      // packet 3  (finalises packet 2)
 
 	s.Feed(patPkt)
 	s.Feed(pmtPkt)
@@ -90,8 +89,56 @@ func TestTSKeyframeScanner_RecordsIDROffset(t *testing.T) {
 
 	require.Equal(t, domain.AVCodecH264, s.videoCodec)
 	require.Equal(t, uint16(0x101), s.videoPID)
-	// IDR PES started at offset 376 (= 2 × 188 bytes for PAT + PMT).
-	require.Equal(t, int64(376), s.LastIDROffset)
+	// Boundary anchored at PAT (offset 0), not at IDR PES start (376) —
+	// next segment will replay PAT → PMT → IDR cleanly.
+	require.Equal(t, int64(0), s.LastIDROffset)
+}
+
+// When PAT is far in the past (> patIDRMaxGap from the IDR), the scanner
+// falls back to using the IDR PES start as the split point instead of
+// reaching back to a stale PAT. Better to start a segment slightly without
+// PSI than to include a huge prefix of stale-PAT-then-stream bytes.
+func TestTSKeyframeScanner_FallsBackToIDROffsetWhenPATTooFar(t *testing.T) {
+	t.Parallel()
+	s := newTSKeyframeScanner()
+
+	s.Feed(buildPATPacket(0x1000))
+	s.Feed(buildPMTPacket(0x1000, 0x101, 27))
+	// Pad with 2000 video packets (~376 KB > patIDRMaxGap=256 KB) so the
+	// PAT becomes "stale" before the IDR arrives.
+	pad := buildVideoNonIDR(0x101)
+	for range 2000 {
+		s.Feed(pad)
+	}
+	s.Feed(buildVideoPESWithIDR(0x101))
+	s.Feed(buildVideoPESWithIDR(0x101))
+
+	// Expected: boundary == IDR PES start (NOT the stale PAT at offset 0).
+	// IDR PES is at packet index 2002 (PAT + PMT + 2000 pad).
+	require.Equal(t, int64(2002*188), s.LastIDROffset)
+}
+
+// buildVideoNonIDR mirrors buildVideoPESWithIDR but uses NAL type 1 (P/B
+// slice) so the scanner does NOT treat the PES as a keyframe.
+func buildVideoNonIDR(videoPID uint16) []byte {
+	pkt := make([]byte, 188)
+	pkt[0] = 0x47
+	pkt[1] = 0x40 | byte(videoPID>>8)
+	pkt[2] = byte(videoPID & 0xFF)
+	pkt[3] = 0x10
+	off := 4
+	pesHdr := []byte{
+		0x00, 0x00, 0x01, 0xE0, 0x00, 0x00,
+		0x80, 0x80, 0x05, 0x21, 0x00, 0x01, 0x00, 0x01,
+	}
+	copy(pkt[off:], pesHdr)
+	off += len(pesHdr)
+	nonIDR := []byte{0x00, 0x00, 0x00, 0x01, 0x41, 0xAA} // type 1 = P/B slice
+	copy(pkt[off:], nonIDR)
+	for i := off + len(nonIDR); i < 188; i++ {
+		pkt[i] = 0xFF
+	}
+	return pkt
 }
 
 // ─── Helpers — build minimal MPEG-TS packets for the test above ──────────
@@ -159,6 +206,7 @@ func buildPMTPacket(pmtPID, videoPID uint16, streamType byte) []byte {
 	return pkt
 }
 
+//nolint:unparam // tests pass 0x101 today; keep arg for symmetry with buildPMTPacket / buildVideoNonIDR
 func buildVideoPESWithIDR(videoPID uint16) []byte {
 	pkt := make([]byte, 188)
 	pkt[0] = 0x47

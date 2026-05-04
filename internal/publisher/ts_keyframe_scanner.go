@@ -52,19 +52,35 @@ type tsKeyframeScanner struct {
 	// offset reports.
 	feedOffset int64
 
+	// lastPATOffset is the offset of the most recent PAT packet seen. Used
+	// as the segment boundary (split point) when an IDR follows shortly
+	// after — that way the next segment starts with PAT → PMT → IDR, the
+	// canonical clean-start sequence a player needs to begin decoding.
+	// -1 = no PAT seen yet.
+	lastPATOffset int64
+
 	// pesBuf accumulates the active video PES payload (between two PUSI=1
 	// packets on videoPID). On the *next* PUSI=1 we scan it for IDR.
 	pesBuf         []byte
 	pesStartOffset int64 // byte offset of the TS packet that started the PES
 
-	// LastIDROffset is updated when a completed PES is identified as IDR.
-	// Caller polls / compares to detect new IDR boundaries.
-	LastIDROffset int64 // -1 = none seen yet
+	// LastIDROffset is the segment boundary offset for the most recent IDR
+	// — i.e. the offset of the PAT *preceding* the IDR PES, not the PES
+	// itself. The segmenter splits there so the new segment opens with the
+	// natural PAT → PMT → IDR sequence the source emits. -1 = none yet.
+	LastIDROffset int64
 }
 
 func newTSKeyframeScanner() *tsKeyframeScanner {
-	return &tsKeyframeScanner{LastIDROffset: -1}
+	return &tsKeyframeScanner{LastIDROffset: -1, lastPATOffset: -1}
 }
+
+// patIDRMaxGap caps how far back from the IDR PES we look for the most recent
+// PAT. Most encoders interleave PAT/PMT every 100 ms — well within 100 KB at
+// even 8 Mbps. If lastPATOffset is older than this we fall back to using the
+// IDR offset itself as the split point (still better than mid-PES, just no
+// PSI at the very start until the next PAT cycle).
+const patIDRMaxGap int64 = 256 * 1024
 
 // Feed processes a chunk of MPEG-TS bytes. The chunk MUST be 188-aligned
 // starting from byte 0 (the segmenter's alignedFeed already enforces this).
@@ -84,8 +100,13 @@ func (s *tsKeyframeScanner) process188(pkt []byte) {
 	pid := uint16(pkt[1]&0x1F)<<8 | uint16(pkt[2])
 
 	switch {
-	case pid == 0 && pusi:
-		s.parsePAT(pkt)
+	case pid == 0:
+		// Track every PAT packet's offset (not just the first PUSI=1) — the
+		// segment-split logic needs the most recent PAT before each IDR.
+		s.lastPATOffset = s.feedOffset
+		if pusi {
+			s.parsePAT(pkt)
+		}
 	case s.pmtPID != 0 && pid == s.pmtPID && pusi:
 		s.parsePMT(pkt)
 	case s.videoPID != 0 && pid == s.videoPID:
@@ -104,7 +125,18 @@ func (s *tsKeyframeScanner) process188(pkt []byte) {
 func (s *tsKeyframeScanner) processVideoPacket(pkt []byte, pusi bool) {
 	if pusi {
 		if len(s.pesBuf) > 0 && s.isIDR(s.pesBuf) {
-			s.LastIDROffset = s.pesStartOffset
+			// Prefer splitting at the PAT immediately preceding the IDR, so
+			// the next segment starts with the natural PAT → PMT → IDR
+			// sequence the source emits. This is what lets a player decode
+			// from byte 0 of the segment instead of waiting for the next
+			// PSI cycle (which can be 10+ MB into a high-bitrate segment).
+			boundary := s.pesStartOffset
+			if s.lastPATOffset >= 0 &&
+				s.lastPATOffset <= s.pesStartOffset &&
+				s.pesStartOffset-s.lastPATOffset <= patIDRMaxGap {
+				boundary = s.lastPATOffset
+			}
+			s.LastIDROffset = boundary
 		}
 		s.pesBuf = s.pesBuf[:0]
 		s.pesStartOffset = s.feedOffset
