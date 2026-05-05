@@ -1,240 +1,188 @@
 package pull
 
-// rtmp.go — RTMP pull ingestor using gomedia/go-rtmp.
+// rtmp.go — RTMP pull ingestor using q191201771/lal/pkg/rtmp.
 //
-// Migrated from nareix/joy4 (last commit 2020, no Enhanced RTMP support)
-// to gomedia/go-rtmp so the reader recognises modern codecs over RTMP:
+// Migrated from yapingcat/gomedia/go-rtmp after that library exposed a
+// process-killing panic on AMF type bytes outside the AMF0/AMF3 spec
+// range (Flussonic and other production servers send vendor-specific
+// extensions in connect responses). lal's rtmp parser tolerates those
+// gracefully and the rest of our codebase already trusts lal for the
+// outbound RTMP push path — consolidating on a single library removes
+// dependency duplication.
 //
-//   - H.264 (codec ID 7, original RTMP)
-//   - H.265 / HEVC (codec ID 12, Enhanced RTMP "hvc1" / "hev1")
-//   - AAC (codec ID 10, original RTMP)
+// Frame format work this reader does on top of lal:
 //
-// Frame format guarantees from gomedia (see go-flv/flv-demuxer.go):
+//   - Video sequence headers (AVC / HEVC, both classic and Enhanced RTMP):
+//     parse out SPS / PPS / VPS, build an Annex-B prefix, store it. On
+//     every IDR NALU we prepend the prefix so downstream decoders can
+//     initialise from a single frame without external codec config.
+//   - Video NALUs: AVCC length-prefix (4-byte BE) → Annex-B start codes.
+//   - Audio AAC sequence headers: parse AudioSpecificConfig, store an
+//     AscContext for ADTS generation.
+//   - Audio AAC raw frames: prepend a 7-byte ADTS header.
 //
-//   - H.264 / H.265 access units arrive in Annex-B form with SPS/PPS
-//     (and VPS for H.265) already prepended on every IDR. We do NOT need
-//     to extract codec config from a Streams() probe — gomedia tracks
-//     the sequence header internally and re-emits it on each keyframe.
-//   - AAC frames arrive with the 7-byte ADTS header already prepended
-//     (gomedia stores the AudioSpecificConfig from the sequence header
-//     and wraps every subsequent frame).
-//
-// This eliminates the manual AVCC→Annex-B conversion, manual SPS/PPS
-// prefix tracking, and manual ADTS wrapping the joy4 path used to do.
-//
-// I/O architecture differs from joy4: gomedia is push-driven — the user
-// owns the TCP socket and feeds bytes via cli.Input(). We therefore run a
-// single goroutine that reads the TCP socket and forwards bytes to the
-// client; the client invokes OnFrame on that same goroutine for each
-// decoded access unit, which we wrap into a domain.AVPacket and send to
-// a buffered channel that ReadPackets drains.
+// Lifecycle: NewRTMPReader → Open (TCP dial via lal + RTMP handshake +
+// play negotiation, blocks until first AV frame is imminent) → ReadPackets
+// loop → Close. Open errors out cleanly without leaking goroutines on
+// dial / handshake / play-start failures. Close is idempotent.
 
 import (
 	"context"
-	"errors"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/yapingcat/gomedia/go-codec"
-	gomediartmp "github.com/yapingcat/gomedia/go-rtmp"
+	"github.com/q191201771/lal/pkg/aac"
+	"github.com/q191201771/lal/pkg/avc"
+	"github.com/q191201771/lal/pkg/base"
+	"github.com/q191201771/lal/pkg/hevc"
+	"github.com/q191201771/lal/pkg/rtmp"
 
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 )
 
-// rtmpChanSize is the buffered AVPacket channel depth between the network
-// read goroutine and ReadPackets. 16384 packets ≈ several seconds at the
-// highest bitrates we expect — gives ReadPackets ample slack across GC
-// pauses while bounding memory at ~16 MB worst-case.
+// rtmpChanSize is the buffered AVPacket channel depth between the lal
+// session goroutine and ReadPackets. 16384 packets ≈ several seconds at
+// the highest bitrates we expect — gives ReadPackets ample slack across
+// GC pauses while bounding memory at ~16 MB worst-case.
 const rtmpChanSize = 16384
 
-// rtmpReadBufSize is the per-syscall TCP read buffer fed into the gomedia
-// client. 32 KiB matches the upstream test suite's value and is a sweet
-// spot for reasonable RTMP bitrates without too many syscalls.
-const rtmpReadBufSize = 32 * 1024
-
 // rtmpDefaultDialTimeout caps the TCP dial + RTMP handshake + play-start
-// negotiation. Once Open returns the connection runs unbounded; this only
-// guards the initial setup.
+// negotiation. After Open returns the connection runs unbounded; this
+// only guards initial setup. Mirrored into lal as PullTimeoutMs.
 const rtmpDefaultDialTimeout = 10 * time.Second
-
-// rtmpPlayStartCode is the gomedia OnStatus event that signals the play
-// command was accepted by the server and frames are about to start
-// flowing. Open blocks until either this fires or the negotiation errors.
-const rtmpPlayStartCode = "NetStream.Play.Start"
 
 // RTMPReader pulls a remote RTMP play stream and emits domain.AVPacket.
 //
-// Lifecycle: NewRTMPReader → Open (TCP dial + RTMP handshake + play
-// negotiation, blocks until first frame is imminent) → ReadPackets loop →
-// Close. Open errors out cleanly without leaking goroutines on dial /
-// handshake / play-start failures. Close is idempotent; concurrent calls
-// from the worker (failover) and Read loop are safe.
+// Owns one lal PullSession plus a goroutine that waits on its WaitChan
+// to detect server disconnect. The OnReadRtmpAvMsg callback runs on
+// lal's internal read goroutine; we convert each RtmpMsg into AVPacket(s)
+// and push to the buffered pkts channel that ReadPackets drains.
 type RTMPReader struct {
 	input domain.Input
 
-	mu   sync.Mutex
-	conn net.Conn
-	cli  *gomediartmp.RtmpClient
-
+	mu      sync.Mutex
+	session *rtmp.PullSession
 	pkts    chan domain.AVPacket
-	done    chan struct{}
-	pumpWg  sync.WaitGroup
-	closing bool
+	closing atomic.Bool
+	closeWg sync.WaitGroup
+
+	// Codec config state — populated on each sequence-header message and
+	// applied to every subsequent frame on the same codec. Reset on Close
+	// so reconnection cycles re-learn from the new sequence headers.
+	avcAnnexbPrefix  []byte // SPS+PPS in Annex-B, prepended to AVC IDR
+	hevcAnnexbPrefix []byte // VPS+SPS+PPS in Annex-B, prepended to HEVC IDR
+	aacCtx           *aac.AscContext
 }
 
-// NewRTMPReader constructs a reader for the given input without opening
-// any connections. URL parse / dial happens in Open.
+// NewRTMPReader constructs a reader for input without opening any
+// connections. URL parse / dial / handshake happens in Open.
 func NewRTMPReader(input domain.Input) *RTMPReader {
 	return &RTMPReader{input: input}
 }
 
 // Open dials the upstream, completes the RTMP handshake, sends the play
-// command, and waits for NetStream.Play.Start before returning. After this
-// returns nil, ReadPackets is ready to drain frames.
+// command, and blocks until lal confirms play-start (or the configured
+// timeout fires). After this returns nil, ReadPackets is ready to drain
+// frames.
 func (r *RTMPReader) Open(ctx context.Context) error {
-	hostPort, err := rtmpHostPort(r.input.URL)
-	if err != nil {
-		return err
-	}
-
 	dialTimeout := rtmpDefaultDialTimeout
 	if r.input.Net.TimeoutSec > 0 {
 		dialTimeout = time.Duration(r.input.Net.TimeoutSec) * time.Second
 	}
 
-	dialer := &net.Dialer{Timeout: dialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
-	if err != nil {
-		return fmt.Errorf("rtmp reader: dial %q: %w", hostPort, err)
-	}
-
 	pkts := make(chan domain.AVPacket, rtmpChanSize)
-	done := make(chan struct{})
-	playStart := make(chan struct{}, 1)
-	openErr := make(chan error, 1)
 
-	cli := gomediartmp.NewRtmpClient(gomediartmp.WithComplexHandshake())
-
-	cli.OnError(func(code, describe string) {
-		slog.Warn("rtmp reader: protocol error",
-			"url", r.input.URL, "code", code, "describe", describe)
-		select {
-		case openErr <- fmt.Errorf("rtmp reader: %s: %s", code, describe):
-		default:
-		}
+	session := rtmp.NewPullSession(func(opt *rtmp.PullSessionOption) {
+		opt.PullTimeoutMs = int(dialTimeout / time.Millisecond)
+		// ReadAvTimeoutMs=0 (no per-read AV timeout). Stream-level liveness
+		// is enforced by the manager's input_packet_timeout_sec rather than
+		// at the lal layer; conflating the two would race on packet bursts.
+		opt.ReadAvTimeoutMs = 0
+		opt.HandshakeComplexFlag = true
+		// ReuseReadMessageBufferFlag=false: lal otherwise re-uses one buffer
+		// across callbacks. We need to keep frame bytes alive past the
+		// callback (they end up in AVPackets on the buffer hub), so opt out
+		// of buffer reuse to avoid corruption.
+		opt.ReuseReadMessageBufferFlag = false
+		// rtmps:// URLs land on this path; lal applies TLS automatically
+		// when Pull(url) sees scheme=rtmps. Custom CA bundles need a
+		// non-nil TlsConfig — we accept the system-default for now.
+		opt.TlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	})
 
-	cli.OnStatus(func(code, level, describe string) {
-		slog.Debug("rtmp reader: status",
-			"url", r.input.URL, "code", code, "level", level, "describe", describe)
-		if code == rtmpPlayStartCode && level == "status" {
-			select {
-			case playStart <- struct{}{}:
-			default:
-			}
-		}
-	})
-
-	cli.OnFrame(func(cid codec.CodecID, pts, dts uint32, frame []byte) {
-		emitRTMPFrame(cid, frame, pts, dts, pkts, done)
-	})
-
-	cli.SetOutput(func(data []byte) error {
-		_, werr := conn.Write(data)
-		return werr
+	session.WithOnReadRtmpAvMsg(func(msg base.RtmpMsg) {
+		r.handleRtmpMsg(msg, pkts)
 	})
 
 	r.mu.Lock()
-	r.conn = conn
-	r.cli = cli
+	r.session = session
 	r.pkts = pkts
-	r.done = done
-	r.closing = false
+	r.closing.Store(false)
 	r.mu.Unlock()
 
-	// Spawn the network read pump BEFORE Start so RTMP control responses
-	// reach the client and trigger the play-start status event.
-	r.pumpWg.Add(1)
-	go r.readPump(pkts, done)
-
-	cli.Start(r.input.URL)
+	// lal Pull blocks until either play-start succeeds or an error.
+	// Run with our context so caller cancellation aborts the dial.
+	pullErr := make(chan error, 1)
+	go func() {
+		pullErr <- session.Pull(r.input.URL)
+	}()
 
 	select {
-	case <-playStart:
-		return nil
-	case err := <-openErr:
-		r.abortOpen()
-		return err
+	case err := <-pullErr:
+		if err != nil {
+			r.abortOpen()
+			return fmt.Errorf("rtmp reader: pull %q: %w", r.input.URL, err)
+		}
 	case <-ctx.Done():
 		r.abortOpen()
 		return ctx.Err()
-	case <-time.After(dialTimeout):
+	case <-time.After(dialTimeout + 2*time.Second):
 		r.abortOpen()
-		return fmt.Errorf("rtmp reader: play-start timeout after %s", dialTimeout)
+		return fmt.Errorf("rtmp reader: pull-start timeout after %s", dialTimeout)
 	}
+
+	// Spawn a watcher that closes the pkts channel when lal's session
+	// terminates (server disconnect / network error). ReadPackets then
+	// returns io.EOF so the worker reconnects via the standard backoff.
+	r.closeWg.Add(1)
+	go r.watchSessionEnd(session, pkts)
+
+	return nil
 }
 
-// readPump reads bytes from the TCP connection and feeds them into the
-// gomedia client. Exits when the connection closes (EOF, network error,
-// or Close-driven local close). The frame callback registered via
-// cli.OnFrame runs on this goroutine.
-func (r *RTMPReader) readPump(pkts chan<- domain.AVPacket, done <-chan struct{}) {
-	defer r.pumpWg.Done()
-	defer func() {
-		// Drain-by-close so ReadPackets unblocks with io.EOF.
-		r.mu.Lock()
-		// Only close if we haven't already done so via Close — closing a
-		// closed channel panics.
-		if !r.closing {
-			r.closing = true
-			close(pkts)
-		}
-		r.mu.Unlock()
-	}()
-
-	buf := make([]byte, rtmpReadBufSize)
-	for {
-		select {
-		case <-done:
-			return
-		default:
-		}
-		n, err := r.conn.Read(buf)
-		if n > 0 {
-			if inputErr := r.cli.Input(buf[:n]); inputErr != nil {
-				slog.Debug("rtmp reader: client input error",
-					"url", r.input.URL, "err", inputErr)
-				return
-			}
-		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) && !isClosedConn(err) {
-				slog.Debug("rtmp reader: tcp read ended",
-					"url", r.input.URL, "err", err)
-			}
-			return
-		}
-		_ = pkts // silence unused if select branch didn't run
+// watchSessionEnd waits for lal's session WaitChan (server-driven exit)
+// then closes pkts, unblocking ReadPackets with io.EOF.
+func (r *RTMPReader) watchSessionEnd(session *rtmp.PullSession, pkts chan<- domain.AVPacket) {
+	defer r.closeWg.Done()
+	if err := <-session.WaitChan(); err != nil {
+		// Session-end errors are routine here — server disconnect or our
+		// own Dispose during Close. Logged at Debug because the worker's
+		// reconnect-with-backoff handles the recovery without operator
+		// involvement.
+		slog.Debug("rtmp reader: session ended", "url", r.input.URL, "err", err)
 	}
+	r.mu.Lock()
+	if !r.closing.Load() {
+		r.closing.Store(true)
+		close(pkts)
+	}
+	r.mu.Unlock()
 }
 
-// abortOpen tears down a partial Open — used by Open's error paths so the
-// caller doesn't have to track which side effects happened. Safe even
-// when the read pump has already exited.
+// abortOpen tears down a partial Open. Idempotent.
 func (r *RTMPReader) abortOpen() {
 	r.mu.Lock()
-	conn := r.conn
-	r.conn = nil
+	session := r.session
+	r.session = nil
 	r.mu.Unlock()
-	if conn != nil {
-		_ = conn.Close()
+	if session != nil {
+		_ = session.Dispose()
 	}
-	r.pumpWg.Wait()
 }
 
 // ReadPackets blocks until at least one AVPacket is available, then drains
@@ -272,201 +220,211 @@ func (r *RTMPReader) ReadPackets(ctx context.Context) ([]domain.AVPacket, error)
 	}
 }
 
-// Close tears down the RTMP connection and waits for the read pump to
-// exit. Idempotent.
+// Close tears down the RTMP session and waits for the watcher goroutine
+// to exit. Idempotent.
 func (r *RTMPReader) Close() error {
 	r.mu.Lock()
-	conn := r.conn
-	r.conn = nil
-	closing := r.closing
-	r.closing = true
-	r.mu.Unlock()
-
-	if conn != nil {
-		_ = conn.Close()
-	}
-	r.pumpWg.Wait()
-
-	r.mu.Lock()
+	session := r.session
+	r.session = nil
 	pkts := r.pkts
 	r.pkts = nil
+	closing := r.closing.Swap(true)
 	r.mu.Unlock()
+
+	if session != nil {
+		_ = session.Dispose()
+	}
+	r.closeWg.Wait()
+
 	if !closing && pkts != nil {
-		// Read pump's deferred close didn't run yet (rare race) — close
-		// here to unblock any waiting ReadPackets.
+		// Watcher's deferred close didn't fire (rare race, typically Close
+		// before any frame). Close defensively.
 		safeClosePktChan(pkts)
 	}
 	return nil
 }
 
-// emitRTMPFrame translates a gomedia OnFrame callback into a domain.AVPacket
-// and pushes it onto the buffered channel. Drops silently when done is
-// closed (rather than blocking the network read goroutine forever).
-func emitRTMPFrame(
-	cid codec.CodecID,
-	frame []byte,
-	pts, dts uint32,
-	pkts chan<- domain.AVPacket,
-	done <-chan struct{},
-) {
-	if len(frame) == 0 {
+// handleRtmpMsg is invoked on lal's read goroutine for every RTMP AV
+// message. Dispatches to per-codec converters that emit zero or more
+// AVPackets onto pkts.
+func (r *RTMPReader) handleRtmpMsg(msg base.RtmpMsg, pkts chan<- domain.AVPacket) {
+	if r.closing.Load() {
 		return
 	}
-	p, ok := buildRTMPAVPacket(cid, frame, pts, dts)
-	if !ok {
+	switch msg.Header.MsgTypeId {
+	case base.RtmpTypeIdVideo:
+		r.handleVideoMsg(msg, pkts)
+	case base.RtmpTypeIdAudio:
+		r.handleAudioMsg(msg, pkts)
+	}
+}
+
+// handleVideoMsg converts an RTMP video message into Annex-B-shaped
+// AVPackets. Sequence headers update the SPS/PPS/VPS prefix in place
+// and emit nothing; NALU messages are converted from AVCC and prepended
+// with the prefix on IDR.
+func (r *RTMPReader) handleVideoMsg(msg base.RtmpMsg, pkts chan<- domain.AVPacket) {
+	if len(msg.Payload) < 5 {
 		return
 	}
+	codecID := msg.VideoCodecId()
+
+	if msg.IsVideoKeySeqHeader() {
+		r.captureVideoSeqHeader(msg, codecID)
+		return
+	}
+
+	avccData := videoMsgAvccPayload(msg)
+	if len(avccData) == 0 {
+		return
+	}
+
+	var (
+		annexB []byte
+		err    error
+		codec  domain.AVCodec
+		prefix []byte
+	)
+	switch codecID {
+	case base.RtmpCodecIdAvc:
+		codec = domain.AVCodecH264
+		prefix = r.avcAnnexbPrefix
+	case base.RtmpCodecIdHevc:
+		codec = domain.AVCodecH265
+		prefix = r.hevcAnnexbPrefix
+	default:
+		return // unsupported codec — silently drop (Sorenson, VP6, etc.)
+	}
+
+	annexB, err = avc.Avcc2Annexb(avccData)
+	if err != nil || len(annexB) == 0 {
+		return
+	}
+
+	isKey := msg.IsVideoKeyNalu()
+	data := annexB
+	if isKey && len(prefix) > 0 {
+		data = make([]byte, 0, len(prefix)+len(annexB))
+		data = append(data, prefix...)
+		data = append(data, annexB...)
+	}
+
+	dts := uint64(msg.Header.TimestampAbs)
+	pts := dts + uint64(msg.Cts())
+	emitRTMPPacket(pkts, &r.closing, domain.AVPacket{
+		Codec:    codec,
+		Data:     data,
+		PTSms:    pts,
+		DTSms:    dts,
+		KeyFrame: isKey,
+	})
+}
+
+// captureVideoSeqHeader parses the codec configuration record from a
+// video sequence-header message and stores the corresponding Annex-B
+// SPS / PPS (or VPS+SPS+PPS) prefix for later prepend on IDR.
+func (r *RTMPReader) captureVideoSeqHeader(msg base.RtmpMsg, codecID uint8) {
+	// Sequence header payload starts at byte 5 (FrameType+CodecId byte +
+	// AVCPacketType byte + CompositionTime 3 bytes) for non-Enhanced.
+	// For Enhanced HEVC the layout is different — VpsSpsPpsEnhancedSeqHeader2Annexb
+	// understands both shapes.
+	switch codecID {
+	case base.RtmpCodecIdAvc:
+		annexB, err := avc.SpsPpsSeqHeader2Annexb(msg.Payload[5:])
+		if err == nil {
+			r.avcAnnexbPrefix = annexB
+		}
+	case base.RtmpCodecIdHevc:
+		var annexB []byte
+		var err error
+		if msg.IsEnhanced() {
+			annexB, err = hevc.VpsSpsPpsEnhancedSeqHeader2Annexb(msg.Payload)
+		} else {
+			annexB, err = hevc.VpsSpsPpsSeqHeader2Annexb(msg.Payload[5:])
+		}
+		if err == nil {
+			r.hevcAnnexbPrefix = annexB
+		}
+	}
+}
+
+// videoMsgAvccPayload returns the AVCC-formatted NALU bytes from a video
+// message, accounting for the difference between classic and Enhanced
+// RTMP framing. Returns nil when the message is not a NALU carrier.
+func videoMsgAvccPayload(msg base.RtmpMsg) []byte {
+	if msg.IsEnhanced() {
+		idx := msg.GetEnchanedHevcNaluIndex()
+		if idx == 0 || idx >= len(msg.Payload) {
+			return nil
+		}
+		return msg.Payload[idx:]
+	}
+	// Classic: byte 0 (FrameType+CodecId) + byte 1 (PacketType) + bytes
+	// 2-4 (CompositionTime) + AVCC NAL units.
+	if len(msg.Payload) <= 5 {
+		return nil
+	}
+	return msg.Payload[5:]
+}
+
+// handleAudioMsg converts an RTMP audio message into an ADTS-prefixed
+// AAC AVPacket. AAC sequence headers update the AscContext in place and
+// emit nothing; raw frames are wrapped with the ADTS header derived from
+// the stored ASC. Non-AAC audio is silently dropped (legacy RTMP audio
+// codecs aren't surfaced through this pipeline).
+func (r *RTMPReader) handleAudioMsg(msg base.RtmpMsg, pkts chan<- domain.AVPacket) {
+	if len(msg.Payload) < 2 {
+		return
+	}
+	if msg.AudioCodecId() != base.RtmpSoundFormatAac {
+		return
+	}
+	if msg.IsAacSeqHeader() {
+		ctx, err := aac.NewAscContext(msg.Payload[2:])
+		if err == nil {
+			r.aacCtx = ctx
+		}
+		return
+	}
+	if r.aacCtx == nil {
+		return // no codec config seen yet — drop until seq header arrives
+	}
+	rawAAC := msg.Payload[2:]
+	if len(rawAAC) == 0 {
+		return
+	}
+	adtsHeader := r.aacCtx.PackAdtsHeader(len(rawAAC))
+	out := make([]byte, 0, len(adtsHeader)+len(rawAAC))
+	out = append(out, adtsHeader...)
+	out = append(out, rawAAC...)
+
+	dts := uint64(msg.Header.TimestampAbs)
+	emitRTMPPacket(pkts, &r.closing, domain.AVPacket{
+		Codec: domain.AVCodecAAC,
+		Data:  out,
+		PTSms: dts,
+		DTSms: dts,
+	})
+}
+
+// emitRTMPPacket sends p onto pkts unless the reader is closing. Drops
+// silently on closed channel to keep lal's read goroutine from panicking.
+func emitRTMPPacket(pkts chan<- domain.AVPacket, closing *atomic.Bool, p domain.AVPacket) {
+	if closing.Load() {
+		return
+	}
+	defer func() { _ = recover() }() // guard against close race
 	select {
 	case pkts <- p:
-	case <-done:
+	default:
+		// Channel full — drop to keep lal's read goroutine unblocked.
+		// The buffer hub fan-out has the same drop policy by design.
 	}
 }
 
-// buildRTMPAVPacket maps a gomedia codec ID to a domain.AVPacket. Returns
-// ok=false for codecs we don't surface (legacy RTMP audio formats, future
-// Enhanced RTMP additions we haven't wired yet).
-//
-//nolint:exhaustive // VP8 / G711 / Opus / MP3 over RTMP are intentionally dropped — see roadmap in docs/CODEC.md.
-func buildRTMPAVPacket(
-	cid codec.CodecID,
-	frame []byte,
-	pts, dts uint32,
-) (domain.AVPacket, bool) {
-	switch cid {
-	case codec.CODECID_VIDEO_H264:
-		return domain.AVPacket{
-			Codec:    domain.AVCodecH264,
-			Data:     frame,
-			PTSms:    uint64(pts),
-			DTSms:    uint64(dts),
-			KeyFrame: isH264IDRAnnexB(frame),
-		}, true
-	case codec.CODECID_VIDEO_H265:
-		return domain.AVPacket{
-			Codec:    domain.AVCodecH265,
-			Data:     frame,
-			PTSms:    uint64(pts),
-			DTSms:    uint64(dts),
-			KeyFrame: isH265IRAPAnnexB(frame),
-		}, true
-	case codec.CODECID_AUDIO_AAC:
-		return domain.AVPacket{
-			Codec: domain.AVCodecAAC,
-			Data:  frame,
-			PTSms: uint64(pts),
-			DTSms: uint64(dts),
-		}, true
-	}
-	return domain.AVPacket{}, false
-}
-
-// h264NALTypeIDR is the H.264 NAL unit type for IDR slices (per ISO 14496-10).
-// Spelled here instead of using codec.H264_NAL_I_SLICE so the byte-level
-// comparison stays well-typed.
-const h264NALTypeIDR = 5
-
-// isH264IDRAnnexB returns true when the Annex-B byte sequence contains any
-// NAL unit of type 5 (IDR). Walks start codes only — no full NAL parsing.
-func isH264IDRAnnexB(b []byte) bool {
-	for _, t := range walkAnnexBNALTypesH264(b) {
-		if t&0x1F == h264NALTypeIDR {
-			return true
-		}
-	}
-	return false
-}
-
-// isH265IRAPAnnexB returns true when the Annex-B byte sequence contains
-// any IRAP NAL unit (type 16-23) — IDR / CRA / BLA, the access points a
-// HEVC decoder can resync on.
-func isH265IRAPAnnexB(b []byte) bool {
-	for _, t := range walkAnnexBNALTypesH265(b) {
-		if t >= 16 && t <= 23 {
-			return true
-		}
-	}
-	return false
-}
-
-// walkAnnexBNALTypesH264 yields the NAL header byte of each NAL unit in b.
-// Recognises both 3-byte (00 00 01) and 4-byte (00 00 00 01) start codes.
-func walkAnnexBNALTypesH264(b []byte) []byte {
-	out := make([]byte, 0, 4)
-	i := 0
-	for i+3 < len(b) {
-		switch {
-		case b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1:
-			if i+4 < len(b) {
-				out = append(out, b[i+4])
-			}
-			i += 4
-		case b[i] == 0 && b[i+1] == 0 && b[i+2] == 1:
-			if i+3 < len(b) {
-				out = append(out, b[i+3])
-			}
-			i += 3
-		default:
-			i++
-		}
-	}
-	return out
-}
-
-// walkAnnexBNALTypesH265 yields the H.265 NAL type field (top 6 bits of
-// the first NAL header byte after the start code). Distinct from H.264
-// NAL type bits because HEVC uses a 2-byte NAL header where the type is
-// in bits 1-6 of byte 0.
-func walkAnnexBNALTypesH265(b []byte) []byte {
-	out := make([]byte, 0, 4)
-	i := 0
-	for i+3 < len(b) {
-		switch {
-		case b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1:
-			if i+4 < len(b) {
-				out = append(out, (b[i+4]>>1)&0x3F)
-			}
-			i += 4
-		case b[i] == 0 && b[i+1] == 0 && b[i+2] == 1:
-			if i+3 < len(b) {
-				out = append(out, (b[i+3]>>1)&0x3F)
-			}
-			i += 3
-		default:
-			i++
-		}
-	}
-	return out
-}
-
-// rtmpHostPort extracts "host:port" from an rtmp:// URL, defaulting the
-// port to 1935 when omitted. Used because the gomedia client doesn't dial
-// the socket itself — we own it.
-func rtmpHostPort(rawURL string) (string, error) {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return "", fmt.Errorf("rtmp reader: parse url %q: %w", rawURL, err)
-	}
-	host := u.Host
-	if host == "" {
-		return "", fmt.Errorf("rtmp reader: url %q has no host", rawURL)
-	}
-	if _, _, splitErr := net.SplitHostPort(host); splitErr != nil {
-		host = net.JoinHostPort(host, "1935")
-	}
-	return host, nil
-}
-
-// isClosedConn reports whether err is a "use of closed network connection"
-// — the standard-library error returned by net.Conn.Read after Close.
-// Logged at debug level rather than warn because it's the expected exit
-// path on shutdown.
-func isClosedConn(err error) bool {
-	return err != nil && errors.Is(err, net.ErrClosed)
-}
-
-// safeClosePktChan closes the channel if it isn't already closed. Used by
-// Close as a defensive double-close guard for a rare race with the read
-// pump's deferred close.
+// safeClosePktChan closes the channel if it isn't already closed. Used
+// by Close as a defensive double-close guard for a rare race with the
+// session-end watcher's deferred close.
 func safeClosePktChan(ch chan domain.AVPacket) {
 	defer func() { _ = recover() }()
 	close(ch)
