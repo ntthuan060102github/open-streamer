@@ -13,7 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	joyrtmp "github.com/nareix/joy4/format/rtmp"
+	"github.com/yapingcat/gomedia/go-codec"
+	gomediartmp "github.com/yapingcat/gomedia/go-rtmp"
 
 	"github.com/ntt0601zcoder/open-streamer/config"
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
@@ -29,7 +30,14 @@ func requireFFmpeg(t *testing.T) {
 	}
 }
 
-// rtmpTestServer wraps a joy4 RTMP server for testing.
+// rtmpTestServer is a minimal RTMP server built on gomedia/go-rtmp,
+// used solely as the receive sink for our publisher's RTMP push tests.
+// Each accepted connection runs an RtmpServerHandle that completes the
+// RTMP handshake, accepts the publish command, and counts every video /
+// audio frame the server delivers via OnFrame.
+//
+// Replaced an earlier joy4-based server when the rest of the codebase
+// migrated off nareix/joy4 (see internal/ingestor/pull/rtmp.go header).
 type rtmpTestServer struct {
 	port    int
 	packets atomic.Int64
@@ -41,56 +49,85 @@ type rtmpTestServer struct {
 
 	mu       sync.Mutex
 	sessions int32
+
+	listener net.Listener
 }
 
 func newRTMPTestServer(t *testing.T) *rtmpTestServer {
 	t.Helper()
 
-	// Find a free port.
 	lc := &net.ListenConfig{}
 	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
 
 	s := &rtmpTestServer{
 		port:           port,
+		listener:       ln,
 		sessionStarted: make(chan struct{}),
 		secondSession:  make(chan struct{}),
 	}
 
-	srv := &joyrtmp.Server{
-		Addr: fmt.Sprintf("127.0.0.1:%d", port),
-		HandlePublish: func(conn *joyrtmp.Conn) {
-			s.mu.Lock()
-			s.sessions++
-			n := s.sessions
-			s.mu.Unlock()
-
-			if n == 1 {
-				s.startOnce.Do(func() { close(s.sessionStarted) })
-			}
-			if n >= 2 {
-				s.secondOnce.Do(func() { close(s.secondSession) })
-			}
-
-			for {
-				if _, err := conn.ReadPacket(); err != nil {
-					return
-				}
-				s.packets.Add(1)
-			}
-		},
-	}
-
-	go func() { _ = srv.ListenAndServe() }()
-	// Give the server a moment to bind.
-	time.Sleep(100 * time.Millisecond)
+	go s.acceptLoop()
 
 	t.Cleanup(func() {
-		// Server exits when the test tears down the listener via process exit.
+		_ = ln.Close()
 	})
 	return s
+}
+
+// acceptLoop accepts TCP connections and spawns one handler goroutine per
+// connection. Exits cleanly when the listener is closed (test teardown).
+func (s *rtmpTestServer) acceptLoop() {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			return
+		}
+		go s.handleConn(conn)
+	}
+}
+
+// handleConn drives one publish session: RTMP handshake → publish accept →
+// frame loop. Session counting fires from inside OnPublish so the "second
+// session connected" channel reflects the RTMP-publish-state, not just
+// TCP accept (which would race on a partially-established handshake).
+func (s *rtmpTestServer) handleConn(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+
+	handle := gomediartmp.NewRtmpServerHandle()
+	handle.OnPublish(func(_, _ string) gomediartmp.StatusCode {
+		s.mu.Lock()
+		s.sessions++
+		n := s.sessions
+		s.mu.Unlock()
+
+		if n == 1 {
+			s.startOnce.Do(func() { close(s.sessionStarted) })
+		}
+		if n >= 2 {
+			s.secondOnce.Do(func() { close(s.secondSession) })
+		}
+		return gomediartmp.NETSTREAM_PUBLISH_START
+	})
+	handle.SetOutput(func(b []byte) error {
+		_, err := conn.Write(b)
+		return err
+	})
+	handle.OnFrame(func(_ codec.CodecID, _, _ uint32, _ []byte) {
+		s.packets.Add(1)
+	})
+
+	buf := make([]byte, 64*1024)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		if err := handle.Input(buf[:n]); err != nil {
+			return
+		}
+	}
 }
 
 func (s *rtmpTestServer) rtmpURL(path string) string {

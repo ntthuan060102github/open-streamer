@@ -549,7 +549,6 @@ definitions:
     - aac
     - mp2a
     - mp3
-    - opus
     - ac3
     - eac3
     - copy
@@ -561,12 +560,10 @@ definitions:
       AudioCodecEAC3: Dolby Digital Plus — premium HD/UHD broadcast (5.1+)
       AudioCodecMP2: MPEG-1/2 Audio Layer II — DVB broadcast contribution feeds
       AudioCodecMP3: legacy compatibility
-      AudioCodecOpus: best for WebRTC / low-latency
     x-enum-descriptions:
     - default for HLS/DASH
     - MPEG-1/2 Audio Layer II — DVB broadcast contribution feeds
     - legacy compatibility
-    - best for WebRTC / low-latency
     - Dolby Digital — broadcast use
     - Dolby Digital Plus — premium HD/UHD broadcast (5.1+)
     - passthrough — no re-encode
@@ -574,7 +571,6 @@ definitions:
     - AudioCodecAAC
     - AudioCodecMP2
     - AudioCodecMP3
-    - AudioCodecOpus
     - AudioCodecAC3
     - AudioCodecEAC3
     - AudioCodecCopy
@@ -619,6 +615,8 @@ definitions:
     type: object
   domain.EventType:
     enum:
+    - session.opened
+    - session.closed
     - stream.created
     - stream.started
     - stream.stopped
@@ -635,8 +633,6 @@ definitions:
     - transcoder.started
     - transcoder.stopped
     - transcoder.error
-    - session.opened
-    - session.closed
     type: string
     x-enum-comments:
       EventInputConnected: source connected successfully
@@ -645,6 +641,8 @@ definitions:
       EventInputFailover: switched to lower-priority input
       EventInputReconnecting: transient error, retrying
     x-enum-descriptions:
+    - ""
+    - ""
     - ""
     - ""
     - ""
@@ -661,9 +659,9 @@ definitions:
     - ""
     - ""
     - ""
-    - ""
-    - ""
     x-enum-varnames:
+    - EventSessionOpened
+    - EventSessionClosed
     - EventStreamCreated
     - EventStreamStarted
     - EventStreamStopped
@@ -680,8 +678,6 @@ definitions:
     - EventTranscoderStarted
     - EventTranscoderStopped
     - EventTranscoderError
-    - EventSessionOpened
-    - EventSessionClosed
   domain.GlobalConfig:
     properties:
       buffer:
@@ -1368,7 +1364,6 @@ definitions:
     - h264
     - h265
     - av1
-    - vp9
     - mp2v
     - copy
     type: string
@@ -1379,19 +1374,16 @@ definitions:
       VideoCodecH265: HEVC — ~50% smaller than H.264
       VideoCodecMPEG2: MPEG-2 Part 2 — DVB legacy contribution feeds, transmitter
         chains
-      VideoCodecVP9: Google codec, WebRTC-friendly
     x-enum-descriptions:
     - AVC — widest device support
     - HEVC — ~50% smaller than H.264
     - royalty-free, best compression (high CPU)
-    - Google codec, WebRTC-friendly
     - MPEG-2 Part 2 — DVB legacy contribution feeds, transmitter chains
     - passthrough — no re-encode
     x-enum-varnames:
     - VideoCodecH264
     - VideoCodecH265
     - VideoCodecAV1
-    - VideoCodecVP9
     - VideoCodecMPEG2
     - VideoCodecCopy
   domain.VideoProfile:

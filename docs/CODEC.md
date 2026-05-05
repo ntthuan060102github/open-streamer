@@ -39,7 +39,6 @@ not ingest-recognised (you can encode TO it, but the stats panel shows
 | MPEG-1/2 Audio Layer III | `mp3` | ✅ frame parse | ❌ | ❌ | ✅ | ✅ `libmp3lame` | ✅ | ✅ | ✅ |
 | AC-3 (Dolby Digital) | `ac3` | ✅ ATSC + DVB | ❌ | ❌ | ✅ | ✅ `ac3` | ⚠️ skip-with-comment | ❌ (no frame extractor) | ⚠️ Safari/Chrome macOS only |
 | E-AC-3 (Dolby Digital Plus) | `eac3` | ✅ ATSC + DVB | ❌ | ❌ | ✅ | ✅ `eac3` | ⚠️ skip-with-comment | ❌ (no frame extractor) | ⚠️ same as AC-3 |
-| Opus | `opus` | ❌ rare in TS | ❌ | ❌ | ❌ | ✅ `libopus` | ❌ | ❌ | ❌ |
 
 ### TS recognition for audio
 
@@ -61,10 +60,9 @@ not ingest-recognised (you can encode TO it, but the stats panel shows
 | Codec | Label | Ingest TS | Ingest RTMP | Ingest RTSP | Stats panel | Resolution detect | Encode OUTPUT | tsmux re-mux | mixer:// extract | HLS browser |
 |---|---|---|---|---|---|---|---|---|---|---|
 | H.264 / AVC | `h264` | ✅ | ✅ | ✅ | ✅ | ✅ SPS parse | ✅ libx264 / NVENC / VAAPI / QSV / VideoToolbox | ✅ | ✅ | ✅ |
-| H.265 / HEVC | `h265` | ✅ | ❌ | ✅ | ✅ | ✅ SPS parse | ✅ libx265 / NVENC / VAAPI / QSV / VideoToolbox | ✅ | ✅ | ⚠️ Safari + modern Chrome |
+| H.265 / HEVC | `h265` | ✅ | ✅ Enhanced RTMP | ✅ | ✅ | ✅ SPS parse | ✅ libx265 / NVENC / VAAPI / QSV / VideoToolbox | ✅ | ✅ | ⚠️ Safari + modern Chrome |
 | MPEG-2 Video (H.262) | `mp2v` | ✅ stream_type 0x02 | ❌ | ❌ | ✅ | ❌ (no sequence_header parser) | ✅ `mpeg2video` | ⚠️ skip-with-comment | ❌ (no frame extractor) | ❌ |
 | AV1 | `av1` | ✅ DVB descriptor "AV01" | ❌ | ❌ | ✅ | ❌ (no OBU parser) | ✅ `libsvtav1` | ⚠️ skip-with-comment | ❌ (no frame extractor) | ⚠️ recent Chrome / Edge / Firefox |
-| VP9 | `vp9` | ❌ rare in TS | ❌ | ❌ | ❌ | ❌ | ✅ `libvpx-vp9` | ❌ | ❌ | ✅ Chrome / Firefox |
 
 ### TS recognition for video
 
@@ -92,7 +90,6 @@ Empty / unknown codec values silently fall back to `libx264` (video) or
 | `aac` (default) | `aac` | none (built-in) |
 | `mp2a` | `mp2` | none (built-in) |
 | `mp3` | `libmp3lame` | yes — `--enable-libmp3lame` |
-| `opus` | `libopus` | yes — `--enable-libopus` |
 | `ac3` | `ac3` | none (built-in) |
 | `eac3` | `eac3` | none (built-in) |
 | `copy` | (no encode) | n/a |
@@ -103,16 +100,15 @@ Empty / unknown codec values silently fall back to `libx264` (video) or
 |---|---|---|---|
 | `h264` / `avc` (default) | `libx264` | `h264_nvenc` | (use explicit encoder name) |
 | `h265` / `hevc` | `libx265` | `hevc_nvenc` | (use explicit encoder name) |
-| `vp9` | `libvpx-vp9` | (no GPU path) | (no GPU path) |
 | `av1` | `libsvtav1` | (no GPU path) | (no GPU path) |
 | `mp2v` / `mpeg2video` | `mpeg2video` | (no GPU path) | (no GPU path) |
 | explicit encoder name (e.g. `h264_qsv`) | preserved | preserved | preserved |
 | `copy` | (no encode) | (no encode) | (no encode) |
 
-External libraries (`libmp3lame`, `libopus`, `libvpx-vp9`, `libsvtav1`,
-`libx264`, `libx265`) require the FFmpeg build to enable them at compile
-time. The probe endpoint (`POST /config/transcoder/probe`) reports which
-encoders are actually present in the binary the operator points to.
+External libraries (`libmp3lame`, `libsvtav1`, `libx264`, `libx265`)
+require the FFmpeg build to enable them at compile time. The probe
+endpoint (`POST /config/transcoder/probe`) reports which encoders are
+actually present in the binary the operator points to.
 
 ---
 
@@ -212,11 +208,14 @@ streams:
 
 ### 6.3 RTMP / RTSP codec map
 
-The `gomedia/joyav` RTMP reader currently recognises only H.264 + AAC
-streams; the gortsplib RTSP reader recognises H.264, H.265, AAC.
-Other codecs (Opus, AC-3, MP3) over those transports are dropped at the
-reader. Users needing MP2 / AC-3 / AV1 should ingest via UDP / HLS / SRT /
-File where the TS path recognises them.
+The `gomedia/go-rtmp` RTMP reader recognises **H.264, H.265 (Enhanced
+RTMP), and AAC**. The gortsplib RTSP reader recognises H.264, H.265, AAC.
+Other codecs (Opus, AC-3, MP3, MP2, AV1, MPEG-2) over those transports
+are dropped at the reader — gomedia's FLV demuxer doesn't surface them
+yet, and gortsplib's payload format mappings to our AVCodec enum aren't
+wired for non-H.26x / non-AAC audio. Users needing MP2 / AC-3 / EAC-3 /
+AV1 / MPEG-2 ingest should use UDP / HLS / SRT / File where the TS path
+recognises them via stream_type + DVB descriptors.
 
 ### 6.4 Resolution unknown for non-H.26x video
 
@@ -226,7 +225,7 @@ sources. The UI should hide the resolution row for tracks where
 
 ### 6.5 Encoding to specific HW backends
 
-VP9 / AV1 / MPEG-2 Video have no entry in `hwOptionalEncoders` for NVENC /
+AV1 / MPEG-2 Video have no entry in `hwOptionalEncoders` for NVENC /
 VAAPI / QSV / VideoToolbox. They run on the CPU regardless of the global
 `hw` setting. If a HW path is needed (e.g. `h264_nvenc` for AV1's input
 decode) the operator must spell the explicit encoder name in
@@ -363,9 +362,8 @@ Items not yet implemented but tractable:
 | Frame extractor for AV1 (enables mixer://) | low | ~400 lines + tests (OBU parsing) |
 | MPEG-2 Video resolution parse (sequence_header) | low | ~80 lines |
 | AV1 resolution parse (sequence header OBU) | low | ~150 lines |
-| RTMP reader codec map (Enhanced RTMP for AV1, HEVC, Opus) | low | ~100 lines + joyav fork awareness |
+| RTMP reader codec map (Enhanced RTMP for AV1) | low | ~50 lines once gomedia's FLV demuxer adds them |
 | RTSP reader codec map (gortsplib already supports more) | low | ~80 lines wiring |
-| Opus / VP9 ingest from TS (DVB descriptor path) | low | ~30 lines each |
 | HW-accelerated MPEG-2 / AV1 encoding | low | depends on FFmpeg build |
 
 Add only when a concrete use case lands. The current set covers DVB IPTV

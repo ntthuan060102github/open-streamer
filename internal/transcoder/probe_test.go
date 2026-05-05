@@ -140,26 +140,26 @@ func TestOptionalEncodersForBackends_PerHostMix(t *testing.T) {
 		{
 			name:        "nvidia host (None+NVENC)",
 			hws:         []domain.HWAccel{domain.HWAccelNone, domain.HWAccelNVENC},
-			mustInclude: []string{"h264_nvenc", "hevc_nvenc", "libx265", "libvpx-vp9", "libopus"},
-			mustExclude: []string{"h264_qsv", "h264_vaapi", "h264_videotoolbox"},
+			mustInclude: []string{"h264_nvenc", "hevc_nvenc", "libx265", "libsvtav1", "mpeg2video", "ac3"},
+			mustExclude: []string{"h264_qsv", "h264_vaapi", "h264_videotoolbox", "libvpx-vp9", "libopus"},
 		},
 		{
 			name:        "cpu-only host (None)",
 			hws:         []domain.HWAccel{domain.HWAccelNone},
-			mustInclude: []string{"libx265", "libvpx-vp9", "libsvtav1", "libopus", "ac3"},
-			mustExclude: []string{"h264_nvenc", "h264_qsv", "h264_vaapi", "h264_videotoolbox"},
+			mustInclude: []string{"libx265", "libsvtav1", "mpeg2video", "ac3", "eac3"},
+			mustExclude: []string{"h264_nvenc", "h264_qsv", "h264_vaapi", "h264_videotoolbox", "libvpx-vp9", "libopus"},
 		},
 		{
 			name:        "intel host (None+VAAPI+QSV)",
 			hws:         []domain.HWAccel{domain.HWAccelNone, domain.HWAccelVAAPI, domain.HWAccelQSV},
-			mustInclude: []string{"h264_vaapi", "h264_qsv", "libx265", "libopus"},
-			mustExclude: []string{"h264_nvenc", "h264_videotoolbox"},
+			mustInclude: []string{"h264_vaapi", "h264_qsv", "libx265", "ac3"},
+			mustExclude: []string{"h264_nvenc", "h264_videotoolbox", "libvpx-vp9", "libopus"},
 		},
 		{
 			name:        "macOS host (None+VideoToolbox)",
 			hws:         []domain.HWAccel{domain.HWAccelNone, domain.HWAccelVideoToolbox},
-			mustInclude: []string{"h264_videotoolbox", "libx265", "libopus"},
-			mustExclude: []string{"h264_nvenc", "h264_qsv", "h264_vaapi"},
+			mustInclude: []string{"h264_videotoolbox", "libx265", "ac3"},
+			mustExclude: []string{"h264_nvenc", "h264_qsv", "h264_vaapi", "libvpx-vp9", "libopus"},
 		},
 	}
 	for _, tc := range cases {
@@ -183,8 +183,8 @@ func TestOptionalEncodersForBackends_EmptyReturnsUnion(t *testing.T) {
 	got := optionalEncodersForBackends(nil)
 	for _, want := range []string{
 		"h264_nvenc", "h264_vaapi", "h264_qsv", "h264_videotoolbox",
-		"libx265", "libvpx-vp9", "libsvtav1", "mpeg2video",
-		"libopus", "libmp3lame", "mp2", "ac3", "eac3",
+		"libx265", "libsvtav1", "mpeg2video",
+		"libmp3lame", "mp2", "ac3", "eac3",
 	} {
 		assert.Contains(t, got, want, "empty hws must include %s in the union", want)
 	}
@@ -242,8 +242,8 @@ func TestProbe_RealFFmpeg_FilterByBackends(t *testing.T) {
 	// built-in encoder always shipped with stock FFmpeg builds; it has no
 	// external library dependency so we treat it as guaranteed-present.
 	for _, want := range []string{
-		"libx265", "libvpx-vp9", "libsvtav1", "mpeg2video",
-		"libopus", "mp2", "ac3", "eac3",
+		"libx265", "libsvtav1", "mpeg2video",
+		"mp2", "ac3", "eac3",
 	} {
 		assert.Contains(t, opt, want, "host=[None] must report %s as optional", want)
 	}

@@ -25,7 +25,6 @@ func TestResolveVideoEncoder(t *testing.T) {
 		{"avc + cpu → libx264", "avc", HWAccelNone, "libx264"},
 		{"h265 + nvenc → hevc_nvenc", "h265", HWAccelNVENC, "hevc_nvenc"},
 		{"hevc + cpu → libx265", "hevc", HWAccelNone, "libx265"},
-		{"vp9 → libvpx-vp9", "vp9", HWAccelNone, "libvpx-vp9"},
 		{"av1 → libsvtav1", "av1", HWAccelNone, "libsvtav1"},
 		{"mp2v → mpeg2video", "mp2v", HWAccelNone, "mpeg2video"},
 		{"mpeg2video alias", "mpeg2video", HWAccelNone, "mpeg2video"},
@@ -52,8 +51,8 @@ func TestResolveAudioEncoder(t *testing.T) {
 		{AudioCodecAAC, "aac"},
 		{AudioCodecMP2, "mp2"},
 		{AudioCodecMP3, "libmp3lame"},
-		{AudioCodecOpus, "libopus"},
 		{AudioCodecAC3, "ac3"},
+		{AudioCodecEAC3, "eac3"},
 		{"unknown", "aac"},
 	}
 	for _, tt := range cases {

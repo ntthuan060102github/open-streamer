@@ -285,7 +285,7 @@ func TestComputeDiff_GlobalConfigChange_AllProfilesAffected(t *testing.T) {
 func TestComputeDiff_AudioChange_AllProfilesAffected(t *testing.T) {
 	old := baseStream()
 	new := baseStream()
-	new.Transcoder.Audio.Codec = domain.AudioCodecOpus
+	new.Transcoder.Audio.Codec = domain.AudioCodecMP3
 
 	d := ComputeDiff(old, new)
 

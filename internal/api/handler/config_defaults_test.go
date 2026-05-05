@@ -92,8 +92,9 @@ func TestGetConfigDefaults_CodecRoutingTable(t *testing.T) {
 	table := got.Transcoder.Video.EncoderByCodecHW
 	require.Contains(t, table, "h264")
 	require.Contains(t, table, "h265")
-	require.Contains(t, table, "vp9")
 	require.Contains(t, table, "av1")
+	require.Contains(t, table, "mp2v")
+	require.NotContains(t, table, "vp9", "vp9 is no longer an exposed encoder option")
 
 	// Pin every cell of the h264/h265 rows that frontend will touch most.
 	assert.Equal(t, "libx264", table["h264"]["none"])
@@ -105,10 +106,10 @@ func TestGetConfigDefaults_CodecRoutingTable(t *testing.T) {
 	assert.Equal(t, "libx265", table["h265"]["none"])
 	assert.Equal(t, "hevc_nvenc", table["h265"]["nvenc"])
 
-	// VP9 / AV1 ignore HW backend.
+	// AV1 / MPEG-2 ignore HW backend (CPU-only encoder paths).
 	for _, hw := range []string{"none", "nvenc", "vaapi", "qsv", "videotoolbox"} {
-		assert.Equal(t, "libvpx-vp9", table["vp9"][hw], "vp9 always libvpx-vp9 (no HW route)")
 		assert.Equal(t, "libsvtav1", table["av1"][hw], "av1 always libsvtav1 (no HW route)")
+		assert.Equal(t, "mpeg2video", table["mp2v"][hw], "mp2v always mpeg2video (no HW route)")
 	}
 }
 

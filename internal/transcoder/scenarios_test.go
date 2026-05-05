@@ -84,17 +84,17 @@ func TestScenario_VideoCopy_AudioReencodeAAC(t *testing.T) {
 	require.Equal(t, "2", argAfter(args, "-ac"))
 }
 
-func TestScenario_VideoCopy_AudioReencodeOpus(t *testing.T) {
+func TestScenario_VideoCopy_AudioReencodeEAC3(t *testing.T) {
 	t.Parallel()
 	tc := &domain.TranscoderConfig{
 		Video: domain.VideoTranscodeConfig{Copy: true},
-		Audio: domain.AudioTranscodeConfig{Codec: domain.AudioCodecOpus, Bitrate: 96},
+		Audio: domain.AudioTranscodeConfig{Codec: domain.AudioCodecEAC3, Bitrate: 256},
 	}
 	args, err := buildFFmpegArgs([]Profile{{Bitrate: "ignored"}}, tc)
 	require.NoError(t, err)
 	require.Equal(t, "copy", argAfter(args, "-c:v"))
-	require.Equal(t, "libopus", argAfter(args, "-c:a"))
-	require.Equal(t, "96k", argAfter(args, "-b:a"))
+	require.Equal(t, "eac3", argAfter(args, "-c:a"))
+	require.Equal(t, "256k", argAfter(args, "-b:a"))
 }
 
 func TestScenario_VideoCopy_AudioReencodeMP3(t *testing.T) {

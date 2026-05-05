@@ -82,7 +82,6 @@ var optionalFilters = []string{
 var hwOptionalEncoders = map[domain.HWAccel][]string{
 	domain.HWAccelNone: {
 		"libx265",    // h265 CPU
-		"libvpx-vp9", // vp9
 		"libsvtav1",  // av1
 		"mpeg2video", // MPEG-2 Part 2 — built-in, no external library
 	},
@@ -112,7 +111,6 @@ var hwOptionalEncoders = map[domain.HWAccel][]string{
 // legacy IPTV headends). Always present in standard FFmpeg builds — no
 // external library needed (unlike libtwolame).
 var audioOptionalEncoders = []string{
-	"libopus",
 	"libmp3lame",
 	"mp2",
 	"ac3",

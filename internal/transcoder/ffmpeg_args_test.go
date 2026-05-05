@@ -493,8 +493,8 @@ func TestNormalizeVideoEncoder(t *testing.T) {
 		{"h264", domain.HWAccelNVENC, "h264_nvenc"},
 		{"h265", domain.HWAccelNone, "libx265"},
 		{"hevc", domain.HWAccelNVENC, "hevc_nvenc"},
-		{"vp9", domain.HWAccelNone, "libvpx-vp9"},
 		{"av1", domain.HWAccelNone, "libsvtav1"},
+		{"mp2v", domain.HWAccelNone, "mpeg2video"},
 		{"h264_nvenc", domain.HWAccelNone, "h264_nvenc"}, // passthrough
 	}
 	for _, tt := range cases {
@@ -532,9 +532,10 @@ func TestAudioEncodeArgs(t *testing.T) {
 		wantBr  string
 	}{
 		{domain.AudioTranscodeConfig{Codec: domain.AudioCodecAAC, Bitrate: 192}, "aac", "192k"},
+		{domain.AudioTranscodeConfig{Codec: "mp2a", Bitrate: 192}, "mp2", "192k"},
 		{domain.AudioTranscodeConfig{Codec: "mp3", Bitrate: 128}, "libmp3lame", "128k"},
-		{domain.AudioTranscodeConfig{Codec: "opus", Bitrate: 96}, "libopus", "96k"},
 		{domain.AudioTranscodeConfig{Codec: "ac3", Bitrate: 384}, "ac3", "384k"},
+		{domain.AudioTranscodeConfig{Codec: "eac3", Bitrate: 256}, "eac3", "256k"},
 		{domain.AudioTranscodeConfig{}, "aac", "128k"}, // defaults
 	}
 	for _, tt := range cases {

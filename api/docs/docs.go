@@ -2432,7 +2432,6 @@ const docTemplate = `{
                 "aac",
                 "mp2a",
                 "mp3",
-                "opus",
                 "ac3",
                 "eac3",
                 "copy"
@@ -2443,14 +2442,12 @@ const docTemplate = `{
                 "AudioCodecCopy": "passthrough — no re-encode",
                 "AudioCodecEAC3": "Dolby Digital Plus — premium HD/UHD broadcast (5.1+)",
                 "AudioCodecMP2": "MPEG-1/2 Audio Layer II — DVB broadcast contribution feeds",
-                "AudioCodecMP3": "legacy compatibility",
-                "AudioCodecOpus": "best for WebRTC / low-latency"
+                "AudioCodecMP3": "legacy compatibility"
             },
             "x-enum-descriptions": [
                 "default for HLS/DASH",
                 "MPEG-1/2 Audio Layer II — DVB broadcast contribution feeds",
                 "legacy compatibility",
-                "best for WebRTC / low-latency",
                 "Dolby Digital — broadcast use",
                 "Dolby Digital Plus — premium HD/UHD broadcast (5.1+)",
                 "passthrough — no re-encode"
@@ -2459,7 +2456,6 @@ const docTemplate = `{
                 "AudioCodecAAC",
                 "AudioCodecMP2",
                 "AudioCodecMP3",
-                "AudioCodecOpus",
                 "AudioCodecAC3",
                 "AudioCodecEAC3",
                 "AudioCodecCopy"
@@ -2520,6 +2516,8 @@ const docTemplate = `{
         "domain.EventType": {
             "type": "string",
             "enum": [
+                "session.opened",
+                "session.closed",
                 "stream.created",
                 "stream.started",
                 "stream.stopped",
@@ -2535,9 +2533,7 @@ const docTemplate = `{
                 "segment.written",
                 "transcoder.started",
                 "transcoder.stopped",
-                "transcoder.error",
-                "session.opened",
-                "session.closed"
+                "transcoder.error"
             ],
             "x-enum-comments": {
                 "EventInputConnected": "source connected successfully",
@@ -2547,6 +2543,8 @@ const docTemplate = `{
                 "EventInputReconnecting": "transient error, retrying"
             },
             "x-enum-descriptions": [
+                "",
+                "",
                 "",
                 "",
                 "",
@@ -2562,11 +2560,11 @@ const docTemplate = `{
                 "",
                 "",
                 "",
-                "",
-                "",
                 ""
             ],
             "x-enum-varnames": [
+                "EventSessionOpened",
+                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamStarted",
                 "EventStreamStopped",
@@ -2582,9 +2580,7 @@ const docTemplate = `{
                 "EventSegmentWritten",
                 "EventTranscoderStarted",
                 "EventTranscoderStopped",
-                "EventTranscoderError",
-                "EventSessionOpened",
-                "EventSessionClosed"
+                "EventTranscoderError"
             ]
         },
         "domain.GlobalConfig": {
@@ -3336,7 +3332,6 @@ const docTemplate = `{
                 "h264",
                 "h265",
                 "av1",
-                "vp9",
                 "mp2v",
                 "copy"
             ],
@@ -3345,14 +3340,12 @@ const docTemplate = `{
                 "VideoCodecCopy": "passthrough — no re-encode",
                 "VideoCodecH264": "AVC — widest device support",
                 "VideoCodecH265": "HEVC — ~50% smaller than H.264",
-                "VideoCodecMPEG2": "MPEG-2 Part 2 — DVB legacy contribution feeds, transmitter chains",
-                "VideoCodecVP9": "Google codec, WebRTC-friendly"
+                "VideoCodecMPEG2": "MPEG-2 Part 2 — DVB legacy contribution feeds, transmitter chains"
             },
             "x-enum-descriptions": [
                 "AVC — widest device support",
                 "HEVC — ~50% smaller than H.264",
                 "royalty-free, best compression (high CPU)",
-                "Google codec, WebRTC-friendly",
                 "MPEG-2 Part 2 — DVB legacy contribution feeds, transmitter chains",
                 "passthrough — no re-encode"
             ],
@@ -3360,7 +3353,6 @@ const docTemplate = `{
                 "VideoCodecH264",
                 "VideoCodecH265",
                 "VideoCodecAV1",
-                "VideoCodecVP9",
                 "VideoCodecMPEG2",
                 "VideoCodecCopy"
             ]

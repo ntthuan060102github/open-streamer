@@ -157,8 +157,8 @@ var supportedHWAccels = []domain.HWAccel{
 var supportedCodecFamilies = []domain.VideoCodec{
 	domain.VideoCodecH264,
 	domain.VideoCodecH265,
-	domain.VideoCodecVP9,
 	domain.VideoCodecAV1,
+	domain.VideoCodecMPEG2,
 }
 
 // buildEncoderByCodecHW computes the codec×HW → FFmpeg encoder name

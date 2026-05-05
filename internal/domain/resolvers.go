@@ -28,8 +28,6 @@ func ResolveVideoEncoder(codec VideoCodec, hw HWAccel) string {
 			return "hevc_nvenc"
 		}
 		return "libx265"
-	case "vp9":
-		return "libvpx-vp9"
 	case "av1":
 		return "libsvtav1"
 	case "mp2v", "mpeg2video":
@@ -65,8 +63,6 @@ func ResolveAudioEncoder(codec AudioCodec) string {
 		return "mp2"
 	case string(AudioCodecMP3):
 		return "libmp3lame"
-	case string(AudioCodecOpus):
-		return "libopus"
 	case string(AudioCodecAC3):
 		return "ac3"
 	case string(AudioCodecEAC3):
