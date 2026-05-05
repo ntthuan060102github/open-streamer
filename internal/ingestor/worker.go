@@ -12,6 +12,7 @@ import (
 
 	"github.com/ntt0601zcoder/open-streamer/internal/buffer"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
+	"github.com/ntt0601zcoder/open-streamer/internal/ingestor/pull"
 )
 
 const (
@@ -219,6 +220,11 @@ func handleReadError(
 // readLoop reads from reader until error or ctx cancellation.
 // The first packet written in each call is marked Discontinuity=true so that
 // downstream consumers (HLS, DASH packager) know the source has just switched.
+//
+// For raw-TS sources (AVCodecRawTSChunk) the data path bypasses demux/remux,
+// which leaves the manager's input "tracks" panel empty. A side-channel
+// StatsDemuxer is lazily initialised on the first raw chunk to surface
+// codec / bitrate / resolution into onMedia without touching the data path.
 func readLoop(
 	ctx context.Context,
 	streamID domain.StreamCode,
@@ -229,6 +235,12 @@ func readLoop(
 	cb *pullWorkerCallbacks,
 ) error {
 	firstPacket := true
+	var stats *pull.StatsDemuxer
+	defer func() {
+		if stats != nil {
+			stats.Close()
+		}
+	}()
 	for {
 		batch, err := r.ReadPackets(ctx)
 		if err != nil {
@@ -240,11 +252,58 @@ func readLoop(
 			}
 			isFirst := firstPacket
 			firstPacket = false
-			if writeErr := writeOnePacket(streamID, bufferWriteID, input, &p, isFirst, buf, cb); writeErr != nil {
+			ensureStatsDemuxer(&stats, &p, streamID, input.Priority, cb)
+			wctx := writeContext{
+				streamID:      streamID,
+				bufferWriteID: bufferWriteID,
+				input:         input,
+				buf:           buf,
+				cb:            cb,
+				stats:         stats,
+			}
+			if writeErr := writeOnePacket(wctx, &p, isFirst); writeErr != nil {
 				return writeErr
 			}
 		}
 	}
+}
+
+// ensureStatsDemuxer lazily allocates the side-channel demuxer the first
+// time a raw-TS chunk arrives AND the manager wants media info. AV-source
+// readers (RTSP / RTMP) hit the AV path which already feeds onMedia, so
+// they never trigger allocation here.
+func ensureStatsDemuxer(
+	stats **pull.StatsDemuxer,
+	p *domain.AVPacket,
+	streamID domain.StreamCode,
+	priority int,
+	cb *pullWorkerCallbacks,
+) {
+	if *stats != nil {
+		return
+	}
+	if p.Codec != domain.AVCodecRawTSChunk {
+		return
+	}
+	if cb == nil || cb.onMedia == nil {
+		return
+	}
+	onMedia := cb.onMedia
+	*stats = pull.NewStatsDemuxer(func(av *domain.AVPacket) {
+		onMedia(streamID, priority, av)
+	})
+}
+
+// writeContext bundles the per-packet write parameters that don't change
+// across iterations. Centralised so writeOnePacket / writeRawTSChunk stay
+// under the cognitive-complexity / parameter-count ceilings.
+type writeContext struct {
+	streamID      domain.StreamCode
+	bufferWriteID domain.StreamCode
+	input         domain.Input
+	buf           *buffer.Service
+	cb            *pullWorkerCallbacks
+	stats         *pull.StatsDemuxer
 }
 
 // writeOnePacket forwards one source packet into the buffer, dispatching on
@@ -252,70 +311,68 @@ func readLoop(
 // emit AVCodecRawTSChunk so we write Packet.TS to preserve the original bytes;
 // AV sources (RTSP/RTMP) write Packet.AV. Extracted from readLoop to keep
 // each function under the cognitive-complexity ceiling.
-func writeOnePacket(
-	streamID, bufferWriteID domain.StreamCode,
-	input domain.Input,
-	p *domain.AVPacket,
-	isFirst bool,
-	buf *buffer.Service,
-	cb *pullWorkerCallbacks,
-) error {
+//
+// wctx.stats (raw-TS path) is supplied by readLoop so onMedia fires for raw
+// chunks too — without that, the manager's input "tracks" panel stays empty
+// for every UDP / HTTP-MPEG-TS / SRT / File source.
+func writeOnePacket(wctx writeContext, p *domain.AVPacket, isFirst bool) error {
 	if p.Codec == domain.AVCodecRawTSChunk {
-		return writeRawTSChunk(streamID, bufferWriteID, input, p.Data, buf, cb)
+		return writeRawTSChunk(wctx, p.Data)
 	}
 	cl := p.Clone()
 	if isFirst {
 		cl.Discontinuity = true
 	}
-	if err := buf.Write(bufferWriteID, buffer.Packet{AV: cl}); err != nil {
+	if err := wctx.buf.Write(wctx.bufferWriteID, buffer.Packet{AV: cl}); err != nil {
 		slog.Error("ingestor: buffer write failed",
-			"stream_code", streamID,
-			"input_priority", input.Priority,
+			"stream_code", wctx.streamID,
+			"input_priority", wctx.input.Priority,
 			"err", err,
 		)
 		return err
 	}
+	cb := wctx.cb
 	if cb != nil && cb.onPacket != nil {
-		cb.onPacket(streamID, input.Priority)
+		cb.onPacket(wctx.streamID, wctx.input.Priority)
 	}
 	if cb != nil && cb.onPacketBytes != nil {
-		cb.onPacketBytes(streamID, input.Priority, len(p.Data))
+		cb.onPacketBytes(wctx.streamID, wctx.input.Priority, len(p.Data))
 	}
 	if cb != nil && cb.onMedia != nil {
 		// Observer must not retain p.Data; if it needs persisted bytes
 		// (e.g. SPS extracted on a keyframe) it should copy them out itself.
 		pCopy := *p
-		cb.onMedia(streamID, input.Priority, &pCopy)
+		cb.onMedia(wctx.streamID, wctx.input.Priority, &pCopy)
 	}
 	return nil
 }
 
 // writeRawTSChunk handles the AVCodecRawTSChunk path — copies the chunk so
 // the source-side reader buffer can be reused, writes Packet.TS to the buffer
-// hub, and fires the byte-count + packet-count observers (no onMedia: raw TS
-// has no AVPacket-level codec/keyframe info to surface).
-func writeRawTSChunk(
-	streamID, bufferWriteID domain.StreamCode,
-	input domain.Input,
-	chunk []byte,
-	buf *buffer.Service,
-	cb *pullWorkerCallbacks,
-) error {
+// hub, fires the byte-count + packet-count observers, and tees a copy into
+// the side-channel stats demuxer so onMedia (codec / bitrate / resolution)
+// fires for raw-TS sources too.
+func writeRawTSChunk(wctx writeContext, chunk []byte) error {
 	cp := append([]byte(nil), chunk...)
-	if err := buf.Write(bufferWriteID, buffer.Packet{TS: cp}); err != nil {
+	if err := wctx.buf.Write(wctx.bufferWriteID, buffer.Packet{TS: cp}); err != nil {
 		slog.Error("ingestor: buffer write failed (TS passthrough)",
-			"stream_code", streamID,
-			"input_priority", input.Priority,
+			"stream_code", wctx.streamID,
+			"input_priority", wctx.input.Priority,
 			"err", err,
 		)
 		return err
 	}
+	cb := wctx.cb
 	if cb != nil && cb.onPacket != nil {
-		cb.onPacket(streamID, input.Priority)
+		cb.onPacket(wctx.streamID, wctx.input.Priority)
 	}
 	if cb != nil && cb.onPacketBytes != nil {
-		cb.onPacketBytes(streamID, input.Priority, len(cp))
+		cb.onPacketBytes(wctx.streamID, wctx.input.Priority, len(cp))
 	}
+	// Best-effort: stats demuxer drops on backpressure, never blocks the
+	// data path. Feed the copy we already own so the source reader can
+	// reuse `chunk`'s underlying buffer.
+	wctx.stats.Feed(cp)
 	return nil
 }
 

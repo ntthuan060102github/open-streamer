@@ -2505,6 +2505,8 @@
         "domain.EventType": {
             "type": "string",
             "enum": [
+                "session.opened",
+                "session.closed",
                 "stream.created",
                 "stream.started",
                 "stream.stopped",
@@ -2520,9 +2522,7 @@
                 "segment.written",
                 "transcoder.started",
                 "transcoder.stopped",
-                "transcoder.error",
-                "session.opened",
-                "session.closed"
+                "transcoder.error"
             ],
             "x-enum-comments": {
                 "EventInputConnected": "source connected successfully",
@@ -2532,6 +2532,8 @@
                 "EventInputReconnecting": "transient error, retrying"
             },
             "x-enum-descriptions": [
+                "",
+                "",
                 "",
                 "",
                 "",
@@ -2547,11 +2549,11 @@
                 "",
                 "",
                 "",
-                "",
-                "",
                 ""
             ],
             "x-enum-varnames": [
+                "EventSessionOpened",
+                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamStarted",
                 "EventStreamStopped",
@@ -2567,9 +2569,7 @@
                 "EventSegmentWritten",
                 "EventTranscoderStarted",
                 "EventTranscoderStopped",
-                "EventTranscoderError",
-                "EventSessionOpened",
-                "EventSessionClosed"
+                "EventTranscoderError"
             ]
         },
         "domain.GlobalConfig": {
