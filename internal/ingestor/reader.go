@@ -92,11 +92,15 @@ func NewPacketReader(
 	case protocol.KindUDP:
 		// Raw-TS passthrough: avoid the demux/remux round-trip that scrambles
 		// PCR/PTS and re-assigns PIDs. See pull/ts_passthrough.go.
-		// MPTS program filter applies only to UDP — that is where multi-program
-		// transport streams realistically appear (DVB headend multicast feeds).
-		// HLS / SRT / File sources are single-program by convention; if a
-		// future use case needs the filter for those, wrap them here too.
-		return pull.NewTSPassthroughPacketReader(maybeWrapMPTS(pull.NewUDPReader(input), input)), nil
+		// MPTS program filter and PID allowlist apply only to UDP — that is
+		// where multi-program / non-standard PSI realistically appears (DVB
+		// headend multicast feeds). HLS / SRT / File sources are SPTS by
+		// convention. Filter chain: program rewrites PAT and learns ES PIDs
+		// first, then pids further narrows the output. Both are optional.
+		var udp pull.TSChunkReader = pull.NewUDPReader(input)
+		udp = maybeWrapMPTS(udp, input)
+		udp = maybeWrapPIDs(udp, input)
+		return pull.NewTSPassthroughPacketReader(udp), nil
 	case protocol.KindHLS:
 		// HLS pull also delivers MPEG-TS; same passthrough rationale as UDP.
 		// Note: realtime pacing was previously enabled to throttle the demux
@@ -155,4 +159,15 @@ func maybeWrapMPTS(r pull.TSChunkReader, input domain.Input) pull.TSChunkReader 
 		return r
 	}
 	return pull.NewMPTSProgramFilter(r, input.Program)
+}
+
+// maybeWrapPIDs wraps a raw-TS chunk source with a PID allowlist filter when
+// the input config specifies an explicit pid list (len(input.Pids) > 0).
+// Empty list (default) returns the source unchanged. Designed to chain after
+// maybeWrapMPTS so program-scoped output can be further narrowed.
+func maybeWrapPIDs(r pull.TSChunkReader, input domain.Input) pull.TSChunkReader {
+	if len(input.Pids) == 0 {
+		return r
+	}
+	return pull.NewPIDFilter(r, input.Pids)
 }

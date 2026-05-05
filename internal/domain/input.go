@@ -62,6 +62,21 @@ type Input struct {
 	// RTSP / RTMP, which are single-program by protocol design.
 	Program int `json:"program,omitempty" yaml:"program,omitempty"`
 
+	// Pids is an explicit allowlist of TS PIDs to keep — every other PID
+	// is dropped at ingest. Used when the source PSI is unreliable (legacy
+	// encoders with malformed PAT/PMT) or when the operator wants to cherry-
+	// pick a subset (e.g. drop a teletext PID, keep only one of N audio
+	// languages). The filter is purely PID-level: no PAT/PMT rewrite, no
+	// CRC recompute. Operators must include every PID needed for playback
+	// (typically PID 0 for PAT, the PMT PID, and the desired ES PIDs).
+	//
+	// Layers with Program when both are set: Program runs first (auto-
+	// detect ES PIDs + rewrite PAT to single-program), then Pids further
+	// restricts the output. Empty (default) disables the filter.
+	//
+	// Currently applies to UDP only — same rationale as Program.
+	Pids []int `json:"pids,omitempty" yaml:"pids,omitempty"`
+
 	// Net controls reconnect and timeout behaviour.
 	Net InputNetConfig `json:"net,omitempty" yaml:"net,omitempty"`
 

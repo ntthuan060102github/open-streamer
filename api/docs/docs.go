@@ -2512,6 +2512,8 @@ const docTemplate = `{
         "domain.EventType": {
             "type": "string",
             "enum": [
+                "session.opened",
+                "session.closed",
                 "stream.created",
                 "stream.started",
                 "stream.stopped",
@@ -2527,9 +2529,7 @@ const docTemplate = `{
                 "segment.written",
                 "transcoder.started",
                 "transcoder.stopped",
-                "transcoder.error",
-                "session.opened",
-                "session.closed"
+                "transcoder.error"
             ],
             "x-enum-comments": {
                 "EventInputConnected": "source connected successfully",
@@ -2539,6 +2539,8 @@ const docTemplate = `{
                 "EventInputReconnecting": "transient error, retrying"
             },
             "x-enum-descriptions": [
+                "",
+                "",
                 "",
                 "",
                 "",
@@ -2554,11 +2556,11 @@ const docTemplate = `{
                 "",
                 "",
                 "",
-                "",
-                "",
                 ""
             ],
             "x-enum-varnames": [
+                "EventSessionOpened",
+                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamStarted",
                 "EventStreamStopped",
@@ -2574,9 +2576,7 @@ const docTemplate = `{
                 "EventSegmentWritten",
                 "EventTranscoderStarted",
                 "EventTranscoderStopped",
-                "EventTranscoderError",
-                "EventSessionOpened",
-                "EventSessionClosed"
+                "EventTranscoderError"
             ]
         },
         "domain.GlobalConfig": {
@@ -2749,6 +2749,13 @@ const docTemplate = `{
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
+                    }
+                },
+                "pids": {
+                    "description": "Pids is an explicit allowlist of TS PIDs to keep — every other PID\nis dropped at ingest. Used when the source PSI is unreliable (legacy\nencoders with malformed PAT/PMT) or when the operator wants to cherry-\npick a subset (e.g. drop a teletext PID, keep only one of N audio\nlanguages). The filter is purely PID-level: no PAT/PMT rewrite, no\nCRC recompute. Operators must include every PID needed for playback\n(typically PID 0 for PAT, the PMT PID, and the desired ES PIDs).\n\nLayers with Program when both are set: Program runs first (auto-\ndetect ES PIDs + rewrite PAT to single-program), then Pids further\nrestricts the output. Empty (default) disables the filter.\n\nCurrently applies to UDP only — same rationale as Program.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
                     }
                 },
                 "priority": {
