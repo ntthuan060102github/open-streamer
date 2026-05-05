@@ -10,7 +10,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/cors v1.2.2
 	github.com/google/uuid v1.6.0
-	github.com/pion/rtp v1.10.1
+	github.com/pion/rtp v1.10.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/q191201771/lal v0.37.4
 	github.com/q191201771/naza v0.30.51
