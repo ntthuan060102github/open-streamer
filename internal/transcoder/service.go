@@ -555,7 +555,7 @@ func (s *Service) spawnMultiOutput(streamID domain.StreamCode, sw *streamWorker,
 
 	go func() {
 		defer close(real.done)
-		s.runStreamEncoder(pCtx, streamID, sw.rawIngest, sw.tc, targets)
+		s.runStreamPipelineNative(pCtx, streamID, sw.rawIngest, sw.tc, targets)
 	}()
 }
 
@@ -692,7 +692,13 @@ func (s *Service) spawnProfile(streamID domain.StreamCode, sw *streamWorker, pro
 
 	go func() {
 		defer close(pw.done)
-		s.runProfileEncoder(profileCtx, streamID, sw.rawIngest, target.BufferID, sw.tc, profileIndex, target.Profile)
+		// per_profile mode under the native backend = one native
+		// Pipeline per target. Preserves the original per-profile
+		// isolation semantic (one profile crashing leaves the others
+		// alive) at the cost of duplicated decode work per stream.
+		// Operators who care about decode-shared efficiency leave
+		// the YAML Mode empty / "multi".
+		s.runStreamPipelineNative(profileCtx, streamID, sw.rawIngest, sw.tc, []RenditionTarget{target})
 	}()
 }
 

@@ -4,6 +4,7 @@ go 1.25.10
 
 require (
 	github.com/Eyevinn/mp4ff v0.52.0
+	github.com/asticode/go-astiav v0.40.0
 	github.com/asticode/go-astits v1.15.0
 	github.com/bluenviron/gortsplib/v5 v5.5.2
 	github.com/bluenviron/mediacommon/v2 v2.8.3
@@ -33,7 +34,7 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/asticode/go-astikit v0.30.0 // indirect
+	github.com/asticode/go-astikit v0.42.0 // indirect
 	github.com/benburkert/openpgp v0.0.0-20160410205803-c2471f86866c // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
