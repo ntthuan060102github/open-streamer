@@ -338,6 +338,31 @@ func (h *StreamHandler) Put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject Put on a runtime-only code. Without this guard the handler
+	// would treat the code as "freshly created" (because the store has
+	// no record), save a parallel config record, then call
+	// coordinator.Start — which is a no-op because the runtime pipeline
+	// is already running. Result: two streamResponse entries for the
+	// same code (one source=config, one source=runtime), config from
+	// the body never takes effect, and the reconciler eventually
+	// re-Starts with the config record only after the idle reaper
+	// removes the runtime entry. The intended workflow is to update
+	// the TEMPLATE (`POST /templates/<code>`) to change shared config
+	// for every dependent runtime stream, or DELETE the runtime stream
+	// first if the operator truly wants to register a per-stream
+	// config record under the same code.
+	if !exists && h.autopublish != nil {
+		if e, ok := h.autopublish.Lookup(code); ok {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":         "RUNTIME_STREAM_NOT_EDITABLE",
+				"message":       "this code is currently an auto-published runtime stream; update the referenced template to change shared config, or DELETE the runtime stream first to register a config stream under the same code",
+				"code":          string(code),
+				"template_code": string(e.TemplateCode),
+			})
+			return
+		}
+	}
+
 	body, validationErr := decodeStreamBody(r, code, cur, exists)
 	if validationErr != nil {
 		writeError(w, http.StatusBadRequest, validationErr.code, validationErr.message)

@@ -685,6 +685,40 @@ func TestStreamHandler_Restart_UnknownReturns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// Put on a code that is currently auto-published must NOT silently
+// create a parallel config record. Without the guard the runtime
+// pipeline keeps running with template-resolved config, the body
+// is persisted but never applied, and GET /streams shows two entries
+// for the same code (one source=config, one source=runtime). The
+// guard returns 409 with the referenced template so the operator
+// knows where to make the change.
+func TestStreamHandler_Put_RejectsRuntimeStreamCode(t *testing.T) {
+	t.Parallel()
+	h, repo, co, _, _ := newStreamHandlerForTest(t)
+	const code domain.StreamCode = "live/foo"
+	h.autopublish = newFakeRuntimeLister(autopublish.RuntimeEntry{
+		Code:         code,
+		TemplateCode: "profile_a",
+	})
+
+	body, _ := json.Marshal(domain.Stream{Inputs: []domain.Input{{URL: "rtmp://x"}}})
+	req := chiReq(t, http.MethodPost, "/streams/live/foo", body, map[string]string{"code": string(code)})
+	w := httptest.NewRecorder()
+	h.Put(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), `"error":"RUNTIME_STREAM_NOT_EDITABLE"`)
+	assert.Contains(t, w.Body.String(), `"template_code":"profile_a"`)
+
+	// Side effects we must NOT have triggered.
+	_, findErr := repo.FindByCode(context.Background(), code)
+	assert.ErrorIs(t, findErr, store.ErrNotFound,
+		"must not persist a config record under a runtime-only code")
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	assert.Empty(t, co.startedCodes, "must not call coordinator.Start while the runtime pipeline owns this code")
+}
+
 // Operator-initiated Delete on a runtime stream must tear it down via
 // autopublish.StopRuntime — the entry + observer + coordinator-level
 // pipeline all come down atomically, closing the race window where a
