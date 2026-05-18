@@ -65,13 +65,17 @@ type StreamHandler struct {
 	bus          events.Bus
 }
 
-// runtimeStreamLister narrows the autopublish service to the two methods
-// the stream list endpoint needs. Defined as an interface so tests can
-// supply a tiny fake instead of the full autopublish wiring.
+// runtimeStreamLister narrows the autopublish service to the methods
+// the stream API needs: enumerate runtime streams (for list responses
+// + source tagging), look up a single runtime entry (so Get / Restart
+// resolve runtime codes instead of 404-ing through the on-disk repo),
+// and StopRuntime for the operator-initiated teardown path.
 // *autopublish.Service satisfies this implicitly.
 type runtimeStreamLister interface {
 	ListRuntime() []autopublish.RuntimeEntry
 	IsRuntime(code domain.StreamCode) bool
+	Lookup(code domain.StreamCode) (autopublish.RuntimeEntry, bool)
+	StopRuntime(ctx context.Context, code domain.StreamCode) bool
 }
 
 // StreamSource tags whether a Stream record originated from the config
@@ -295,6 +299,18 @@ func (h *StreamHandler) Get(w http.ResponseWriter, r *http.Request) {
 	code := domain.StreamCode(chi.URLParam(r, "code"))
 	stream, err := h.streamRepo.FindByCode(r.Context(), code)
 	if err != nil {
+		// Fall back to the autopublish registry: a runtime stream
+		// materialised by a template-prefix match never lands on
+		// disk, but it should still resolve through GET so the UI
+		// can render the same shape as the list response.
+		if h.autopublish != nil {
+			if e, ok := h.autopublish.Lookup(code); ok {
+				tpl := e.TemplateCode
+				stub := &domain.Stream{Code: e.Code, Template: &tpl}
+				writeJSON(w, http.StatusOK, map[string]any{"data": h.withStatus(stub)})
+				return
+			}
+		}
 		writeStoreError(w, r, err)
 		return
 	}
@@ -637,8 +653,23 @@ func decodeStreamBody(
 // @Router /streams/{code} [delete].
 func (h *StreamHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	code := domain.StreamCode(chi.URLParam(r, "code"))
+	pipelineCtx := context.WithoutCancel(r.Context())
+	// Runtime streams are torn down through autopublish so the entry,
+	// observer goroutine, and pipeline come down atomically — without
+	// this the entry stays in the registry until the observer notices
+	// the buffer-hub close, leaving a small window where a fresh push
+	// would short-circuit on the stale entry. Config-stream deletes
+	// just go through coordinator.Stop + streamRepo.Delete.
+	if h.autopublish != nil && h.autopublish.StopRuntime(pipelineCtx, code) {
+		h.bus.Publish(r.Context(), domain.Event{
+			Type:       domain.EventStreamDeleted,
+			StreamCode: code,
+		})
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	// Detach from request cancellation so teardown completes even if the client disconnects.
-	h.coordinator.Stop(context.WithoutCancel(r.Context()), code)
+	h.coordinator.Stop(pipelineCtx, code)
 	if err := h.streamRepo.Delete(r.Context(), code); err != nil {
 		serverError(w, r, "DELETE_FAILED", "delete stream", err)
 		return
@@ -666,6 +697,21 @@ func (h *StreamHandler) Restart(w http.ResponseWriter, r *http.Request) {
 	code := domain.StreamCode(chi.URLParam(r, "code"))
 	stream, err := h.streamRepo.FindByCode(r.Context(), code)
 	if err != nil {
+		// Runtime stream restart — the encoder owns the lifecycle, so
+		// "restart" means: stop the runtime entry now (without waiting
+		// for the 30 s idle reaper) and let the encoder's reconnect
+		// drive re-materialisation. We do NOT re-Start from here:
+		// runtime streams have no persistent record to fetch a fresh
+		// config from, and starting one without the autopublish path
+		// would leak a pipeline whose entry the matcher doesn't own.
+		if h.autopublish != nil && h.autopublish.StopRuntime(context.WithoutCancel(r.Context()), code) {
+			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]string{
+				"status": "stopped",
+				"source": "runtime",
+				"hint":   "runtime stream torn down; re-materialises on the next push that matches a template prefix",
+			}})
+			return
+		}
 		writeStoreError(w, r, err)
 		return
 	}

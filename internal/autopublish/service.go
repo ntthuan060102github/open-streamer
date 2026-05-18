@@ -360,6 +360,42 @@ func (s *Service) IsRuntime(code domain.StreamCode) bool {
 	return ok
 }
 
+// Lookup returns the RuntimeEntry for code, or (zero, false) when no
+// live runtime stream owns that code. Used by the stream handler's Get
+// path so a runtime stream resolves to a 200 instead of a 404 (the
+// on-disk repo never holds runtime records).
+func (s *Service) Lookup(code domain.StreamCode) (RuntimeEntry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.entries[code]
+	if !ok {
+		return RuntimeEntry{}, false
+	}
+	return RuntimeEntry{
+		Code:         e.code,
+		TemplateCode: e.templateCode,
+		LastPacketAt: time.Unix(0, e.lastPacketAt.Load()),
+	}, true
+}
+
+// StopRuntime tears down the runtime stream identified by code. Used by
+// the stream handler's Restart / Delete paths so the operator can force
+// a clean teardown without waiting for the 30 s idle reaper. The
+// encoder's current push session breaks on the next write, reconnects,
+// and the prefix matcher materialises a fresh runtime stream — that is
+// the natural "restart" semantics for an encoder-driven lifecycle.
+// Returns true when a runtime entry was actually removed.
+func (s *Service) StopRuntime(ctx context.Context, code domain.StreamCode) bool {
+	s.mu.RLock()
+	_, ok := s.entries[code]
+	s.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	s.stopRuntimeStream(ctx, code, "external_request")
+	return true
+}
+
 func (s *Service) publishRuntimeEvent(
 	ctx context.Context,
 	typ domain.EventType,
