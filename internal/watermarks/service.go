@@ -199,6 +199,13 @@ func (s *Service) Save(filename string, body io.Reader) (*domain.WatermarkAsset,
 // is responsible for ensuring the asset isn't referenced by an active
 // stream — there is no foreign-key check here.
 func (s *Service) Delete(filename domain.WatermarkFilename) error {
+	// Validate first so the sink-side sanitiser sees the same shape as Save
+	// (regex check, then containment-check). Without the explicit upfront
+	// validate, CodeQL's interprocedural taint tracker doesn't always
+	// recognise resolveAssetPath as a sanitiser on the os.Stat sink below.
+	if err := domain.ValidateWatermarkFilename(string(filename)); err != nil {
+		return ErrNotFound
+	}
 	path, err := s.resolveAssetPath(string(filename))
 	if err != nil {
 		return ErrNotFound
