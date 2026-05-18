@@ -3629,7 +3629,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "filename": {
-                    "description": "Filename, when set, references a WatermarkAsset by its on-disk name\nin the /watermarks library (eg. ` + "`" + `vtv1_logo.png` + "`" + `). Coordinator resolves\nit to an absolute file path before passing the config to the\ntranscoder. Takes precedence over ImagePath when both are set.",
+                    "description": "Filename references a WatermarkAsset by its on-disk name in the\n/watermarks library (eg. ` + "`" + `vtv1_logo.png` + "`" + `). Required when Type ==\nWatermarkTypeImage. The coordinator resolves this into ImagePath\n(private field) before passing the config to the transcoder.",
                     "type": "string"
                 },
                 "font_color": {
@@ -3643,10 +3643,6 @@ const docTemplate = `{
                 "font_size": {
                     "description": "FontSize in pixels. Default: 24.",
                     "type": "integer"
-                },
-                "image_path": {
-                    "description": "ImagePath is the absolute path to a watermark image (PNG with alpha\nrecommended). Use this for assets pre-staged on the host outside the\n/watermarks library. Mutually exclusive with Filename.",
-                    "type": "string"
                 },
                 "offset_x": {
                     "description": "OffsetX and OffsetY are pixel offsets from the chosen position edge.\nIgnored when Position == custom.",

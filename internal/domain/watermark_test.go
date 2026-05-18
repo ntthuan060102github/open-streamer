@@ -52,16 +52,10 @@ func TestWatermarkValidate(t *testing.T) {
 			Enabled: true, Type: WatermarkTypeText,
 		}, true},
 		"image ok": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, ImagePath: img, Opacity: 1,
+			Enabled: true, Type: WatermarkTypeImage, Filename: "logo.png", Opacity: 1,
 		}, false},
-		"image missing path": {&WatermarkConfig{
+		"image missing filename": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeImage,
-		}, true},
-		"image relative path": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, ImagePath: "logo.png",
-		}, true},
-		"image not found": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, ImagePath: "/nope/never.png",
 		}, true},
 		"font ok": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeText, Text: "x", FontFile: font,
@@ -87,12 +81,12 @@ func TestWatermarkValidate(t *testing.T) {
 		"custom x only": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeText, Text: "x", Position: WatermarkCustom, X: "100",
 		}, false},
-		"both image_path and filename": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, ImagePath: img, Filename: "logo.png",
-		}, true},
 		"filename ok": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeImage, Filename: "logo.png",
 		}, false},
+		"filename missing": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeImage,
+		}, true},
 		"filename invalid (path traversal)": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeImage, Filename: "../../etc/passwd",
 		}, true},
