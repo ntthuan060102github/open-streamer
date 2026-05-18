@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ntt0601zcoder/open-streamer/internal/autopublish"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
 	"github.com/ntt0601zcoder/open-streamer/internal/manager"
@@ -355,6 +356,80 @@ func TestStreamHandler_Get_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// Runtime streams aren't in the on-disk repo but Get must still resolve
+// them via autopublish.Lookup so the UI can render the detail panel.
+func TestStreamHandler_Get_FallsBackToRuntimeStream(t *testing.T) {
+	t.Parallel()
+	h, _, _, _, _ := newStreamHandlerForTest(t)
+	h.autopublish = newFakeRuntimeLister(autopublish.RuntimeEntry{
+		Code:         "receiver/test_tpl_push",
+		TemplateCode: "profile_a",
+	})
+
+	w := httptest.NewRecorder()
+	h.Get(w, chiReq(t, http.MethodGet,
+		"/streams/receiver/test_tpl_push", nil,
+		map[string]string{"code": "receiver/test_tpl_push"}))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"code":"receiver/test_tpl_push"`)
+	assert.Contains(t, w.Body.String(), `"source":"runtime"`)
+	assert.Contains(t, w.Body.String(), `"template":"profile_a"`)
+}
+
+// fakeRuntimeLister is the minimal runtimeStreamLister used across
+// runtime-related handler tests below. Each test seeds the entries it
+// needs; StopRuntime mutates the same map so the handler's call site
+// observes the teardown immediately.
+type fakeRuntimeLister struct {
+	mu      sync.Mutex
+	entries map[domain.StreamCode]autopublish.RuntimeEntry
+	stopped []domain.StreamCode
+}
+
+func newFakeRuntimeLister(seed ...autopublish.RuntimeEntry) *fakeRuntimeLister {
+	f := &fakeRuntimeLister{entries: make(map[domain.StreamCode]autopublish.RuntimeEntry, len(seed))}
+	for _, e := range seed {
+		f.entries[e.Code] = e
+	}
+	return f
+}
+
+func (f *fakeRuntimeLister) ListRuntime() []autopublish.RuntimeEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]autopublish.RuntimeEntry, 0, len(f.entries))
+	for _, e := range f.entries {
+		out = append(out, e)
+	}
+	return out
+}
+
+func (f *fakeRuntimeLister) IsRuntime(code domain.StreamCode) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.entries[code]
+	return ok
+}
+
+func (f *fakeRuntimeLister) Lookup(code domain.StreamCode) (autopublish.RuntimeEntry, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e, ok := f.entries[code]
+	return e, ok
+}
+
+func (f *fakeRuntimeLister) StopRuntime(_ context.Context, code domain.StreamCode) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.entries[code]; !ok {
+		return false
+	}
+	delete(f.entries, code)
+	f.stopped = append(f.stopped, code)
+	return true
+}
+
 // ─── Put: create + update + edge cases ───────────────────────────────────────
 
 func TestStreamHandler_Put_CreateNew(t *testing.T) {
@@ -567,6 +642,114 @@ func TestStreamHandler_Restart_StartFailure500(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Restart(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// Restart on a runtime stream (auto-publish — not in the repo) must
+// route through autopublish.StopRuntime and return 200 with a hint
+// instead of 404ing through the store. The handler does NOT re-Start
+// the pipeline: runtime streams have no persistent record to fetch a
+// fresh config from, so the next push handshake re-materialises the
+// runtime stream via the prefix matcher.
+func TestStreamHandler_Restart_RuntimeStreamStopsViaAutopublish(t *testing.T) {
+	t.Parallel()
+	h, _, co, _, _ := newStreamHandlerForTest(t)
+	const code domain.StreamCode = "live/foo"
+	rt := newFakeRuntimeLister(autopublish.RuntimeEntry{Code: code, TemplateCode: "profile_a"})
+	h.autopublish = rt
+
+	req := chiReq(t, http.MethodPost, "/streams/live/foo/restart", nil, map[string]string{"code": string(code)})
+	w := httptest.NewRecorder()
+	h.Restart(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"status":"stopped"`)
+	assert.Contains(t, w.Body.String(), `"source":"runtime"`)
+	assert.Equal(t, []domain.StreamCode{code}, rt.stopped,
+		"autopublish.StopRuntime must be the teardown path for runtime streams")
+
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	assert.Empty(t, co.startedCodes,
+		"runtime restart must NOT call coordinator.Start; encoder reconnect drives re-materialisation")
+}
+
+// When neither the repo nor the autopublish registry knows the code,
+// Restart still 404s — the legacy behaviour for unknown streams.
+func TestStreamHandler_Restart_UnknownReturns404(t *testing.T) {
+	t.Parallel()
+	h, _, _, _, _ := newStreamHandlerForTest(t)
+	h.autopublish = newFakeRuntimeLister()
+	req := chiReq(t, http.MethodPost, "/streams/missing/restart", nil, map[string]string{"code": "missing"})
+	w := httptest.NewRecorder()
+	h.Restart(w, req)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// Put on a code that is currently auto-published must NOT silently
+// create a parallel config record. Without the guard the runtime
+// pipeline keeps running with template-resolved config, the body
+// is persisted but never applied, and GET /streams shows two entries
+// for the same code (one source=config, one source=runtime). The
+// guard returns 409 with the referenced template so the operator
+// knows where to make the change.
+func TestStreamHandler_Put_RejectsRuntimeStreamCode(t *testing.T) {
+	t.Parallel()
+	h, repo, co, _, _ := newStreamHandlerForTest(t)
+	const code domain.StreamCode = "live/foo"
+	h.autopublish = newFakeRuntimeLister(autopublish.RuntimeEntry{
+		Code:         code,
+		TemplateCode: "profile_a",
+	})
+
+	body, _ := json.Marshal(domain.Stream{Inputs: []domain.Input{{URL: "rtmp://x"}}})
+	req := chiReq(t, http.MethodPost, "/streams/live/foo", body, map[string]string{"code": string(code)})
+	w := httptest.NewRecorder()
+	h.Put(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), `"error":"RUNTIME_STREAM_NOT_EDITABLE"`)
+	assert.Contains(t, w.Body.String(), `"template_code":"profile_a"`)
+
+	// Side effects we must NOT have triggered.
+	_, findErr := repo.FindByCode(context.Background(), code)
+	assert.ErrorIs(t, findErr, store.ErrNotFound,
+		"must not persist a config record under a runtime-only code")
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	assert.Empty(t, co.startedCodes, "must not call coordinator.Start while the runtime pipeline owns this code")
+}
+
+// Operator-initiated Delete on a runtime stream must tear it down via
+// autopublish.StopRuntime — the entry + observer + coordinator-level
+// pipeline all come down atomically, closing the race window where a
+// fresh push could observe a stale registry entry.
+func TestStreamHandler_Delete_RuntimeStreamRoutesThroughAutopublish(t *testing.T) {
+	t.Parallel()
+	h, _, co, _, bus := newStreamHandlerForTest(t)
+	const code domain.StreamCode = "live/foo"
+	rt := newFakeRuntimeLister(autopublish.RuntimeEntry{Code: code, TemplateCode: "profile_a"})
+	h.autopublish = rt
+
+	req := chiReq(t, http.MethodDelete, "/streams/live/foo", nil, map[string]string{"code": string(code)})
+	w := httptest.NewRecorder()
+	h.Delete(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, []domain.StreamCode{code}, rt.stopped)
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	assert.Empty(t, co.stoppedCodes,
+		"runtime delete must NOT call coordinator.Stop directly — autopublish owns that orchestration")
+
+	bus.mu.Lock()
+	defer bus.mu.Unlock()
+	var sawDeleted bool
+	for _, e := range bus.events {
+		if e.Type == domain.EventStreamDeleted && e.StreamCode == code {
+			sawDeleted = true
+		}
+	}
+	assert.True(t, sawDeleted, "stream.deleted event must still fire for runtime stream deletes")
 }
 
 // ─── SwitchInput ────────────────────────────────────────────────────────────

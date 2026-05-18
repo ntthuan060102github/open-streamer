@@ -67,9 +67,16 @@ func (r *fakeTemplateRepo) Delete(_ context.Context, code domain.TemplateCode) e
 	return nil
 }
 
-// stubCoord records Start/Stop calls so tests can assert lifecycle.
+// stubCoord records Start/Stop calls so tests can assert lifecycle. It
+// also creates / deletes the matching buffer slot — production
+// coordinator.Start does this as part of its pipeline setup, and the
+// autopublish liveness observer relies on it being there. A stub that
+// skipped buffer creation would let the observer hit subscribe-failed
+// and unwind the entry, breaking the test's "ResolveOrCreate inserted
+// an entry" assertion.
 type stubCoord struct {
 	mu       sync.Mutex
+	buf      *buffer.Service
 	started  []*domain.Stream
 	stopped  []domain.StreamCode
 	startErr error
@@ -82,6 +89,9 @@ func (c *stubCoord) Start(_ context.Context, s *domain.Stream) error {
 	c.mu.Lock()
 	c.started = append(c.started, s)
 	c.mu.Unlock()
+	if c.buf != nil {
+		c.buf.Create(s.Code)
+	}
 	return nil
 }
 
@@ -89,18 +99,22 @@ func (c *stubCoord) Stop(_ context.Context, code domain.StreamCode) {
 	c.mu.Lock()
 	c.stopped = append(c.stopped, code)
 	c.mu.Unlock()
+	if c.buf != nil {
+		c.buf.Delete(code)
+	}
 }
 
 func (c *stubCoord) IsRunning(_ domain.StreamCode) bool { return false }
 
 func newServiceWithDeps(t *testing.T) (*Service, *fakeTemplateRepo, *stubCoord) {
 	t.Helper()
+	buf := buffer.NewServiceForTesting(1024)
 	tr := newFakeTemplateRepo()
-	cd := &stubCoord{}
+	cd := &stubCoord{buf: buf}
 	s := &Service{
 		templates: tr,
 		coord:     cd,
-		buf:       buffer.NewServiceForTesting(1024),
+		buf:       buf,
 		entries:   make(map[domain.StreamCode]*runtimeEntry),
 	}
 	s.cur.Store(newMatcher(nil))
@@ -275,4 +289,67 @@ func TestListRuntime_ReturnsAllEntries(t *testing.T) {
 
 	list := s.ListRuntime()
 	assert.Len(t, list, 2)
+}
+
+// Regression test for the "delete-then-republish" bug: when the buffer
+// hub for a runtime stream is torn down by ANYONE other than the idle
+// reaper (operator DELETE /streams/<code> is the realistic case), the
+// liveness observer must clear the entry. Otherwise ResolveOrCreate's
+// fast path keeps returning the stale entry while the push registry
+// has no matching slot, so every subsequent push is rejected.
+func TestObserveLiveness_BufferCloseClearsEntry(t *testing.T) {
+	s, _, _ := newServiceWithDeps(t)
+
+	const code domain.StreamCode = "live/foo"
+	s.buf.Create(code)
+	entry := &runtimeEntry{code: code, templateCode: "profile-a"}
+	entry.lastPacketAt.Store(time.Now().UnixNano())
+	ctx, cancel := context.WithCancel(context.Background())
+	entry.cancelObs = cancel
+	s.entries[code] = entry
+
+	done := make(chan struct{})
+	go func() {
+		s.observeLiveness(ctx, entry)
+		close(done)
+	}()
+
+	// Simulate the operator-initiated coordinator.Stop tearing down the
+	// buffer for this runtime stream — Delete closes every subscriber
+	// channel, which is what the observer must detect.
+	s.buf.Delete(code)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("observer did not exit after buffer close")
+	}
+
+	assert.False(t, s.IsRuntime(code),
+		"observer must clear the entry so the next push can re-materialise the runtime stream")
+}
+
+// Defensive: if a parallel push has already replaced the entry with a
+// fresh one (same code, new struct) before the old observer's cleanup
+// runs, the cleanup must NOT stomp the newer entry — otherwise we'd
+// lose a live stream every time the reaper / external teardown raced
+// with re-materialisation.
+func TestObserveLiveness_DoesNotEvictReplacementEntry(t *testing.T) {
+	s, _, _ := newServiceWithDeps(t)
+
+	const code domain.StreamCode = "live/foo"
+	original := &runtimeEntry{code: code, templateCode: "profile-a"}
+	original.lastPacketAt.Store(time.Now().UnixNano())
+
+	replacement := &runtimeEntry{code: code, templateCode: "profile-a"}
+	replacement.lastPacketAt.Store(time.Now().UnixNano())
+	s.entries[code] = replacement // simulate parallel re-create
+
+	s.removeOrphanedEntry(context.Background(), original, "buffer_closed")
+
+	assert.True(t, s.IsRuntime(code), "replacement entry must survive an old observer's cleanup")
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	assert.Same(t, replacement, s.entries[code])
 }
