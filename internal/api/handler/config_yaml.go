@@ -27,8 +27,13 @@ const (
 // It bundles every editable resource so the user can manage the whole system
 // from a single YAML document — change a port, add a stream, register a hook,
 // all in one round-trip.
+//
+// Order of declaration matches apply order on PUT: GlobalConfig first (ports
+// the publisher will bind), then Templates (so streams referencing them can
+// resolve), then Hooks, then VOD, then Streams.
 type fullConfig struct {
 	GlobalConfig *domain.GlobalConfig `yaml:"global_config"`
+	Templates    []*domain.Template   `yaml:"templates"`
 	Streams      []*domain.Stream     `yaml:"streams"`
 	Hooks        []*domain.Hook       `yaml:"hooks"`
 	VOD          []*domain.VODMount   `yaml:"vod"`
@@ -58,6 +63,15 @@ func (h *ConfigHandler) GetConfigYAML(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, "LIST_STREAMS_FAILED", "list streams for yaml export", err)
 		return
 	}
+	var templates []*domain.Template
+	if h.templateRepo != nil {
+		var err error
+		templates, err = h.templateRepo.List(r.Context())
+		if err != nil {
+			serverError(w, r, "LIST_TEMPLATES_FAILED", "list templates for yaml export", err)
+			return
+		}
+	}
 	hooks, err := h.hookRepo.List(r.Context())
 	if err != nil {
 		serverError(w, r, "LIST_HOOKS_FAILED", "list hooks for yaml export", err)
@@ -71,6 +85,7 @@ func (h *ConfigHandler) GetConfigYAML(w http.ResponseWriter, r *http.Request) {
 
 	full := fullConfig{
 		GlobalConfig: h.rtm.CurrentConfig(),
+		Templates:    templates,
 		Streams:      streams,
 		Hooks:        hooks,
 		VOD:          vodMounts,
@@ -155,6 +170,15 @@ func (h *ConfigHandler) ReplaceConfigYAML(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Templates land BEFORE streams: stream.Template references must be able
+	// to resolve when applyStreams calls coord.Start/Update. The autopublish
+	// matcher gets a final refresh after the desired template set is
+	// persisted so prefix routing sees the new shape on the next push.
+	if err := h.applyTemplates(r.Context(), newCfg.Templates, newCfg.Streams); err != nil {
+		serverError(w, r, "APPLY_TEMPLATES_FAILED", "apply templates from yaml", err)
+		return
+	}
+
 	if err := h.applyHooks(r.Context(), newCfg.Hooks); err != nil {
 		serverError(w, r, "APPLY_HOOKS_FAILED", "apply hooks from yaml", err)
 		return
@@ -176,6 +200,10 @@ func (h *ConfigHandler) ReplaceConfigYAML(w http.ResponseWriter, r *http.Request
 
 	current := h.rtm.CurrentConfig()
 	streamsAfter, _ := h.streamRepo.List(r.Context(), store.StreamFilter{})
+	var templatesAfter []*domain.Template
+	if h.templateRepo != nil {
+		templatesAfter, _ = h.templateRepo.List(r.Context())
+	}
 	hooksAfter, _ := h.hookRepo.List(r.Context())
 	vodAfter, _ := h.vodRepo.List(r.Context())
 
@@ -194,11 +222,106 @@ func (h *ConfigHandler) ReplaceConfigYAML(w http.ResponseWriter, r *http.Request
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"global_config": current,
+		"templates":     templatesAfter,
 		"streams":       streamsAfter,
 		"hooks":         hooksAfter,
 		"vod":           vodAfter,
 		"ports":         portsFromConfig(current),
 	})
+}
+
+// applyTemplates diffs the desired template list against the store. Same
+// upsert-then-delete shape as applyHooks, with two extra rules:
+//
+//   - A template only present in the store is deleted ONLY when no stream
+//     in `streamsAfter` references it. Otherwise the bulk-replace would
+//     orphan the reference and the next coord.Start would fail validation.
+//     Surface this as a structured error so the editor can highlight which
+//     streams still need detaching.
+//   - On success the autopublish prefix matcher is refreshed so the new
+//     template set's prefixes route encoder pushes correctly.
+//
+// The caller passes the desired stream list so the foreign-key check runs
+// against post-replace state, not pre-replace.
+func (h *ConfigHandler) applyTemplates(
+	ctx context.Context,
+	desired []*domain.Template,
+	streamsAfter []*domain.Stream,
+) error {
+	// Nil templateRepo means the handler was constructed without DI (unit
+	// tests building a minimal ConfigHandler). Skip the apply entirely so
+	// existing tests that don't care about templates still pass.
+	if h.templateRepo == nil {
+		return nil
+	}
+	existing, err := h.templateRepo.List(ctx)
+	if err != nil {
+		return fmt.Errorf("list templates: %w", err)
+	}
+
+	desiredByCode := make(map[domain.TemplateCode]*domain.Template, len(desired))
+	for _, tpl := range desired {
+		if tpl == nil {
+			continue
+		}
+		desiredByCode[tpl.Code] = tpl
+	}
+
+	// Build "what would the future stream set reference?" using the request's
+	// streams (not the store's current set) — operators usually delete a
+	// template + the streams that reference it in the same edit, and the
+	// store doesn't reflect those stream deletes until applyStreams runs.
+	refsAfter := make(map[domain.TemplateCode]map[domain.StreamCode]struct{})
+	for _, s := range streamsAfter {
+		if s == nil || s.Template == nil {
+			continue
+		}
+		set, ok := refsAfter[*s.Template]
+		if !ok {
+			set = make(map[domain.StreamCode]struct{})
+			refsAfter[*s.Template] = set
+		}
+		set[s.Code] = struct{}{}
+	}
+
+	for _, old := range existing {
+		if old == nil {
+			continue
+		}
+		if _, keep := desiredByCode[old.Code]; keep {
+			continue
+		}
+		if blockers := refsAfter[old.Code]; len(blockers) > 0 {
+			codes := make([]string, 0, len(blockers))
+			for c := range blockers {
+				codes = append(codes, string(c))
+			}
+			return fmt.Errorf("template %q is referenced by stream(s) %v — detach them in the same edit",
+				old.Code, codes)
+		}
+		if err := h.templateRepo.Delete(ctx, old.Code); err != nil {
+			return fmt.Errorf("delete template %q: %w", old.Code, err)
+		}
+	}
+
+	for _, tpl := range desired {
+		if tpl == nil {
+			continue
+		}
+		if err := h.templateRepo.Save(ctx, tpl); err != nil {
+			return fmt.Errorf("save template %q: %w", tpl.Code, err)
+		}
+	}
+
+	// Rebuild the autopublish prefix snapshot so subsequent encoder pushes
+	// see the new template set. Nil-safe — tests construct the handler
+	// without the autopublish service.
+	if h.autopublish != nil {
+		if err := h.autopublish.RefreshTemplates(ctx); err != nil {
+			return fmt.Errorf("refresh autopublish: %w", err)
+		}
+	}
+	return nil
 }
 
 // applyHooks diffs the desired hook list against what is in the store and

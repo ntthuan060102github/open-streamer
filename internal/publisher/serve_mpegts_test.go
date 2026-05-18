@@ -37,7 +37,7 @@ func TestHandleMPEGTS_StreamsBufferContent(t *testing.T) {
 
 	stream := &domain.Stream{
 		Code:      streamCode,
-		Protocols: domain.OutputProtocols{MPEGTS: true},
+		Protocols: &domain.OutputProtocols{MPEGTS: true},
 	}
 	require.NoError(t, pub.Start(context.Background(), stream))
 	t.Cleanup(func() { pub.Stop(streamCode) })
@@ -141,7 +141,7 @@ func TestHandleMPEGTS_404WhenProtocolDisabled(t *testing.T) {
 
 	require.NoError(t, pub.Start(context.Background(), &domain.Stream{
 		Code:      streamCode,
-		Protocols: domain.OutputProtocols{MPEGTS: false}, // explicitly off
+		Protocols: &domain.OutputProtocols{MPEGTS: false}, // explicitly off
 	}))
 	t.Cleanup(func() { pub.Stop(streamCode) })
 
@@ -173,7 +173,7 @@ func TestHandleMPEGTS_ClientDisconnectReleasesSubscriber(t *testing.T) {
 
 	require.NoError(t, pub.Start(context.Background(), &domain.Stream{
 		Code:      streamCode,
-		Protocols: domain.OutputProtocols{MPEGTS: true},
+		Protocols: &domain.OutputProtocols{MPEGTS: true},
 	}))
 
 	r := chi.NewRouter()

@@ -2058,7 +2058,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "protocols": {
-                    "description": "Protocols defines which delivery protocols are opened for this stream.\nThe server opens a listener/packager for each enabled protocol.\nProtocol-level config (ports, segment duration, CDN URL) lives in server config.",
+                    "description": "Protocols defines which delivery protocols are opened for this stream.\nnil means the field is unset and ResolveStream inherits the template's\nProtocols (or leaves the resolved value nil when no template applies —\npublisher treats nil as \"no protocols enabled\"). An explicit non-nil\npointer — including the zero value \u0026OutputProtocols{} — is an\noperator-asserted override and beats template inheritance.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/domain.OutputProtocols"
@@ -2559,6 +2559,8 @@ const docTemplate = `{
         "domain.EventType": {
             "type": "string",
             "enum": [
+                "session.opened",
+                "session.closed",
                 "stream.created",
                 "stream.updated",
                 "stream.started",
@@ -2592,9 +2594,7 @@ const docTemplate = `{
                 "template.updated",
                 "template.deleted",
                 "stream.runtime_created",
-                "stream.runtime_expired",
-                "session.opened",
-                "session.closed"
+                "stream.runtime_expired"
             ],
             "x-enum-comments": {
                 "EventDVRSegmentPruned": "retention loop deleted an aged-out segment",
@@ -2611,6 +2611,8 @@ const docTemplate = `{
                 "EventStreamUpdated": "PUT /streams/{code} on existing record"
             },
             "x-enum-descriptions": [
+                "",
+                "",
                 "",
                 "PUT /streams/{code} on existing record",
                 "",
@@ -2644,11 +2646,11 @@ const docTemplate = `{
                 "",
                 "",
                 "",
-                "",
-                "",
                 ""
             ],
             "x-enum-varnames": [
+                "EventSessionOpened",
+                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamUpdated",
                 "EventStreamStarted",
@@ -2682,9 +2684,7 @@ const docTemplate = `{
                 "EventTemplateUpdated",
                 "EventTemplateDeleted",
                 "EventStreamRuntimeCreated",
-                "EventStreamRuntimeExpired",
-                "EventSessionOpened",
-                "EventSessionClosed"
+                "EventStreamRuntimeExpired"
             ]
         },
         "domain.GlobalConfig": {
@@ -3323,7 +3323,7 @@ const docTemplate = `{
                     }
                 },
                 "protocols": {
-                    "description": "Protocols defines which delivery protocols are opened.",
+                    "description": "Protocols defines which delivery protocols are opened. nil means the\ntemplate doesn't dictate protocols — inheriting streams must declare\ntheir own, or the resolved value stays nil (no protocols enabled).",
                     "allOf": [
                         {
                             "$ref": "#/definitions/domain.OutputProtocols"

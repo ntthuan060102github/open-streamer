@@ -185,7 +185,7 @@ func TestTemplate_PutHotReloadsRunningDependents(t *testing.T) {
 
 	require.NoError(t, tr.Save(t.Context(), &domain.Template{
 		Code:      "profile_a",
-		Protocols: domain.OutputProtocols{HLS: true},
+		Protocols: &domain.OutputProtocols{HLS: true},
 	}))
 	tplCode := domain.TemplateCode("profile_a")
 	streamCode := domain.StreamCode("live")
@@ -199,7 +199,7 @@ func TestTemplate_PutHotReloadsRunningDependents(t *testing.T) {
 
 	// New template enables DASH in addition to HLS.
 	body, _ := json.Marshal(domain.Template{
-		Protocols: domain.OutputProtocols{HLS: true, DASH: true},
+		Protocols: &domain.OutputProtocols{HLS: true, DASH: true},
 	})
 	req := withTemplateCode(newReq(t, http.MethodPost, "/templates/profile_a", body), "profile_a")
 	rec := httptest.NewRecorder()

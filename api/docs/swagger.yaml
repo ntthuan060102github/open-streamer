@@ -218,8 +218,11 @@ definitions:
         - $ref: '#/definitions/domain.OutputProtocols'
         description: |-
           Protocols defines which delivery protocols are opened for this stream.
-          The server opens a listener/packager for each enabled protocol.
-          Protocol-level config (ports, segment duration, CDN URL) lives in server config.
+          nil means the field is unset and ResolveStream inherits the template's
+          Protocols (or leaves the resolved value nil when no template applies —
+          publisher treats nil as "no protocols enabled"). An explicit non-nil
+          pointer — including the zero value &OutputProtocols{} — is an
+          operator-asserted override and beats template inheritance.
       push:
         description: |-
           Push is the list of external destinations the server actively pushes to.
@@ -631,6 +634,8 @@ definitions:
     type: object
   domain.EventType:
     enum:
+    - session.opened
+    - session.closed
     - stream.created
     - stream.updated
     - stream.started
@@ -665,8 +670,6 @@ definitions:
     - template.deleted
     - stream.runtime_created
     - stream.runtime_expired
-    - session.opened
-    - session.closed
     type: string
     x-enum-comments:
       EventDVRSegmentPruned: retention loop deleted an aged-out segment
@@ -683,6 +686,8 @@ definitions:
       EventPushStarted: dialing target, pre-handshake
       EventStreamUpdated: PUT /streams/{code} on existing record
     x-enum-descriptions:
+    - ""
+    - ""
     - ""
     - PUT /streams/{code} on existing record
     - ""
@@ -717,9 +722,9 @@ definitions:
     - ""
     - ""
     - ""
-    - ""
-    - ""
     x-enum-varnames:
+    - EventSessionOpened
+    - EventSessionClosed
     - EventStreamCreated
     - EventStreamUpdated
     - EventStreamStarted
@@ -754,8 +759,6 @@ definitions:
     - EventTemplateDeleted
     - EventStreamRuntimeCreated
     - EventStreamRuntimeExpired
-    - EventSessionOpened
-    - EventSessionClosed
   domain.GlobalConfig:
     properties:
       buffer:
@@ -1377,7 +1380,10 @@ definitions:
       protocols:
         allOf:
         - $ref: '#/definitions/domain.OutputProtocols'
-        description: Protocols defines which delivery protocols are opened.
+        description: |-
+          Protocols defines which delivery protocols are opened. nil means the
+          template doesn't dictate protocols — inheriting streams must declare
+          their own, or the resolved value stays nil (no protocols enabled).
       push:
         description: Push is the list of external destinations the server actively
           pushes to.

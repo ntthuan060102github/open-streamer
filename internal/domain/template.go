@@ -87,8 +87,10 @@ type Template struct {
 	// their own Transcoder).
 	Transcoder *TranscoderConfig `json:"transcoder,omitempty" yaml:"transcoder,omitempty"`
 
-	// Protocols defines which delivery protocols are opened.
-	Protocols OutputProtocols `json:"protocols" yaml:"protocols"`
+	// Protocols defines which delivery protocols are opened. nil means the
+	// template doesn't dictate protocols — inheriting streams must declare
+	// their own, or the resolved value stays nil (no protocols enabled).
+	Protocols *OutputProtocols `json:"protocols,omitempty" yaml:"protocols,omitempty"`
 
 	// Push is the list of external destinations the server actively pushes to.
 	Push []PushDestination `json:"push" yaml:"push"`
@@ -240,7 +242,7 @@ func ResolveStream(s *Stream, tpl *Template) *Stream {
 	if out.Transcoder == nil && tpl.Transcoder != nil {
 		out.Transcoder = tpl.Transcoder
 	}
-	if out.Protocols == (OutputProtocols{}) {
+	if out.Protocols == nil && tpl.Protocols != nil {
 		out.Protocols = tpl.Protocols
 	}
 	if len(out.Push) == 0 && len(tpl.Push) > 0 {
