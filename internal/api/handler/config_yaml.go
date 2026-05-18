@@ -477,18 +477,44 @@ func (h *ConfigHandler) reconcileStreamLifecycle(
 	old, want *domain.Stream,
 	exists bool,
 ) error {
-	runnable := !want.Disabled && len(want.Inputs) > 0
+	// Resolve through the template before the coord call so the diff
+	// engine and pipeline start path see the inherited config. Without
+	// this, an edit like "set protocols all to false" never visibly
+	// changes anything because: the raw `old` has Protocols=nil (was
+	// inheriting), the raw `want` has Protocols=&{all false}, and the
+	// publisher's protocol diff reads zero-from-nil on both sides → no
+	// stop is triggered and the previously-resolved HLS/DASH workers
+	// keep running. StreamHandler.Put already resolves at the same
+	// boundary; the YAML editor's apply path was the outlier.
+	resolvedOld := h.resolveStream(ctx, old)
+	resolvedWant := h.resolveStream(ctx, want)
+	runnable := !resolvedWant.Disabled && len(resolvedWant.Inputs) > 0
 	switch {
-	case exists && h.coord.IsRunning(want.Code):
-		if err := h.coord.Update(ctx, old, want); err != nil {
-			return fmt.Errorf("update stream %q: %w", want.Code, err)
+	case exists && h.coord.IsRunning(resolvedWant.Code):
+		if err := h.coord.Update(ctx, resolvedOld, resolvedWant); err != nil {
+			return fmt.Errorf("update stream %q: %w", resolvedWant.Code, err)
 		}
 	case runnable:
-		if err := h.coord.Start(ctx, want); err != nil {
-			return fmt.Errorf("start stream %q: %w", want.Code, err)
+		if err := h.coord.Start(ctx, resolvedWant); err != nil {
+			return fmt.Errorf("start stream %q: %w", resolvedWant.Code, err)
 		}
 	}
 	return nil
+}
+
+// resolveStream merges a stream with its referenced template's config.
+// Falls back to the raw stream when the template repo isn't wired (unit
+// tests) or the lookup fails — same defensive shape StreamHandler.Put
+// uses so a missing template doesn't crash the apply flow.
+func (h *ConfigHandler) resolveStream(ctx context.Context, s *domain.Stream) *domain.Stream {
+	if s == nil || s.Template == nil || h.templateRepo == nil {
+		return s
+	}
+	tpl, err := h.templateRepo.FindByCode(ctx, *s.Template)
+	if err != nil {
+		return s
+	}
+	return domain.ResolveStream(s, tpl)
 }
 
 // validateFullConfig collects validation failures across every section of the
