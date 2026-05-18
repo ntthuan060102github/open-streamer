@@ -61,13 +61,49 @@ func HTTPMiddleware(t Tracker) func(http.Handler) http.Handler {
 // LAST '/' — i.e. the stream-code prefix under the catch-all layout
 // /<code>/<file>. With slashes-allowed codes the prefix may itself span
 // multiple segments (e.g. "region/north/live").
+//
+// DASH + HLS ABR put per-rendition segments under a `track_<N>` subdir
+// (`buffer.VideoTrackSlug` is the source of truth — `track_1`, `track_2`,
+// …), so the raw path-prefix split would catch the rendition slug as
+// part of the stream code. That makes a single viewer pulling N
+// renditions look like N distinct sessions in the tracker; this helper
+// strips a trailing `track_<digits>` segment so the parent stream owns
+// the session. The slug is a closed namespace inside this codebase, so
+// the strip can't collide with an operator-defined code unless they
+// deliberately namespace one segment as `track_<N>` (and even then it
+// would only conflict for the ABR / track_<N> rendition layout).
 func streamCodeFromPath(p string) domain.StreamCode {
 	p = strings.TrimPrefix(p, "/")
 	i := strings.LastIndexByte(p, '/')
 	if i <= 0 {
 		return ""
 	}
-	return domain.StreamCode(p[:i])
+	code := p[:i]
+	if j := strings.LastIndexByte(code, '/'); j > 0 && isABRTrackSlug(code[j+1:]) {
+		code = code[:j]
+	}
+	return domain.StreamCode(code)
+}
+
+// isABRTrackSlug reports whether s matches `track_<positive digits>` —
+// the path segment buffer.VideoTrackSlug emits for ABR renditions.
+// Kept inline (not imported from internal/buffer) so the sessions
+// package stays leaf-level in the import graph.
+func isABRTrackSlug(s string) bool {
+	const prefix = "track_"
+	if !strings.HasPrefix(s, prefix) {
+		return false
+	}
+	rest := s[len(prefix):]
+	if rest == "" {
+		return false
+	}
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isDVRPlayback reports whether the request carries any timeshift query

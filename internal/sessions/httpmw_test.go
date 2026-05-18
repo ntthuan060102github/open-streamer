@@ -153,6 +153,75 @@ func TestHTTPMiddlewareSupportsNestedCodes(t *testing.T) {
 	}
 }
 
+// DASH + HLS ABR put per-rendition segments under a `track_<N>` subdir.
+// The session belongs to the parent stream — a viewer pulling 1080p +
+// 720p + 480p must show up as ONE session, not three. Before this fix
+// streamCodeFromPath swallowed `/track_<N>` into the stream code, so
+// each rendition opened its own session record with a distinct
+// fingerprint (the fingerprint hash includes the stream code).
+func TestHTTPMiddlewareCollapsesABRTrackHits(t *testing.T) {
+	s := newTestService(t)
+	h := newRouterWithTracker(t, s)
+
+	const remote = "1.2.3.4:1"
+	const ua = "Mozilla/5.0"
+	for _, p := range []string{
+		"/thanh_hoa/track_1/init.mp4",
+		"/thanh_hoa/track_1/seg-0.m4s",
+		"/thanh_hoa/track_2/init.mp4",
+		"/thanh_hoa/track_2/seg-0.m4s",
+	} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, p, nil)
+		req.RemoteAddr = remote
+		req.Header.Set("User-Agent", ua)
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	all := s.List(Filter{})
+	if len(all) != 1 {
+		t.Fatalf("got %d sessions, want 1 (rendition hits must collapse onto the parent stream)", len(all))
+	}
+	if got := all[0].StreamCode; got != "thanh_hoa" {
+		t.Errorf("stream_code=%s, want thanh_hoa (rendition slug must be stripped)", got)
+	}
+}
+
+// streamCodeFromPath is the path-parsing primitive that the middleware
+// relies on; cover the edge cases directly so a future refactor that
+// rewrites the helper without changing the middleware still surfaces
+// the regression as a unit-test failure.
+func TestStreamCodeFromPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want domain.StreamCode
+	}{
+		// Flat single-segment codes — file at depth 1.
+		{"/news/index.m3u8", "news"},
+		{"/news/seg0.ts", "news"},
+		// Multi-segment namespaced codes — file at deeper depth.
+		{"/region/north/news/index.m3u8", "region/north/news"},
+		{"/region/north/news/seg0.ts", "region/north/news"},
+		// ABR rendition layout — `/track_<N>` must be stripped.
+		{"/news/track_1/init.mp4", "news"},
+		{"/news/track_2/seg-3.m4s", "news"},
+		{"/region/north/news/track_1/seg-3.m4s", "region/north/news"},
+		// Names that look like a track slug but aren't — left alone.
+		{"/news/trackfoo/seg-3.m4s", "news/trackfoo"},
+		{"/news/track_/seg-3.m4s", "news/track_"},
+		{"/news/track_x1/seg-3.m4s", "news/track_x1"},
+		// Pathological: no `/` after code → no code (no file to serve anyway).
+		{"/news", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := streamCodeFromPath(tc.path); got != tc.want {
+				t.Errorf("streamCodeFromPath(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 // Timeshift query params (from / delay / dur / ago) flip the hit into
 // DVR=true so the dashboard can split archive vs live-edge viewers —
 // replaces the dropped DVRHTTPMiddleware route group.
