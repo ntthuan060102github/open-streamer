@@ -32,7 +32,16 @@ import (
 	"github.com/samber/do/v2"
 )
 
-var errNoPusherConnected = errors.New("ingestor: no pusher connected")
+// ErrNoPusherConnected is the fail-fast signal the push registration path
+// raises right after reserving a slot in the registry: the encoder hasn't
+// connected yet, so the manager should fall over to a lower-priority input
+// instead of waiting the full packet-timeout window. Exported so the
+// manager can recognise it via errors.Is and SKIP the degrade-then-fallover
+// dance when the stream has no other input to swap to (single-input
+// publish:// — typical for auto-publish runtime streams). Without that
+// skip, the signal races with the first inbound packet and can leave the
+// stream stuck in Degraded even though the pipeline is healthy.
+var ErrNoPusherConnected = errors.New("ingestor: no pusher connected")
 
 type pullWorkerEntry struct {
 	inputPriority int
@@ -515,7 +524,7 @@ func (s *Service) startPushRegistration(streamID domain.StreamCode, input domain
 	// No pusher is connected yet — notify the manager so it can fall back to
 	// a lower-priority input immediately rather than waiting for the packet timeout.
 	if errObserver != nil {
-		errObserver(streamID, input.Priority, errNoPusherConnected)
+		errObserver(streamID, input.Priority, ErrNoPusherConnected)
 	}
 	return nil
 }

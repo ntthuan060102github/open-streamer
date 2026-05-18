@@ -25,6 +25,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -633,6 +634,20 @@ func (s *Service) ReportInputError(streamID domain.StreamCode, inputPriority int
 	now := time.Now()
 	state.mu.Lock()
 	if state.dead {
+		state.mu.Unlock()
+		return
+	}
+	// Single-input streams (eg. an auto-publish runtime stream with only a
+	// publish:// input) treat ErrNoPusherConnected as a no-op: the error
+	// exists to fast-track failover to a LOWER-priority input, but when
+	// there's nothing to fall over to, the only effect is to flip the
+	// stream to Degraded, fire onExhausted, and race the first inbound
+	// packet's recovery callback. The race is non-deterministic; under
+	// adverse ordering the Degraded flag stays set even though packets
+	// flow normally. Leaving the input as Idle here lets RecordPacket
+	// promote it to Active on the first packet without ever touching
+	// the exhausted bit.
+	if errors.Is(err, ingestor.ErrNoPusherConnected) && len(state.inputs) <= 1 {
 		state.mu.Unlock()
 		return
 	}
