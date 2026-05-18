@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -138,7 +139,7 @@ func (s *Service) ResolvePath(filename domain.WatermarkFilename) (string, error)
 	if _, err := s.Get(filename); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.dir, string(filename)), nil
+	return s.resolveAssetPath(string(filename))
 }
 
 // Save uploads new image bytes under the given filename. ContentType is
@@ -155,11 +156,15 @@ func (s *Service) Save(filename string, body io.Reader) (*domain.WatermarkAsset,
 		return nil, err
 	}
 
+	imgPath, err := s.resolveAssetPath(filename)
+	if err != nil {
+		return nil, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	imgPath := filepath.Join(s.dir, filename)
-	if _, err := os.Stat(imgPath); err == nil {
+	if _, statErr := os.Stat(imgPath); statErr == nil {
 		return nil, fmt.Errorf("%w: %s", ErrAlreadyExists, filename)
 	}
 
@@ -194,6 +199,12 @@ func (s *Service) Save(filename string, body io.Reader) (*domain.WatermarkAsset,
 // repeat calls return ErrNotFound exactly once and no-op afterwards. Caller
 // is responsible for ensuring the asset isn't referenced by an active
 // stream — there is no foreign-key check here.
+//
+// Uses os.Root (Go 1.24+) to sandbox the lookup inside the assets dir.
+// The OpenRoot handle refuses any "../" or absolute-path escape in the
+// filename argument at the syscall layer; CodeQL recognises this as the
+// canonical path-traversal sanitiser, which the prior os.Stat+os.Remove
+// pair did not.
 func (s *Service) Delete(filename domain.WatermarkFilename) error {
 	if err := domain.ValidateWatermarkFilename(string(filename)); err != nil {
 		return ErrNotFound
@@ -201,14 +212,20 @@ func (s *Service) Delete(filename domain.WatermarkFilename) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path := filepath.Join(s.dir, string(filename))
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
+	root, err := os.OpenRoot(s.dir)
+	if err != nil {
+		return fmt.Errorf("watermarks: open assets root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
+	name := string(filename)
+	if _, statErr := root.Stat(name); statErr != nil {
+		if errors.Is(statErr, fs.ErrNotExist) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("watermarks: stat: %w", err)
+		return fmt.Errorf("watermarks: stat: %w", statErr)
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := root.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("watermarks: remove image: %w", err)
 	}
 	return nil
@@ -216,16 +233,45 @@ func (s *Service) Delete(filename domain.WatermarkFilename) error {
 
 // ─── internals ───────────────────────────────────────────────────────────────
 
+// resolveAssetPath validates `name` against the filename rules and joins it
+// onto the assets directory, refusing any result that would escape the
+// directory. The validation regex already rejects path separators and `..`
+// so the absolute path is always `<dir>/<name>`, but the explicit
+// containment check is what teaches CodeQL the downstream os.Stat /
+// os.Remove / http.ServeFile sinks are safe — without it the path-injection
+// rule flags every filepath.Join that touches a user-provided value.
+func (s *Service) resolveAssetPath(name string) (string, error) {
+	if err := domain.ValidateWatermarkFilename(name); err != nil {
+		return "", err
+	}
+	rootAbs, err := filepath.Abs(s.dir)
+	if err != nil {
+		return "", fmt.Errorf("watermarks: resolve assets dir: %w", err)
+	}
+	// filepath.Base scrubs any path separators the validator should already
+	// have rejected; pairing it with the containment check makes the
+	// sanitiser robust even if the validation regex is loosened later.
+	joined, err := filepath.Abs(filepath.Join(rootAbs, filepath.Base(name)))
+	if err != nil {
+		return "", fmt.Errorf("watermarks: resolve asset path: %w", err)
+	}
+	rootPrefix := rootAbs + string(filepath.Separator)
+	if joined != rootAbs && !strings.HasPrefix(joined, rootPrefix) {
+		return "", fmt.Errorf("watermarks: filename %q escapes assets dir", name)
+	}
+	return joined, nil
+}
+
 // assetFromEntry stats `name` under the assets directory and sniffs its
 // MIME type, returning a metadata view of the asset. Returns (_, false)
 // when the filename doesn't validate, the file is missing, can't be
 // read, or its content type isn't a supported image — callers treat the
 // flag as "skip this entry / not found".
 func (s *Service) assetFromEntry(name string) (*domain.WatermarkAsset, bool) {
-	if err := domain.ValidateWatermarkFilename(name); err != nil {
+	path, err := s.resolveAssetPath(name)
+	if err != nil {
 		return nil, false
 	}
-	path := filepath.Join(s.dir, name)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
 		return nil, false

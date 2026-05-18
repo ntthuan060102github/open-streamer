@@ -631,8 +631,6 @@ definitions:
     type: object
   domain.EventType:
     enum:
-    - session.opened
-    - session.closed
     - stream.created
     - stream.updated
     - stream.started
@@ -667,6 +665,8 @@ definitions:
     - template.deleted
     - stream.runtime_created
     - stream.runtime_expired
+    - session.opened
+    - session.closed
     type: string
     x-enum-comments:
       EventDVRSegmentPruned: retention loop deleted an aged-out segment
@@ -683,8 +683,6 @@ definitions:
       EventPushStarted: dialing target, pre-handshake
       EventStreamUpdated: PUT /streams/{code} on existing record
     x-enum-descriptions:
-    - ""
-    - ""
     - ""
     - PUT /streams/{code} on existing record
     - ""
@@ -719,9 +717,9 @@ definitions:
     - ""
     - ""
     - ""
+    - ""
+    - ""
     x-enum-varnames:
-    - EventSessionOpened
-    - EventSessionClosed
     - EventStreamCreated
     - EventStreamUpdated
     - EventStreamStarted
@@ -756,6 +754,8 @@ definitions:
     - EventTemplateDeleted
     - EventStreamRuntimeCreated
     - EventStreamRuntimeExpired
+    - EventSessionOpened
+    - EventSessionClosed
   domain.GlobalConfig:
     properties:
       buffer:
@@ -1632,10 +1632,10 @@ definitions:
         type: boolean
       filename:
         description: |-
-          Filename, when set, references a WatermarkAsset by its on-disk name
-          in the /watermarks library (eg. `vtv1_logo.png`). Coordinator resolves
-          it to an absolute file path before passing the config to the
-          transcoder. Takes precedence over ImagePath when both are set.
+          Filename references a WatermarkAsset by its on-disk name in the
+          /watermarks library (eg. `vtv1_logo.png`). Required when Type ==
+          WatermarkTypeImage. The coordinator resolves this into ImagePath
+          (private field) before passing the config to the transcoder.
         type: string
       font_color:
         description: FontColor in FFmpeg color syntax. E.g. "white", "#FFFFFF", "white@0.8".
@@ -1648,12 +1648,6 @@ definitions:
       font_size:
         description: 'FontSize in pixels. Default: 24.'
         type: integer
-      image_path:
-        description: |-
-          ImagePath is the absolute path to a watermark image (PNG with alpha
-          recommended). Use this for assets pre-staged on the host outside the
-          /watermarks library. Mutually exclusive with Filename.
-        type: string
       offset_x:
         description: |-
           OffsetX and OffsetY are pixel offsets from the chosen position edge.

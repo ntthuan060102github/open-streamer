@@ -123,18 +123,18 @@ func (h *WatermarkHandler) Raw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "asset not found")
 		return
 	}
-	abs, err := h.svc.ResolvePath(fn)
-	if err != nil {
-		serverError(w, r, "RESOLVE_FAILED", "resolve watermark path", err)
-		return
-	}
 	if asset.ContentType != "" {
 		w.Header().Set("Content-Type", asset.ContentType)
 	}
 	// Long cache — assets are immutable once uploaded (replace = Delete +
 	// Save under a new filename). Cuts re-fetches on UI reloads.
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	http.ServeFile(w, r, abs)
+	// Serve via os.DirFS rooted at the assets dir instead of an absolute
+	// path. The FS sandbox is the CodeQL-recognised sanitiser for path
+	// traversal: any "../" in `name` resolves inside the root or returns
+	// a NotExist error, never escaping. Validation upstream still rejects
+	// such names; this is defence-in-depth at the sink.
+	http.ServeFileFS(w, r, os.DirFS(h.svc.Dir()), filepath.Base(name))
 }
 
 // Upload accepts a multipart "file" field. The uploaded file's basename
