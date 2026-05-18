@@ -16,6 +16,7 @@ import (
 
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
+	"github.com/ntt0601zcoder/open-streamer/internal/ingestor"
 )
 
 // streamWithInputs builds a domain.Stream with N inputs at priorities 0..N-1.
@@ -227,6 +228,69 @@ func TestReportInputError_AllExhaustedFiresCallback(t *testing.T) {
 
 	rt, _ := svc.RuntimeStatus("s7")
 	assert.True(t, rt.Exhausted, "exhausted flag must be set")
+}
+
+// Regression: the ingestor fires ErrNoPusherConnected the moment a push
+// slot is registered, BEFORE the encoder's first packet has had a chance
+// to land on the manager. For an auto-publish runtime stream that has a
+// single publish:// input and no fallback, the error must be a no-op —
+// the encoder is already waiting on registry.Acquire and the next packet
+// will promote the input from Idle to Active. Without the skip, the input
+// goes Degraded → exhausted → fires onExhausted async; the recovery
+// callback may land BEFORE the exhausted callback, after which the
+// exhausted callback's flag set sticks forever even with packets flowing.
+func TestReportInputError_NoPusherSkippedOnSingleInput(t *testing.T) {
+	t.Parallel()
+	svc, _ := newSvc(t)
+	require.NoError(t, svc.Register(context.Background(),
+		streamWithInputs("autopub", "publish://"), ""))
+
+	exhaustedCh := make(chan domain.StreamCode, 1)
+	svc.SetExhaustedCallback(func(c domain.StreamCode) {
+		select {
+		case exhaustedCh <- c:
+		default:
+		}
+	})
+
+	svc.ReportInputError("autopub", 0, ingestor.ErrNoPusherConnected)
+
+	select {
+	case got := <-exhaustedCh:
+		t.Fatalf("exhausted callback must NOT fire for single-input + ErrNoPusherConnected, got %q", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	rt, _ := svc.RuntimeStatus("autopub")
+	assert.False(t, rt.Exhausted, "single-input stream must stay non-exhausted under ErrNoPusherConnected")
+	for _, in := range rt.Inputs {
+		if in.InputPriority == 0 {
+			assert.Equal(t, domain.StatusIdle, in.Status,
+				"input must remain Idle so the next packet can promote it to Active")
+			assert.Empty(t, in.Errors,
+				"no error history entry — the signal is a fast-path hint, not a real failure")
+		}
+	}
+}
+
+// Multi-input streams must still see the fast failover: ErrNoPusherConnected
+// is the signal that lets us swap to the next priority before the 30s
+// packet-timeout kicks in.
+func TestReportInputError_NoPusherStillFailsOverWithFallback(t *testing.T) {
+	t.Parallel()
+	svc, _ := newSvc(t)
+	require.NoError(t, svc.Register(context.Background(),
+		streamWithInputs("fb", "publish://", "rtmp://fallback"), ""))
+
+	svc.ReportInputError("fb", 0, ingestor.ErrNoPusherConnected)
+
+	rt, _ := svc.RuntimeStatus("fb")
+	for _, in := range rt.Inputs {
+		if in.InputPriority == 0 {
+			assert.Equal(t, domain.StatusDegraded, in.Status,
+				"primary input must degrade so failover can pick the fallback")
+		}
+	}
 }
 
 func TestReportInputError_DoubleReportIsIdempotent(t *testing.T) {
