@@ -202,11 +202,34 @@ func (s *Service) ResolveOrCreate(ctx context.Context, path string) (domain.Stre
 // the standard write-never-blocks buffer-hub channel; if this loop
 // falls behind, packets get dropped — that is fine for liveness
 // purposes (we just need ONE packet per 30 s to keep the stream alive).
+//
+// Two exit paths matter:
+//
+//   - ctx.Done() — the entry was torn down by stopRuntimeStream (idle
+//     reaper or future operator action). The entry has already been
+//     removed from s.entries and coordinator.Stop has been called;
+//     nothing else to do.
+//   - sub.Recv() returns ok=false — the buffer was destroyed by
+//     SOMEONE ELSE (operator DELETE /streams/<code>, coordinator-level
+//     stop for any other reason). The entry still sits in s.entries
+//     and would prevent a subsequent push from re-materialising the
+//     stream because ResolveOrCreate's fast path returns immediately
+//     when it sees the stale entry — meanwhile the ingestor's push
+//     registry slot is already gone, so the second registry.Acquire
+//     fails and the publisher is rejected forever. Clear the entry
+//     here (defensively, only when we still own it) so the next push
+//     gets a fresh ResolveOrCreate path.
+//
+// Subscribe failure at startup follows the same logic: the entry was
+// just inserted by ResolveOrCreate but has no liveness backing, so a
+// reaper sweep would never fire — strand the runtime stream visible
+// in the API forever. Remove the orphan entry on the way out.
 func (s *Service) observeLiveness(ctx context.Context, entry *runtimeEntry) {
 	sub, err := s.buf.Subscribe(entry.code)
 	if err != nil {
 		slog.Warn("autopublish: liveness subscribe failed",
 			"stream_code", entry.code, "err", err)
+		s.removeOrphanedEntry(ctx, entry, "subscribe_failed")
 		return
 	}
 	defer s.buf.Unsubscribe(entry.code, sub)
@@ -216,11 +239,33 @@ func (s *Service) observeLiveness(ctx context.Context, entry *runtimeEntry) {
 			return
 		case _, ok := <-sub.Recv():
 			if !ok {
+				s.removeOrphanedEntry(ctx, entry, "buffer_closed")
 				return
 			}
 			entry.lastPacketAt.Store(time.Now().UnixNano())
 		}
 	}
+}
+
+// removeOrphanedEntry clears `entry` from the runtime registry when its
+// buffer-hub subscription has died from external causes (not via
+// stopRuntimeStream — that path already cleared the entry before
+// cancelling the observer). The "still owned by" check defends against
+// a parallel push that re-inserted a fresh entry for the same code
+// between the subscribe death and this delete: stomping that newer
+// entry would lose a live stream.
+func (s *Service) removeOrphanedEntry(ctx context.Context, entry *runtimeEntry, reason string) {
+	s.mu.Lock()
+	cur, ok := s.entries[entry.code]
+	if !ok || cur != entry {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.entries, entry.code)
+	s.mu.Unlock()
+	s.publishRuntimeEvent(ctx, domain.EventStreamRuntimeExpired, entry.code, entry.templateCode)
+	slog.Info("autopublish: runtime stream cleared (external teardown)",
+		"stream_code", entry.code, "template", entry.templateCode, "reason", reason)
 }
 
 // RunReaper sweeps the runtime registry every reapInterval, stopping
