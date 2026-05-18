@@ -63,7 +63,7 @@ func ComputeDiff(old, new *domain.Stream) StreamDiff {
 
 	diffInputs(old, new, &d)
 	diffTranscoder(old, new, &d)
-	d.ProtocolsChanged = old.Protocols != new.Protocols
+	d.ProtocolsChanged = !protocolsEqual(old.Protocols, new.Protocols)
 	d.PushChanged = !pushSliceEqual(old.Push, new.Push)
 	d.DVRChanged = !dvrConfigEqual(old.DVR, new.DVR)
 
@@ -250,6 +250,21 @@ func pushSliceEqual(a, b []domain.PushDestination) bool {
 }
 
 func dvrConfigEqual(a, b *domain.StreamDVRConfig) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return *a == *b
+}
+
+// protocolsEqual treats two nil pointers as equal (both "unconfigured") and
+// otherwise compares the dereferenced struct values. A nil pointer is NOT
+// equal to a non-nil pointer pointing at the zero value — the operator
+// asserted "no protocols enabled" explicitly, which is a different intent
+// from "inherit / leave alone" and should trigger a protocol restart.
+func protocolsEqual(a, b *domain.OutputProtocols) bool {
 	if a == nil && b == nil {
 		return true
 	}

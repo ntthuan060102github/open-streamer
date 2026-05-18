@@ -333,14 +333,18 @@ func (c *Coordinator) Start(ctx context.Context, stream *domain.Stream) error {
 		StreamCode: stream.Code,
 	})
 
+	p := domain.OutputProtocols{}
+	if stream.Protocols != nil {
+		p = *stream.Protocols
+	}
 	slog.Info("coordinator: stream pipeline started",
 		"stream_code", stream.Code,
 		"inputs", len(stream.Inputs),
 		"transcoder", shouldRunTranscoder(stream),
 		"renditions", len(renditionSlugs),
-		"hls", stream.Protocols.HLS,
-		"dash", stream.Protocols.DASH,
-		"rtsp", stream.Protocols.RTSP,
+		"hls", p.HLS,
+		"dash", p.DASH,
+		"rtsp", p.RTSP,
 		"push_targets", len(stream.Push),
 		"dvr", stream.DVR != nil && stream.DVR.Enabled,
 	)

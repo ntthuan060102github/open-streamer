@@ -15,7 +15,7 @@ func baseStream() *domain.Stream {
 			{URL: "http://a.m3u8", Priority: 0},
 			{URL: "http://b.m3u8", Priority: 1},
 		},
-		Protocols: domain.OutputProtocols{HLS: true},
+		Protocols: &domain.OutputProtocols{HLS: true},
 		Transcoder: &domain.TranscoderConfig{
 			Video: domain.VideoTranscodeConfig{
 				Profiles: []domain.VideoProfile{

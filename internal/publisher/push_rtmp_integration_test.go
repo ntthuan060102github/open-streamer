@@ -233,7 +233,7 @@ func TestRTMPPushInputSwitch(t *testing.T) {
 				RetryTimeoutSec: 2,
 			},
 		},
-		Protocols: domain.OutputProtocols{},
+		Protocols: &domain.OutputProtocols{},
 	}
 
 	// ── 3. Start push publisher ─────────────────────────────────────────────

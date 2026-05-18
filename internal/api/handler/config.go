@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/ntt0601zcoder/open-streamer/internal/autopublish"
 	"github.com/ntt0601zcoder/open-streamer/internal/coordinator"
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 	"github.com/ntt0601zcoder/open-streamer/internal/events"
@@ -60,27 +61,35 @@ type configResponse struct {
 // streams, and hooks — as a single YAML document, so the frontend editor can
 // round-trip the entire system configuration in one screen.
 type ConfigHandler struct {
-	rtm        RuntimeConfigManager
-	streamRepo store.StreamRepository
-	hookRepo   store.HookRepository
-	vodRepo    store.VODMountRepository
-	vods       *vod.Registry
-	coord      streamLifecycle
-	bus        events.Bus
+	rtm          RuntimeConfigManager
+	streamRepo   store.StreamRepository
+	templateRepo store.TemplateRepository
+	hookRepo     store.HookRepository
+	vodRepo      store.VODMountRepository
+	vods         *vod.Registry
+	coord        streamLifecycle
+	autopublish  *autopublish.Service
+	bus          events.Bus
 }
 
 // NewConfigHandler creates a ConfigHandler from the DI injector.
 // The RuntimeConfigManager is injected later via SetRuntimeManager because it
 // depends on services that themselves depend on this handler (circular DI).
 func NewConfigHandler(i do.Injector) (*ConfigHandler, error) {
-	return &ConfigHandler{
-		streamRepo: do.MustInvoke[store.StreamRepository](i),
-		hookRepo:   do.MustInvoke[store.HookRepository](i),
-		vodRepo:    do.MustInvoke[store.VODMountRepository](i),
-		vods:       do.MustInvoke[*vod.Registry](i),
-		coord:      do.MustInvoke[*coordinator.Coordinator](i),
-		bus:        do.MustInvoke[events.Bus](i),
-	}, nil
+	h := &ConfigHandler{
+		streamRepo:   do.MustInvoke[store.StreamRepository](i),
+		templateRepo: do.MustInvoke[store.TemplateRepository](i),
+		hookRepo:     do.MustInvoke[store.HookRepository](i),
+		vodRepo:      do.MustInvoke[store.VODMountRepository](i),
+		vods:         do.MustInvoke[*vod.Registry](i),
+		coord:        do.MustInvoke[*coordinator.Coordinator](i),
+		bus:          do.MustInvoke[events.Bus](i),
+	}
+	// autopublish is optional in tests; tolerate absence.
+	if ap, err := do.Invoke[*autopublish.Service](i); err == nil {
+		h.autopublish = ap
+	}
+	return h, nil
 }
 
 // SetRuntimeManager injects the RuntimeManager after construction (breaks the circular DI dependency).

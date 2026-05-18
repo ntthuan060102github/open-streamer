@@ -242,7 +242,15 @@ func (s *Service) Start(ctx context.Context, stream *domain.Stream) error {
 		return fmt.Errorf("publisher: stream %s already running", stream.Code)
 	}
 
-	p := stream.Protocols
+	// nil Protocols means the stream resolved without any protocol set
+	// (no template inheritance + no explicit override). Treat as "no
+	// outputs" — the stream still ingests + buffers, but the publisher
+	// spawns nothing. The empty-value sentinel keeps every downstream
+	// check below working without nil guards.
+	p := domain.OutputProtocols{}
+	if stream.Protocols != nil {
+		p = *stream.Protocols
+	}
 	if p.DASH && strings.TrimSpace(s.cfg.DASH.Dir) == "" {
 		return fmt.Errorf("publisher: dash.dir is required when DASH output is enabled")
 	}
@@ -415,6 +423,11 @@ func (s *Service) cleanupStreamDirs(streamID domain.StreamCode) {
 // between old and new stream configs. Goroutines for unchanged protocols keep running.
 // Call this when diff.ProtocolsChanged || diff.PushChanged.
 func (s *Service) UpdateProtocols(ctx context.Context, old, new *domain.Stream) error {
+	// Normalise nil pointers to zero values so the per-protocol diff below
+	// can compare bools directly without nil-guarding every read.
+	op := protocolsValue(old.Protocols)
+	np := protocolsValue(new.Protocols)
+
 	s.mu.Lock()
 	ss, ok := s.streams[new.Code]
 	if ok {
@@ -423,14 +436,12 @@ func (s *Service) UpdateProtocols(ctx context.Context, old, new *domain.Stream) 
 			ss.mediaBuf = newBuf
 			s.mediaBuffer[new.Code] = newBuf
 		}
-		ss.mpegtsEnabled = new.Protocols.MPEGTS
+		ss.mpegtsEnabled = np.MPEGTS
 	}
 	s.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("publisher: stream %s not running", new.Code)
 	}
-
-	op, np := old.Protocols, new.Protocols
 
 	// HLS: only act on OFF→ON or ON→OFF transitions.
 	// HLS+DASH restarts due to ABR ladder changes are handled by RestartHLSDASH.
@@ -532,7 +543,8 @@ func (s *Service) RestartHLSDASH(ctx context.Context, stream *domain.Stream) err
 		return fmt.Errorf("publisher: stream %s not running", stream.Code)
 	}
 
-	if stream.Protocols.HLS {
+	p := protocolsValue(stream.Protocols)
+	if p.HLS {
 		s.mu.Lock()
 		//nolint:contextcheck // goroutine derives from ss.baseCtx (stream lifetime); by design
 		s.spawnProtocolLocked(ss, "hls", s.hlsFunc(ss, stream))
@@ -540,7 +552,7 @@ func (s *Service) RestartHLSDASH(ctx context.Context, stream *domain.Stream) err
 	} else {
 		s.stopProtocol(stream.Code, "hls")
 	}
-	if stream.Protocols.DASH {
+	if p.DASH {
 		s.mu.Lock()
 		//nolint:contextcheck // goroutine derives from ss.baseCtx (stream lifetime); by design
 		s.spawnProtocolLocked(ss, "dash", s.dashFunc(stream))
@@ -570,6 +582,17 @@ func (s *Service) UpdateABRMasterMeta(streamCode domain.StreamCode, updates []AB
 	for _, u := range updates {
 		m.SetRepOverride(u.Slug, u.BwBps, u.Width, u.Height, u.HasAudio)
 	}
+}
+
+// protocolsValue normalises the nil-or-pointer Protocols field into a value
+// so callers can read individual bools without nil-guarding every access.
+// nil pointer ↔ zero-value OutputProtocols{} — both mean "no protocols
+// configured" downstream.
+func protocolsValue(p *domain.OutputProtocols) domain.OutputProtocols {
+	if p == nil {
+		return domain.OutputProtocols{}
+	}
+	return *p
 }
 
 func publisherABRActive(stream *domain.Stream) bool {

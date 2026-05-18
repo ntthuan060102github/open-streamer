@@ -128,29 +128,45 @@ func TestResolveStream_NonEmptyStreamSliceOverridesTemplate(t *testing.T) {
 	assert.Equal(t, "rtmp://example/b", out.Push[0].URL)
 }
 
-// Protocols is a struct, not a pointer; the inherit signal is the all-zero
-// value. Any one bit set on the stream takes the whole struct.
-func TestResolveStream_InheritsZeroProtocols(t *testing.T) {
+// Protocols is now *OutputProtocols. nil on the stream means "inherit from
+// template"; any non-nil value (even &OutputProtocols{}) is an operator
+// assertion and replaces the template's value entirely.
+func TestResolveStream_InheritsNilProtocols(t *testing.T) {
 	t.Parallel()
 	code := TemplateCode("profile-a")
-	tpl := &Template{Code: "profile-a", Protocols: OutputProtocols{HLS: true, DASH: true}}
+	tpl := &Template{Code: "profile-a", Protocols: &OutputProtocols{HLS: true, DASH: true}}
 	s := &Stream{Code: "live", Template: &code}
 	out := ResolveStream(s, tpl)
-	assert.Equal(t, OutputProtocols{HLS: true, DASH: true}, out.Protocols)
+	require.NotNil(t, out.Protocols)
+	assert.Equal(t, OutputProtocols{HLS: true, DASH: true}, *out.Protocols)
 }
 
 func TestResolveStream_PartialProtocolsOverrideTemplate(t *testing.T) {
 	t.Parallel()
 	code := TemplateCode("profile-a")
-	tpl := &Template{Code: "profile-a", Protocols: OutputProtocols{HLS: true, DASH: true}}
+	tpl := &Template{Code: "profile-a", Protocols: &OutputProtocols{HLS: true, DASH: true}}
 	s := &Stream{
 		Code:      "live",
 		Template:  &code,
-		Protocols: OutputProtocols{RTMP: true},
+		Protocols: &OutputProtocols{RTMP: true},
 	}
 	out := ResolveStream(s, tpl)
-	assert.Equal(t, OutputProtocols{RTMP: true}, out.Protocols,
-		"any flag set on the stream replaces the entire protocols struct")
+	require.NotNil(t, out.Protocols)
+	assert.Equal(t, OutputProtocols{RTMP: true}, *out.Protocols,
+		"a non-nil pointer on the stream replaces the template's protocols entirely")
+}
+
+// Explicit empty &OutputProtocols{} on the stream is an operator assertion
+// "no protocols enabled" — it must NOT trip the inherit branch.
+func TestResolveStream_ExplicitEmptyProtocolsBeatsTemplate(t *testing.T) {
+	t.Parallel()
+	code := TemplateCode("profile-a")
+	tpl := &Template{Code: "profile-a", Protocols: &OutputProtocols{HLS: true, DASH: true}}
+	s := &Stream{Code: "live", Template: &code, Protocols: &OutputProtocols{}}
+	out := ResolveStream(s, tpl)
+	require.NotNil(t, out.Protocols)
+	assert.Equal(t, OutputProtocols{}, *out.Protocols,
+		"&OutputProtocols{} is explicit-disable, not inherit")
 }
 
 // Stream-owned values continue to win over template values even after

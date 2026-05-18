@@ -80,7 +80,7 @@ func NewFullStream(code domain.StreamCode) *domain.Stream {
 			},
 			ExtraArgs: []string{"-threads", "4"},
 		},
-		Protocols: domain.OutputProtocols{
+		Protocols: &domain.OutputProtocols{
 			HLS:  true,
 			DASH: true,
 			RTSP: false,
@@ -138,7 +138,7 @@ func NewFullTemplate(code domain.TemplateCode) *domain.Template {
 				}},
 			},
 		},
-		Protocols: domain.OutputProtocols{HLS: true, DASH: true},
+		Protocols: &domain.OutputProtocols{HLS: true, DASH: true},
 		Push: []domain.PushDestination{{
 			URL:     "rtmp://target.example.com/live/key",
 			Enabled: true,

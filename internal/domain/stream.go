@@ -87,9 +87,12 @@ type Stream struct {
 	Transcoder *TranscoderConfig `json:"transcoder,omitempty" yaml:"transcoder,omitempty"`
 
 	// Protocols defines which delivery protocols are opened for this stream.
-	// The server opens a listener/packager for each enabled protocol.
-	// Protocol-level config (ports, segment duration, CDN URL) lives in server config.
-	Protocols OutputProtocols `json:"protocols" yaml:"protocols"`
+	// nil means the field is unset and ResolveStream inherits the template's
+	// Protocols (or leaves the resolved value nil when no template applies —
+	// publisher treats nil as "no protocols enabled"). An explicit non-nil
+	// pointer — including the zero value &OutputProtocols{} — is an
+	// operator-asserted override and beats template inheritance.
+	Protocols *OutputProtocols `json:"protocols,omitempty" yaml:"protocols,omitempty"`
 
 	// Push is the list of external destinations the server actively pushes to.
 	// Each entry defines one push target (social media live ingest, CDN relay, etc.).
