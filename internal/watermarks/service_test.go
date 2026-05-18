@@ -113,12 +113,12 @@ func TestServiceRejectsNonImage(t *testing.T) {
 func TestServiceRejectsInvalidFilename(t *testing.T) {
 	s := newTestService(t)
 	cases := []string{
-		"../evil.png",      // path traversal
-		"logo",             // no extension
-		"logo.tar.gz",      // multiple dots
-		".gitignore",       // hidden
-		"with space.png",   // disallowed char
-		"with/slash.png",   // disallowed char
+		"../evil.png",    // path traversal
+		"logo",           // no extension
+		"logo.tar.gz",    // multiple dots
+		".gitignore",     // hidden
+		"with space.png", // disallowed char
+		"with/slash.png", // disallowed char
 	}
 	for _, name := range cases {
 		if _, err := s.Save(name, bytes.NewReader(pngBytes)); err == nil {
