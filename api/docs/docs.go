@@ -1480,12 +1480,6 @@ const docTemplate = `{
                         "name": "file",
                         "in": "formData",
                         "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Display name (defaults to filename)",
-                        "name": "name",
-                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1497,6 +1491,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/apidocs.ErrorBody"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/apidocs.ErrorBody"
                         }
@@ -1522,7 +1522,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/watermarks/{id}": {
+        "/watermarks/{filename}": {
             "get": {
                 "produces": [
                     "application/json"
@@ -1534,8 +1534,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Asset ID",
-                        "name": "id",
+                        "description": "Asset filename (e.g. logo.png)",
+                        "name": "filename",
                         "in": "path",
                         "required": true
                     }
@@ -1569,8 +1569,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Asset ID",
-                        "name": "id",
+                        "description": "Asset filename",
+                        "name": "filename",
                         "in": "path",
                         "required": true
                     }
@@ -1600,7 +1600,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/watermarks/{id}/raw": {
+        "/watermarks/{filename}/raw": {
             "get": {
                 "produces": [
                     "image/png"
@@ -1612,8 +1612,8 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Asset ID",
-                        "name": "id",
+                        "description": "Asset filename",
+                        "name": "filename",
                         "in": "path",
                         "required": true
                     }
@@ -3605,27 +3605,19 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "content_type": {
-                    "description": "ContentType is the MIME type sniffed at upload time\n(e.g. \"image/png\", \"image/jpeg\"). Used for Content-Type on /raw GET.",
+                    "description": "ContentType is the MIME type sniffed via http.DetectContentType from\nthe first 512 bytes. Used as the Content-Type response header on /raw.",
                     "type": "string"
                 },
-                "file_name": {
-                    "description": "FileName is the original filename at upload time, preserved for\naudit / download responses. Includes extension (e.g. \"logo.png\").",
-                    "type": "string"
-                },
-                "id": {
-                    "description": "ID is the immutable filesystem-safe identifier (also the on-disk basename).",
-                    "type": "string"
-                },
-                "name": {
-                    "description": "Name is the human display label shown in UIs. Defaults to the upload's\noriginal filename when the operator doesn't override.",
+                "filename": {
+                    "description": "Filename is the on-disk basename, ALSO the stable identifier used\nby Stream.Watermark.Filename and every REST URL.",
                     "type": "string"
                 },
                 "size_bytes": {
-                    "description": "SizeBytes is the on-disk size of the image. Sidecar JSON is excluded.",
+                    "description": "SizeBytes is the on-disk size of the image (from os.Stat).",
                     "type": "integer"
                 },
                 "uploaded_at": {
-                    "description": "UploadedAt is the wall-clock UTC time the asset was first stored.",
+                    "description": "UploadedAt is the file's modification time in UTC. Save sets it to the\nwall clock at upload; subsequent rebuilds derive it from mtime so the\nlist survives restart without an external metadata store.",
                     "type": "string"
                 }
             }
@@ -3633,12 +3625,12 @@ const docTemplate = `{
         "domain.WatermarkConfig": {
             "type": "object",
             "properties": {
-                "asset_id": {
-                    "description": "AssetID, when set, references a WatermarkAsset uploaded via the\n/watermarks API. Coordinator resolves it to an on-disk file path\nbefore passing the config to the transcoder. Takes precedence over\nImagePath when both are set.",
-                    "type": "string"
-                },
                 "enabled": {
                     "type": "boolean"
+                },
+                "filename": {
+                    "description": "Filename, when set, references a WatermarkAsset by its on-disk name\nin the /watermarks library (eg. ` + "`" + `vtv1_logo.png` + "`" + `). Coordinator resolves\nit to an absolute file path before passing the config to the\ntranscoder. Takes precedence over ImagePath when both are set.",
+                    "type": "string"
                 },
                 "font_color": {
                     "description": "FontColor in FFmpeg color syntax. E.g. \"white\", \"#FFFFFF\", \"white@0.8\".",
@@ -3653,7 +3645,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "image_path": {
-                    "description": "ImagePath is the absolute path to a watermark image (PNG with alpha\nrecommended). Use this for assets pre-staged on the host outside the\n/watermarks library. Mutually exclusive with AssetID.",
+                    "description": "ImagePath is the absolute path to a watermark image (PNG with alpha\nrecommended). Use this for assets pre-staged on the host outside the\n/watermarks library. Mutually exclusive with Filename.",
                     "type": "string"
                 },
                 "offset_x": {

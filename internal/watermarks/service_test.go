@@ -37,7 +37,7 @@ func mustNewServiceForTest(dir string) *Service {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		panic(err)
 	}
-	s, err := newServiceForTesting(config.WatermarksConfig{Dir: dir})
+	s, err := newService(config.WatermarksConfig{Dir: dir})
 	if err != nil {
 		panic(err)
 	}
@@ -47,15 +47,12 @@ func mustNewServiceForTest(dir string) *Service {
 func TestServiceSaveListGet(t *testing.T) {
 	s := newTestService(t)
 
-	a, err := s.Save("My Logo", "logo.png", bytes.NewReader(pngBytes))
+	a, err := s.Save("logo.png", bytes.NewReader(pngBytes))
 	if err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if a.ID == "" {
-		t.Fatal("empty ID returned")
-	}
-	if a.Name != "My Logo" {
-		t.Errorf("Name = %q, want My Logo", a.Name)
+	if a.Filename != "logo.png" {
+		t.Fatalf("Filename = %q, want logo.png", a.Filename)
 	}
 	if a.ContentType != "image/png" {
 		t.Errorf("ContentType = %q, want image/png", a.ContentType)
@@ -65,33 +62,33 @@ func TestServiceSaveListGet(t *testing.T) {
 	}
 
 	// Round-trip via Get.
-	got, err := s.Get(a.ID)
+	got, err := s.Get(a.Filename)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.ID != a.ID {
-		t.Errorf("Get returned wrong ID")
+	if got.Filename != a.Filename {
+		t.Errorf("Get returned wrong filename")
 	}
 
 	// List should contain it.
 	listed := s.List()
-	if len(listed) != 1 || listed[0].ID != a.ID {
+	if len(listed) != 1 || listed[0].Filename != a.Filename {
 		t.Errorf("List = %+v, want one matching asset", listed)
 	}
 }
 
 func TestServiceResolvePath(t *testing.T) {
 	s := newTestService(t)
-	a, err := s.Save("", "logo.png", bytes.NewReader(pngBytes))
+	a, err := s.Save("logo.png", bytes.NewReader(pngBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := s.ResolvePath(a.ID)
+	path, err := s.ResolvePath(a.Filename)
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
-	if !strings.HasSuffix(path, ".png") {
-		t.Errorf("expected .png suffix, got %q", path)
+	if !strings.HasSuffix(path, "logo.png") {
+		t.Errorf("expected logo.png suffix, got %q", path)
 	}
 	if !filepath.IsAbs(path) {
 		t.Errorf("expected absolute path, got %q", path)
@@ -107,35 +104,60 @@ func TestServiceResolvePath(t *testing.T) {
 
 func TestServiceRejectsNonImage(t *testing.T) {
 	s := newTestService(t)
-	_, err := s.Save("", "evil.txt", bytes.NewReader([]byte("just plain text")))
+	_, err := s.Save("evil.txt", bytes.NewReader([]byte("just plain text")))
 	if !errors.Is(err, ErrInvalidContent) {
 		t.Errorf("want ErrInvalidContent, got %v", err)
 	}
 }
 
-func TestServiceDeleteRemovesBoth(t *testing.T) {
+func TestServiceRejectsInvalidFilename(t *testing.T) {
 	s := newTestService(t)
-	a, err := s.Save("", "logo.png", bytes.NewReader(pngBytes))
+	cases := []string{
+		"../evil.png",    // path traversal
+		"logo",           // no extension
+		"logo.tar.gz",    // multiple dots
+		".gitignore",     // hidden
+		"with space.png", // disallowed char
+		"with/slash.png", // disallowed char
+	}
+	for _, name := range cases {
+		if _, err := s.Save(name, bytes.NewReader(pngBytes)); err == nil {
+			t.Errorf("expected error for filename %q, got nil", name)
+		}
+	}
+}
+
+func TestServiceRejectsDuplicateFilename(t *testing.T) {
+	s := newTestService(t)
+	if _, err := s.Save("logo.png", bytes.NewReader(pngBytes)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Save("logo.png", bytes.NewReader(pngBytes))
+	if !errors.Is(err, ErrAlreadyExists) {
+		t.Errorf("want ErrAlreadyExists, got %v", err)
+	}
+}
+
+func TestServiceDelete(t *testing.T) {
+	s := newTestService(t)
+	a, err := s.Save("logo.png", bytes.NewReader(pngBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Delete(a.ID); err != nil {
+	if err := s.Delete(a.Filename); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := s.Get(a.ID); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Get(a.Filename); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Get after Delete: want ErrNotFound, got %v", err)
 	}
 
 	// Repeat delete is also ErrNotFound, never an error.
-	if err := s.Delete(a.ID); !errors.Is(err, ErrNotFound) {
+	if err := s.Delete(a.Filename); !errors.Is(err, ErrNotFound) {
 		t.Errorf("repeat Delete: want ErrNotFound, got %v", err)
 	}
-	// Both files should be gone from disk.
-	files, _ := os.ReadDir(s.Dir())
-	for _, f := range files {
-		if strings.Contains(f.Name(), string(a.ID)) {
-			t.Errorf("file %q still on disk", f.Name())
-		}
+	// File should be gone from disk.
+	if _, err := os.Stat(filepath.Join(s.Dir(), string(a.Filename))); !os.IsNotExist(err) {
+		t.Errorf("file still on disk after Delete: %v", err)
 	}
 }
 
@@ -144,30 +166,77 @@ func TestServiceRebuildCacheFromDisk(t *testing.T) {
 	// First instance uploads an asset.
 	{
 		s := mustNewServiceForTest(dir)
-		if _, err := s.Save("first", "a.png", bytes.NewReader(pngBytes)); err != nil {
+		if _, err := s.Save("a.png", bytes.NewReader(pngBytes)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Fresh instance pointed at the same dir picks up the sidecar.
+	// Fresh instance pointed at the same dir picks up the file.
 	s2 := mustNewServiceForTest(dir)
-	if got := s2.List(); len(got) != 1 || got[0].Name != "first" {
-		t.Errorf("rebuild missed sidecar: %+v", got)
+	got := s2.List()
+	if len(got) != 1 || got[0].Filename != "a.png" {
+		t.Errorf("rebuild missed file: %+v", got)
+	}
+	if got[0].ContentType != "image/png" {
+		t.Errorf("rebuild missed content type sniff: %+v", got[0])
 	}
 }
 
-func TestExtensionForFallbacks(t *testing.T) {
-	cases := map[string]struct {
-		filename, contentType string
-		want                  string
-	}{
-		"png by ext":   {"foo.PNG", "image/png", ".png"},
-		"jpeg by ext":  {"foo.jpg", "image/jpeg", ".jpg"},
-		"gif by ct":    {"weird", "image/gif; charset=utf-8", ".gif"},
-		"unknown fall": {"x", "application/octet-stream", ".bin"},
+// The directory is the source of truth: an asset dropped in via rsync / scp
+// out of band must show up in List on the very next call, without any
+// "reload library" trigger. Tests the no-cache invariant.
+func TestServiceListSeesExternalDrops(t *testing.T) {
+	s := newTestService(t)
+
+	// Empty initially.
+	if got := s.List(); len(got) != 0 {
+		t.Fatalf("fresh service: want empty list, got %+v", got)
 	}
-	for name, c := range cases {
-		if got := extensionFor(c.filename, c.contentType); got != c.want {
-			t.Errorf("%s: extensionFor(%q,%q)=%q, want %q", name, c.filename, c.contentType, got, c.want)
-		}
+
+	// Drop a file directly into the dir (simulates `cp logo.png /var/lib/.../watermarks/`).
+	mustWrite(t, filepath.Join(s.Dir(), "external.png"), pngBytes)
+
+	got := s.List()
+	if len(got) != 1 || got[0].Filename != "external.png" {
+		t.Errorf("after external drop: want [external.png], got %+v", got)
+	}
+
+	// Same for Get + ResolvePath — both must surface the externally-dropped file.
+	if _, err := s.Get("external.png"); err != nil {
+		t.Errorf("Get on external file: %v", err)
+	}
+	if _, err := s.ResolvePath("external.png"); err != nil {
+		t.Errorf("ResolvePath on external file: %v", err)
+	}
+
+	// Remove externally — Get must surface ErrNotFound on the very next call.
+	if err := os.Remove(filepath.Join(s.Dir(), "external.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get("external.png"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("after external remove: want ErrNotFound, got %v", err)
+	}
+	if got := s.List(); len(got) != 0 {
+		t.Errorf("after external remove: want empty list, got %+v", got)
+	}
+}
+
+func TestServiceRebuildSkipsJunk(t *testing.T) {
+	dir := t.TempDir()
+	// Pre-seed dir with files the validator should reject.
+	mustWrite(t, filepath.Join(dir, ".hidden"), []byte("x"))
+	mustWrite(t, filepath.Join(dir, "logo.tar.gz"), []byte("x"))
+	mustWrite(t, filepath.Join(dir, "valid.png"), pngBytes)
+
+	s := mustNewServiceForTest(dir)
+	got := s.List()
+	if len(got) != 1 || got[0].Filename != "valid.png" {
+		t.Errorf("expected only valid.png, got %+v", got)
+	}
+}
+
+func mustWrite(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

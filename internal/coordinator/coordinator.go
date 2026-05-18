@@ -42,7 +42,7 @@ type Coordinator struct {
 	// ABR copy — detectABRCopy short-circuits to the normal path.
 	upstreamLookup func(domain.StreamCode) (*domain.Stream, bool)
 
-	// wmAssets resolves Stream.Watermark.AssetID into an absolute on-disk
+	// wmAssets resolves Stream.Watermark.Filename into an absolute on-disk
 	// path before each transcoder.Start. Optional — nil disables asset
 	// resolution and only Stream.Watermark.ImagePath is honoured. Wired
 	// from DI in main.go.
@@ -951,7 +951,7 @@ func (c *Coordinator) transcoderConfigWithWatermark(stream *domain.Stream) *doma
 	return &clone
 }
 
-// resolvedWatermark expands an asset reference into a concrete on-disk path.
+// resolvedWatermark expands a filename reference into a concrete on-disk path.
 // On any resolution error it logs and returns nil — a missing asset must
 // not crash the start path. The transcoder treats nil as "watermark
 // disabled" and the rest of the pipeline keeps running.
@@ -959,18 +959,18 @@ func (c *Coordinator) resolvedWatermark(wm *domain.WatermarkConfig, code domain.
 	if wm == nil || c.wmAssets == nil {
 		return wm
 	}
-	if strings.TrimSpace(string(wm.AssetID)) == "" {
+	if strings.TrimSpace(string(wm.Filename)) == "" {
 		return wm
 	}
 	clone := *wm
-	path, err := c.wmAssets.ResolvePath(wm.AssetID)
+	path, err := c.wmAssets.ResolvePath(wm.Filename)
 	if err != nil {
 		slog.Warn("coordinator: watermark asset resolve failed",
-			"stream_code", code, "asset_id", wm.AssetID, "err", err)
+			"stream_code", code, "filename", wm.Filename, "err", err)
 		return nil
 	}
 	clone.ImagePath = path
-	clone.AssetID = ""
+	clone.Filename = ""
 	return &clone
 }
 

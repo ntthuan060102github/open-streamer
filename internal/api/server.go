@@ -205,7 +205,7 @@ func (s *Server) buildRouter(serverCfg *config.ServerConfig) *chi.Mux {
 	r.Route("/watermarks", func(r chi.Router) {
 		r.Get("/", s.watermarkH.List)
 		r.Post("/", s.watermarkH.Upload)
-		r.Route("/{id}", func(r chi.Router) {
+		r.Route("/{filename}", func(r chi.Router) {
 			r.Get("/", s.watermarkH.Get)
 			r.Delete("/", s.watermarkH.Delete)
 			r.Get("/raw", s.watermarkH.Raw)
