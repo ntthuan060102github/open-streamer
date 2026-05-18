@@ -8,73 +8,78 @@ import (
 	"time"
 )
 
-// MaxWatermarkAssetIDLen is the maximum length of an asset ID. The bound
-// matches the rendered filename length the watermarks service produces on
-// disk so it can never overflow PATH_MAX in practice.
-const MaxWatermarkAssetIDLen = 64
-
-// MaxWatermarkAssetNameLen caps the human display name. UI dropdowns and
-// activity logs render this; oversize values would push the layout around.
-const MaxWatermarkAssetNameLen = 128
+// MaxWatermarkFilenameLen caps the asset filename. Bounded short enough to
+// avoid PATH_MAX issues when concatenated with the assets directory and
+// long enough to encode descriptive names like `province_tv_logo_v2.png`.
+const MaxWatermarkFilenameLen = 96
 
 // MaxWatermarkAssetBytes caps a single uploaded watermark. Logos are
 // typically a few hundred KB at most; the cap defends the assets directory
 // against a runaway upload accidentally filling the volume.
 const MaxWatermarkAssetBytes int64 = 8 * 1024 * 1024 // 8 MiB
 
-// WatermarkAssetID is the stable identifier for an uploaded watermark
-// asset. It is the basename (without extension) of the file on disk and
-// also the identifier referenced from Stream.Watermark.AssetID.
-type WatermarkAssetID string
+// WatermarkFilename is both the on-disk basename and the public identifier
+// for an uploaded watermark asset. The filename IS the identifier — there
+// is no separate UUID layer — so operators reference assets by the name
+// they uploaded with (`vtv1_logo.png`) instead of an opaque hash.
+type WatermarkFilename string
 
-var watermarkAssetIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+// watermarkFilenamePattern enforces the rule:
+//
+//	<basename>.<ext>
+//
+// where basename is one or more of [a-zA-Z0-9_-] and ext is one or more of
+// [a-zA-Z0-9]. Exactly one dot, between basename and ext. This rejects:
+//   - path traversal (`../foo.png`, slashes)
+//   - hidden files (`.gitignore`)
+//   - double extensions (`logo.tar.png`)
+//   - missing extension (`logo`)
+//   - filesystem-special chars (spaces, quotes)
+//
+// so any validated filename is safe to drop straight into filepath.Join
+// without further sanitisation.
+var watermarkFilenamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$`)
 
-// ValidateWatermarkAssetID enforces the safe filename charset. Asset IDs
-// flow into filesystem paths, so we forbid anything that would let a caller
-// escape the assets directory or collide with sidecar metadata names.
-func ValidateWatermarkAssetID(id string) error {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return errors.New("watermark asset id is required")
+// ValidateWatermarkFilename enforces the safe filename rules above. Returns
+// nil when the value is acceptable; otherwise an error suitable for surfacing
+// to the API caller as 400.
+func ValidateWatermarkFilename(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return errors.New("watermark filename is required")
 	}
-	if len(id) > MaxWatermarkAssetIDLen {
-		return fmt.Errorf("watermark asset id exceeds max length %d", MaxWatermarkAssetIDLen)
+	if len(name) > MaxWatermarkFilenameLen {
+		return fmt.Errorf("watermark filename exceeds max length %d", MaxWatermarkFilenameLen)
 	}
-	if !watermarkAssetIDPattern.MatchString(id) {
-		return errors.New("watermark asset id must contain only a-z, A-Z, 0-9, '-' and '_'")
+	if !watermarkFilenamePattern.MatchString(name) {
+		return errors.New("watermark filename must match <name>.<ext> using only a-z, A-Z, 0-9, '-', '_' (exactly one dot)")
 	}
 	return nil
 }
 
-// WatermarkAsset is the persisted metadata for one uploaded watermark
-// image. The actual image bytes live next to the metadata sidecar in
-// the assets directory. Both files share the asset ID basename:
+// WatermarkAsset is the metadata view of one image in the assets library.
+// There is no separate persisted metadata file — the asset directory is
+// the source of truth, and this struct is reconstituted from `os.Stat`
+// plus a content-type sniff each time the library is scanned.
 //
-//	<assets_dir>/<id>.<ext>     ← image
-//	<assets_dir>/<id>.json      ← this struct serialised
+//	<assets_dir>/<filename>     ← image bytes (only file per asset)
 //
-// The simple two-file layout means we don't need a separate database
-// for watermark metadata; an `os.ReadDir` rebuilds the registry after
-// any restart.
+// Filename is unique by construction: the upload endpoint refuses to
+// overwrite an existing file, so the asset list never carries duplicates.
 type WatermarkAsset struct {
-	// ID is the immutable filesystem-safe identifier (also the on-disk basename).
-	ID WatermarkAssetID `json:"id" yaml:"id"`
+	// Filename is the on-disk basename, ALSO the stable identifier used
+	// by Stream.Watermark.Filename and every REST URL.
+	Filename WatermarkFilename `json:"filename" yaml:"filename"`
 
-	// Name is the human display label shown in UIs. Defaults to the upload's
-	// original filename when the operator doesn't override.
-	Name string `json:"name" yaml:"name"`
-
-	// FileName is the original filename at upload time, preserved for
-	// audit / download responses. Includes extension (e.g. "logo.png").
-	FileName string `json:"file_name" yaml:"file_name"`
-
-	// ContentType is the MIME type sniffed at upload time
-	// (e.g. "image/png", "image/jpeg"). Used for Content-Type on /raw GET.
+	// ContentType is the MIME type sniffed via http.DetectContentType from
+	// the first 512 bytes. Used as the Content-Type response header on /raw.
 	ContentType string `json:"content_type" yaml:"content_type"`
 
-	// SizeBytes is the on-disk size of the image. Sidecar JSON is excluded.
+	// SizeBytes is the on-disk size of the image (from os.Stat).
 	SizeBytes int64 `json:"size_bytes" yaml:"size_bytes"`
 
-	// UploadedAt is the wall-clock UTC time the asset was first stored.
+	// UploadedAt is the file's modification time in UTC. Save sets it to the
+	// wall clock at upload; subsequent rebuilds derive it from mtime so the
+	// list survives restart without an external metadata store.
 	UploadedAt time.Time `json:"uploaded_at" yaml:"uploaded_at"`
 }

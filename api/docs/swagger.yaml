@@ -1608,41 +1608,35 @@ definitions:
     properties:
       content_type:
         description: |-
-          ContentType is the MIME type sniffed at upload time
-          (e.g. "image/png", "image/jpeg"). Used for Content-Type on /raw GET.
+          ContentType is the MIME type sniffed via http.DetectContentType from
+          the first 512 bytes. Used as the Content-Type response header on /raw.
         type: string
-      file_name:
+      filename:
         description: |-
-          FileName is the original filename at upload time, preserved for
-          audit / download responses. Includes extension (e.g. "logo.png").
-        type: string
-      id:
-        description: ID is the immutable filesystem-safe identifier (also the on-disk
-          basename).
-        type: string
-      name:
-        description: |-
-          Name is the human display label shown in UIs. Defaults to the upload's
-          original filename when the operator doesn't override.
+          Filename is the on-disk basename, ALSO the stable identifier used
+          by Stream.Watermark.Filename and every REST URL.
         type: string
       size_bytes:
-        description: SizeBytes is the on-disk size of the image. Sidecar JSON is excluded.
+        description: SizeBytes is the on-disk size of the image (from os.Stat).
         type: integer
       uploaded_at:
-        description: UploadedAt is the wall-clock UTC time the asset was first stored.
+        description: |-
+          UploadedAt is the file's modification time in UTC. Save sets it to the
+          wall clock at upload; subsequent rebuilds derive it from mtime so the
+          list survives restart without an external metadata store.
         type: string
     type: object
   domain.WatermarkConfig:
     properties:
-      asset_id:
-        description: |-
-          AssetID, when set, references a WatermarkAsset uploaded via the
-          /watermarks API. Coordinator resolves it to an on-disk file path
-          before passing the config to the transcoder. Takes precedence over
-          ImagePath when both are set.
-        type: string
       enabled:
         type: boolean
+      filename:
+        description: |-
+          Filename, when set, references a WatermarkAsset by its on-disk name
+          in the /watermarks library (eg. `vtv1_logo.png`). Coordinator resolves
+          it to an absolute file path before passing the config to the
+          transcoder. Takes precedence over ImagePath when both are set.
+        type: string
       font_color:
         description: FontColor in FFmpeg color syntax. E.g. "white", "#FFFFFF", "white@0.8".
         type: string
@@ -1658,7 +1652,7 @@ definitions:
         description: |-
           ImagePath is the absolute path to a watermark image (PNG with alpha
           recommended). Use this for assets pre-staged on the host outside the
-          /watermarks library. Mutually exclusive with AssetID.
+          /watermarks library. Mutually exclusive with Filename.
         type: string
       offset_x:
         description: |-
@@ -3198,10 +3192,6 @@ paths:
         name: file
         required: true
         type: file
-      - description: Display name (defaults to filename)
-        in: query
-        name: name
-        type: string
       produces:
       - application/json
       responses:
@@ -3211,6 +3201,10 @@ paths:
             $ref: '#/definitions/apidocs.WatermarkAssetData'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/apidocs.ErrorBody'
+        "409":
+          description: Conflict
           schema:
             $ref: '#/definitions/apidocs.ErrorBody'
         "413":
@@ -3228,12 +3222,12 @@ paths:
       summary: Upload a watermark image
       tags:
       - watermarks
-  /watermarks/{id}:
+  /watermarks/{filename}:
     delete:
       parameters:
-      - description: Asset ID
+      - description: Asset filename
         in: path
-        name: id
+        name: filename
         required: true
         type: string
       responses:
@@ -3256,9 +3250,9 @@ paths:
       - watermarks
     get:
       parameters:
-      - description: Asset ID
+      - description: Asset filename (e.g. logo.png)
         in: path
-        name: id
+        name: filename
         required: true
         type: string
       produces:
@@ -3279,12 +3273,12 @@ paths:
       summary: Get watermark metadata
       tags:
       - watermarks
-  /watermarks/{id}/raw:
+  /watermarks/{filename}/raw:
     get:
       parameters:
-      - description: Asset ID
+      - description: Asset filename
         in: path
-        name: id
+        name: filename
         required: true
         type: string
       produces:

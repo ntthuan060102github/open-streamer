@@ -56,15 +56,15 @@ type WatermarkConfig struct {
 
 	// --- Image overlay ---
 
-	// AssetID, when set, references a WatermarkAsset uploaded via the
-	// /watermarks API. Coordinator resolves it to an on-disk file path
-	// before passing the config to the transcoder. Takes precedence over
-	// ImagePath when both are set.
-	AssetID WatermarkAssetID `json:"asset_id,omitempty" yaml:"asset_id,omitempty"`
+	// Filename, when set, references a WatermarkAsset by its on-disk name
+	// in the /watermarks library (eg. `vtv1_logo.png`). Coordinator resolves
+	// it to an absolute file path before passing the config to the
+	// transcoder. Takes precedence over ImagePath when both are set.
+	Filename WatermarkFilename `json:"filename,omitempty" yaml:"filename,omitempty"`
 
 	// ImagePath is the absolute path to a watermark image (PNG with alpha
 	// recommended). Use this for assets pre-staged on the host outside the
-	// /watermarks library. Mutually exclusive with AssetID.
+	// /watermarks library. Mutually exclusive with Filename.
 	ImagePath string `json:"image_path,omitempty" yaml:"image_path,omitempty"`
 
 	// --- Common ---
@@ -122,7 +122,7 @@ const (
 // which would emit a no-op filter — easier to just skip).
 //
 // For image watermarks, the ImagePath check accepts EITHER an explicit
-// path OR an AssetID — coordinator resolves AssetID to ImagePath before
+// path OR a Filename — coordinator resolves Filename to ImagePath before
 // transcoder picks up the config, so by the time the filter is built
 // ImagePath is always populated when the watermark is active.
 func (w *WatermarkConfig) IsActive() bool {
@@ -136,7 +136,7 @@ func (w *WatermarkConfig) IsActive() bool {
 	case WatermarkTypeText:
 		return strings.TrimSpace(w.Text) != ""
 	case WatermarkTypeImage:
-		return strings.TrimSpace(w.ImagePath) != "" || strings.TrimSpace(string(w.AssetID)) != ""
+		return strings.TrimSpace(w.ImagePath) != "" || strings.TrimSpace(string(w.Filename)) != ""
 	default:
 		return false
 	}
@@ -162,15 +162,15 @@ func (w *WatermarkConfig) Validate() error {
 		}
 	case WatermarkTypeImage:
 		hasPath := strings.TrimSpace(w.ImagePath) != ""
-		hasAsset := strings.TrimSpace(string(w.AssetID)) != ""
+		hasFile := strings.TrimSpace(string(w.Filename)) != ""
 		switch {
-		case !hasPath && !hasAsset:
-			return fmt.Errorf("watermark: image_path or asset_id is required when type=image")
-		case hasPath && hasAsset:
-			return fmt.Errorf("watermark: image_path and asset_id are mutually exclusive — pick one")
-		case hasAsset:
-			if err := ValidateWatermarkAssetID(string(w.AssetID)); err != nil {
-				return fmt.Errorf("watermark: asset_id: %w", err)
+		case !hasPath && !hasFile:
+			return fmt.Errorf("watermark: image_path or filename is required when type=image")
+		case hasPath && hasFile:
+			return fmt.Errorf("watermark: image_path and filename are mutually exclusive — pick one")
+		case hasFile:
+			if err := ValidateWatermarkFilename(string(w.Filename)); err != nil {
+				return fmt.Errorf("watermark: filename: %w", err)
 			}
 		case hasPath:
 			if err := assertReadableFile(w.ImagePath); err != nil {

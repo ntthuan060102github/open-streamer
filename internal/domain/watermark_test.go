@@ -87,14 +87,20 @@ func TestWatermarkValidate(t *testing.T) {
 		"custom x only": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeText, Text: "x", Position: WatermarkCustom, X: "100",
 		}, false},
-		"both image_path and asset_id": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, ImagePath: img, AssetID: "abc-123",
+		"both image_path and filename": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeImage, ImagePath: img, Filename: "logo.png",
 		}, true},
-		"asset_id ok": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, AssetID: "abc-123",
+		"filename ok": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeImage, Filename: "logo.png",
 		}, false},
-		"asset_id invalid chars": {&WatermarkConfig{
-			Enabled: true, Type: WatermarkTypeImage, AssetID: "../../etc/passwd",
+		"filename invalid (path traversal)": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeImage, Filename: "../../etc/passwd",
+		}, true},
+		"filename missing extension": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeImage, Filename: "logo",
+		}, true},
+		"filename multiple dots": {&WatermarkConfig{
+			Enabled: true, Type: WatermarkTypeImage, Filename: "logo.tar.gz",
 		}, true},
 		"resize toggle on": {&WatermarkConfig{
 			Enabled: true, Type: WatermarkTypeText, Text: "x", Resize: true,

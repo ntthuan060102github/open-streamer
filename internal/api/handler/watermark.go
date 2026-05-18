@@ -33,10 +33,10 @@ const (
 type watermarkAssetService interface {
 	List() []*domain.WatermarkAsset
 	Dir() string
-	Get(id domain.WatermarkAssetID) (*domain.WatermarkAsset, error)
-	ResolvePath(id domain.WatermarkAssetID) (string, error)
-	Save(displayName, originalFilename string, body io.Reader) (*domain.WatermarkAsset, error)
-	Delete(id domain.WatermarkAssetID) error
+	Get(name domain.WatermarkFilename) (*domain.WatermarkAsset, error)
+	ResolvePath(name domain.WatermarkFilename) (string, error)
+	Save(filename string, body io.Reader) (*domain.WatermarkAsset, error)
+	Delete(name domain.WatermarkFilename) error
 }
 
 // WatermarkHandler exposes the asset library over REST. Mirrors the VOD
@@ -77,18 +77,18 @@ func (h *WatermarkHandler) List(w http.ResponseWriter, _ *http.Request) {
 // @Summary     Get watermark metadata
 // @Tags        watermarks
 // @Produce     json
-// @Param       id path string true "Asset ID"
+// @Param       filename path string true "Asset filename (e.g. logo.png)"
 // @Success     200 {object} apidocs.WatermarkAssetData
 // @Failure     400 {object} apidocs.ErrorBody
 // @Failure     404 {object} apidocs.ErrorBody
-// @Router      /watermarks/{id} [get].
+// @Router      /watermarks/{filename} [get].
 func (h *WatermarkHandler) Get(w http.ResponseWriter, r *http.Request) {
-	id := domain.WatermarkAssetID(chi.URLParam(r, "id"))
-	if err := domain.ValidateWatermarkAssetID(string(id)); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ID", err.Error())
+	name := chi.URLParam(r, "filename")
+	if err := domain.ValidateWatermarkFilename(name); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_FILENAME", err.Error())
 		return
 	}
-	asset, err := h.svc.Get(id)
+	asset, err := h.svc.Get(domain.WatermarkFilename(name))
 	if err != nil {
 		if errors.Is(err, watermarks.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
@@ -107,22 +107,23 @@ func (h *WatermarkHandler) Get(w http.ResponseWriter, r *http.Request) {
 // @Summary     Download watermark image
 // @Tags        watermarks
 // @Produce     image/png
-// @Param       id path string true "Asset ID"
+// @Param       filename path string true "Asset filename"
 // @Success     200 {file} binary
 // @Failure     404 {object} apidocs.ErrorBody
-// @Router      /watermarks/{id}/raw [get].
+// @Router      /watermarks/{filename}/raw [get].
 func (h *WatermarkHandler) Raw(w http.ResponseWriter, r *http.Request) {
-	id := domain.WatermarkAssetID(chi.URLParam(r, "id"))
-	if err := domain.ValidateWatermarkAssetID(string(id)); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ID", err.Error())
+	name := chi.URLParam(r, "filename")
+	if err := domain.ValidateWatermarkFilename(name); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_FILENAME", err.Error())
 		return
 	}
-	asset, err := h.svc.Get(id)
+	fn := domain.WatermarkFilename(name)
+	asset, err := h.svc.Get(fn)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "asset not found")
 		return
 	}
-	abs, err := h.svc.ResolvePath(id)
+	abs, err := h.svc.ResolvePath(fn)
 	if err != nil {
 		serverError(w, r, "RESOLVE_FAILED", "resolve watermark path", err)
 		return
@@ -130,23 +131,24 @@ func (h *WatermarkHandler) Raw(w http.ResponseWriter, r *http.Request) {
 	if asset.ContentType != "" {
 		w.Header().Set("Content-Type", asset.ContentType)
 	}
-	// Long cache — assets are immutable after upload (no in-place edits;
-	// renaming changes the ID). Cuts re-fetches on UI reloads.
+	// Long cache — assets are immutable once uploaded (replace = Delete +
+	// Save under a new filename). Cuts re-fetches on UI reloads.
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeFile(w, r, abs)
 }
 
-// Upload accepts a multipart "file" field. Optional ?name= sets the display
-// name; absent uses the upload's basename.
+// Upload accepts a multipart "file" field. The uploaded file's basename
+// becomes the asset's filename and identifier — uploads with names that
+// fail domain.ValidateWatermarkFilename are rejected with 400.
 //
 // @Summary     Upload a watermark image
 // @Tags        watermarks
 // @Accept      multipart/form-data
 // @Produce     json
 // @Param       file formData file true "Image file (PNG / JPG / GIF, ≤ 8 MiB)"
-// @Param       name query string false "Display name (defaults to filename)"
 // @Success     201 {object} apidocs.WatermarkAssetData
 // @Failure     400 {object} apidocs.ErrorBody
+// @Failure     409 {object} apidocs.ErrorBody
 // @Failure     413 {object} apidocs.ErrorBody
 // @Failure     415 {object} apidocs.ErrorBody
 // @Failure     500 {object} apidocs.ErrorBody
@@ -170,29 +172,30 @@ func (h *WatermarkHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_FILENAME", "missing filename")
 		return
 	}
-	displayName := r.URL.Query().Get("name")
 
-	asset, err := h.svc.Save(displayName, filename, src)
+	asset, err := h.svc.Save(filename, src)
 	switch {
 	case err == nil:
-		// Audit event for asset library mutations — small payload (id +
-		// display name) so hooks can sync inventory without re-fetching
-		// the full asset list. Nil-safe for tests building the handler
-		// without DI.
+		// Audit event for asset library mutations — small payload (filename)
+		// so hooks can sync inventory without re-fetching the full list.
+		// Nil-safe for tests building the handler without DI.
 		if h.bus != nil {
 			h.bus.Publish(r.Context(), domain.Event{
 				Type: domain.EventWatermarkAssetCreated,
 				Payload: map[string]any{
-					"asset_id": string(asset.ID),
-					"name":     asset.Name,
+					"filename": string(asset.Filename),
 				},
 			})
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"data": asset})
+	case errors.Is(err, watermarks.ErrAlreadyExists):
+		writeError(w, http.StatusConflict, "ALREADY_EXISTS", err.Error())
 	case errors.Is(err, watermarks.ErrInvalidContent):
 		writeError(w, http.StatusUnsupportedMediaType, "INVALID_IMAGE", err.Error())
 	case errors.Is(err, watermarks.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "UPLOAD_TOO_LARGE", err.Error())
+	case isValidationError(err):
+		writeError(w, http.StatusBadRequest, "INVALID_FILENAME", err.Error())
 	case errors.Is(err, os.ErrPermission):
 		serverError(w, r, "PERMISSION_DENIED", "write watermark asset", err)
 	default:
@@ -205,19 +208,20 @@ func (h *WatermarkHandler) Upload(w http.ResponseWriter, r *http.Request) {
 //
 // @Summary     Delete a watermark asset
 // @Tags        watermarks
-// @Param       id path string true "Asset ID"
+// @Param       filename path string true "Asset filename"
 // @Success     204 "No Content"
 // @Failure     400 {object} apidocs.ErrorBody
 // @Failure     404 {object} apidocs.ErrorBody
 // @Failure     500 {object} apidocs.ErrorBody
-// @Router      /watermarks/{id} [delete].
+// @Router      /watermarks/{filename} [delete].
 func (h *WatermarkHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	id := domain.WatermarkAssetID(chi.URLParam(r, "id"))
-	if err := domain.ValidateWatermarkAssetID(string(id)); err != nil {
-		writeError(w, http.StatusBadRequest, "INVALID_ID", err.Error())
+	name := chi.URLParam(r, "filename")
+	if err := domain.ValidateWatermarkFilename(name); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_FILENAME", err.Error())
 		return
 	}
-	if err := h.svc.Delete(id); err != nil {
+	fn := domain.WatermarkFilename(name)
+	if err := h.svc.Delete(fn); err != nil {
 		if errors.Is(err, watermarks.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "NOT_FOUND", err.Error())
 			return
@@ -228,8 +232,19 @@ func (h *WatermarkHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if h.bus != nil {
 		h.bus.Publish(r.Context(), domain.Event{
 			Type:    domain.EventWatermarkAssetDeleted,
-			Payload: map[string]any{"asset_id": string(id)},
+			Payload: map[string]any{"filename": string(fn)},
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// isValidationError reports whether err came from domain.ValidateWatermarkFilename
+// — used to pick 400 vs 500 in Upload without coupling the handler to a
+// specific sentinel value.
+func isValidationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "watermark filename")
 }
