@@ -634,6 +634,8 @@ definitions:
     type: object
   domain.EventType:
     enum:
+    - session.opened
+    - session.closed
     - stream.created
     - stream.updated
     - stream.started
@@ -668,8 +670,6 @@ definitions:
     - template.deleted
     - stream.runtime_created
     - stream.runtime_expired
-    - session.opened
-    - session.closed
     type: string
     x-enum-comments:
       EventDVRSegmentPruned: retention loop deleted an aged-out segment
@@ -686,6 +686,8 @@ definitions:
       EventPushStarted: dialing target, pre-handshake
       EventStreamUpdated: PUT /streams/{code} on existing record
     x-enum-descriptions:
+    - ""
+    - ""
     - ""
     - PUT /streams/{code} on existing record
     - ""
@@ -720,9 +722,9 @@ definitions:
     - ""
     - ""
     - ""
-    - ""
-    - ""
     x-enum-varnames:
+    - EventSessionOpened
+    - EventSessionClosed
     - EventStreamCreated
     - EventStreamUpdated
     - EventStreamStarted
@@ -757,8 +759,6 @@ definitions:
     - EventTemplateDeleted
     - EventStreamRuntimeCreated
     - EventStreamRuntimeExpired
-    - EventSessionOpened
-    - EventSessionClosed
   domain.GlobalConfig:
     properties:
       buffer:
@@ -1966,6 +1966,12 @@ definitions:
         type: boolean
       publisher:
         $ref: '#/definitions/publisher.RuntimeStatus'
+      started_at:
+        description: |-
+          StartedAt is the wallclock moment the pipeline went live. Populated
+          by the stream handler from coordinator.StreamStartedAt; nil for a
+          stopped stream so the UI can show "—" instead of an epoch zero.
+        type: string
       status:
         $ref: '#/definitions/domain.StreamStatus'
       switches:
@@ -1978,6 +1984,13 @@ definitions:
         type: array
       transcoder:
         $ref: '#/definitions/transcoder.RuntimeStatus'
+      uptime_sec:
+        description: |-
+          UptimeSec is the precomputed elapsed seconds since StartedAt at the
+          moment of the response. Bundled so frontend can render uptime without
+          reading wallclock + doing the subtraction itself (and getting clock-
+          skew weirdness when the browser is hours off from the server).
+        type: integer
     type: object
   manager.SwitchEvent:
     properties:

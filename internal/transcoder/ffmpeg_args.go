@@ -35,12 +35,21 @@ func buildFFmpegArgs(profiles []Profile, tc *domain.TranscoderConfig, bsfs map[s
 
 	// Input probe: live pipe TS often needs more than default probesize (5 MiB) so
 	// SPS/PPS and pixel format are known before libx264 consumes decoded frames.
+	//
+	// -re throttles stdin reading to native frame rate (PTS-based) so the
+	// GPU is fed steadily instead of bursting through 4-8s of HLS chunk in
+	// ~200ms then idling. Must appear BEFORE -i to take effect. Realtime
+	// push sources (RTMP / SRT / RTSP / UDP) already arrive at frame rate
+	// so -re is a no-op for them; cost is only the ~250ms-per-stream of
+	// FFmpeg internal pacing logic. Always-on so the GPU util pattern is
+	// uniform across every stream regardless of source mix.
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
 		"-fflags", "+genpts+discardcorrupt",
 		"-analyzeduration", "15000000",
 		"-probesize", "33554432",
+		"-re",
 	}
 	// Full-GPU pipeline: when HW matches the encoder, decode + scale + encode
 	// all stay in VRAM. Without these flags FFmpeg decodes on CPU and uploads
@@ -145,12 +154,15 @@ func buildMultiOutputArgs(profiles []Profile, tc *domain.TranscoderConfig, bsfs 
 	// to legacy.)
 	firstEnc := normalizeVideoEncoder(profiles[0].Codec, tc.Global.HW)
 
+	// See buildFFmpegArgs for the -re rationale — same always-on pacing so
+	// the GPU is fed steadily regardless of source burstiness.
 	args := []string{
 		"-hide_banner",
 		"-loglevel", "warning",
 		"-fflags", "+genpts+discardcorrupt",
 		"-analyzeduration", "15000000",
 		"-probesize", "33554432",
+		"-re",
 	}
 	args = append(args, hwInputArgs(tc.Global.HW, firstEnc)...)
 	args = append(args,
