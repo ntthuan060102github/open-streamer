@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ntt0601zcoder/open-streamer/internal/autopublish"
@@ -27,6 +28,7 @@ import (
 // *coordinator.Coordinator satisfies this implicitly.
 type streamCoordinator interface {
 	StreamStatus(code domain.StreamCode) domain.StreamStatus
+	StreamStartedAt(code domain.StreamCode) (time.Time, bool)
 	IsRunning(code domain.StreamCode) bool
 	Start(ctx context.Context, stream *domain.Stream) error
 	Stop(ctx context.Context, code domain.StreamCode)
@@ -135,6 +137,15 @@ func (h *StreamHandler) withStatus(s *domain.Stream) streamResponse {
 		// json marshals a nil slice as `null`; emit `[]` so the contract is
 		// stable for clients regardless of pipeline state.
 		rt.Inputs = []manager.InputHealthSnapshot{}
+	}
+	if startedAt, ok := h.coordinator.StreamStartedAt(s.Code); ok {
+		// Stamp the wallclock the pipeline went live AND the elapsed
+		// seconds at response time. Computing UptimeSec server-side
+		// shields the frontend from browser-vs-server clock drift —
+		// some operator dashboards run on machines hours off from NTP.
+		t := startedAt
+		rt.StartedAt = &t
+		rt.UptimeSec = int64(time.Since(startedAt) / time.Second)
 	}
 	rt.Media = buildMediaSummary(s, rt.Inputs, rt.ActiveInputPriority)
 	source := StreamSourceConfig

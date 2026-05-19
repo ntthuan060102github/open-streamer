@@ -2559,6 +2559,8 @@ const docTemplate = `{
         "domain.EventType": {
             "type": "string",
             "enum": [
+                "session.opened",
+                "session.closed",
                 "stream.created",
                 "stream.updated",
                 "stream.started",
@@ -2592,9 +2594,7 @@ const docTemplate = `{
                 "template.updated",
                 "template.deleted",
                 "stream.runtime_created",
-                "stream.runtime_expired",
-                "session.opened",
-                "session.closed"
+                "stream.runtime_expired"
             ],
             "x-enum-comments": {
                 "EventDVRSegmentPruned": "retention loop deleted an aged-out segment",
@@ -2611,6 +2611,8 @@ const docTemplate = `{
                 "EventStreamUpdated": "PUT /streams/{code} on existing record"
             },
             "x-enum-descriptions": [
+                "",
+                "",
                 "",
                 "PUT /streams/{code} on existing record",
                 "",
@@ -2644,11 +2646,11 @@ const docTemplate = `{
                 "",
                 "",
                 "",
-                "",
-                "",
                 ""
             ],
             "x-enum-varnames": [
+                "EventSessionOpened",
+                "EventSessionClosed",
                 "EventStreamCreated",
                 "EventStreamUpdated",
                 "EventStreamStarted",
@@ -2682,9 +2684,7 @@ const docTemplate = `{
                 "EventTemplateUpdated",
                 "EventTemplateDeleted",
                 "EventStreamRuntimeCreated",
-                "EventStreamRuntimeExpired",
-                "EventSessionOpened",
-                "EventSessionClosed"
+                "EventStreamRuntimeExpired"
             ]
         },
         "domain.GlobalConfig": {
@@ -4040,6 +4040,10 @@ const docTemplate = `{
                 "publisher": {
                     "$ref": "#/definitions/publisher.RuntimeStatus"
                 },
+                "started_at": {
+                    "description": "StartedAt is the wallclock moment the pipeline went live. Populated\nby the stream handler from coordinator.StreamStartedAt; nil for a\nstopped stream so the UI can show \"—\" instead of an epoch zero.",
+                    "type": "string"
+                },
                 "status": {
                     "$ref": "#/definitions/domain.StreamStatus"
                 },
@@ -4052,6 +4056,10 @@ const docTemplate = `{
                 },
                 "transcoder": {
                     "$ref": "#/definitions/transcoder.RuntimeStatus"
+                },
+                "uptime_sec": {
+                    "description": "UptimeSec is the precomputed elapsed seconds since StartedAt at the\nmoment of the response. Bundled so frontend can render uptime without\nreading wallclock + doing the subtraction itself (and getting clock-\nskew weirdness when the browser is hours off from the server).",
+                    "type": "integer"
                 }
             }
         },

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -97,24 +98,26 @@ func (f *fakeStreamRepoFull) Delete(_ context.Context, code domain.StreamCode) e
 // assert on dispatch. Default returns are zero-value friendly so tests
 // only set the fields they care about.
 type stubCoord struct {
-	mu             sync.Mutex
-	startErr       error
-	updateErr      error
-	statusByCode   map[domain.StreamCode]domain.StreamStatus
-	runningByCode  map[domain.StreamCode]bool
-	startedCodes   []domain.StreamCode
-	stoppedCodes   []domain.StreamCode
-	updatedCodes   []domain.StreamCode
-	abrCopyByCode  map[domain.StreamCode]manager.RuntimeStatus
-	abrMixerByCode map[domain.StreamCode]manager.RuntimeStatus
+	mu              sync.Mutex
+	startErr        error
+	updateErr       error
+	statusByCode    map[domain.StreamCode]domain.StreamStatus
+	runningByCode   map[domain.StreamCode]bool
+	startedAtByCode map[domain.StreamCode]time.Time
+	startedCodes    []domain.StreamCode
+	stoppedCodes    []domain.StreamCode
+	updatedCodes    []domain.StreamCode
+	abrCopyByCode   map[domain.StreamCode]manager.RuntimeStatus
+	abrMixerByCode  map[domain.StreamCode]manager.RuntimeStatus
 }
 
 func newStubCoord() *stubCoord {
 	return &stubCoord{
-		statusByCode:   make(map[domain.StreamCode]domain.StreamStatus),
-		runningByCode:  make(map[domain.StreamCode]bool),
-		abrCopyByCode:  make(map[domain.StreamCode]manager.RuntimeStatus),
-		abrMixerByCode: make(map[domain.StreamCode]manager.RuntimeStatus),
+		statusByCode:    make(map[domain.StreamCode]domain.StreamStatus),
+		runningByCode:   make(map[domain.StreamCode]bool),
+		startedAtByCode: make(map[domain.StreamCode]time.Time),
+		abrCopyByCode:   make(map[domain.StreamCode]manager.RuntimeStatus),
+		abrMixerByCode:  make(map[domain.StreamCode]manager.RuntimeStatus),
 	}
 }
 
@@ -125,6 +128,13 @@ func (s *stubCoord) StreamStatus(code domain.StreamCode) domain.StreamStatus {
 		return v
 	}
 	return domain.StatusStopped
+}
+
+func (s *stubCoord) StreamStartedAt(code domain.StreamCode) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.startedAtByCode[code]
+	return t, ok
 }
 
 func (s *stubCoord) IsRunning(code domain.StreamCode) bool {
@@ -354,6 +364,58 @@ func TestStreamHandler_Get_NotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Get(w, chiReq(t, http.MethodGet, "/streams/missing", nil, map[string]string{"code": "missing"}))
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// TestStreamHandler_Get_StartedAtAndUptime asserts the runtime envelope
+// surfaces the wallclock the pipeline went live (started_at) and the
+// elapsed seconds at response time (uptime_sec) — these come from
+// coordinator.StreamStartedAt and let frontend render uptime without
+// reading wallclock + doing the subtraction itself.
+func TestStreamHandler_Get_StartedAtAndUptime(t *testing.T) {
+	t.Parallel()
+	h, repo, coord, _, _ := newStreamHandlerForTest(t)
+	repo.seed(&domain.Stream{Code: "live", Name: "Live"})
+	startedAt := time.Now().Add(-90 * time.Second)
+	coord.mu.Lock()
+	coord.startedAtByCode["live"] = startedAt
+	coord.runningByCode["live"] = true
+	coord.mu.Unlock()
+
+	w := httptest.NewRecorder()
+	h.Get(w, chiReq(t, http.MethodGet, "/streams/live", nil, map[string]string{"code": "live"}))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	body := w.Body.String()
+	assert.Contains(t, body, `"started_at":`, "started_at must be present")
+	// uptime_sec should be ~90, but allow a small window for test-machine
+	// jitter between the seed and the Get call.
+	var got struct {
+		Data struct {
+			Runtime struct {
+				StartedAt time.Time `json:"started_at"`
+				UptimeSec int64     `json:"uptime_sec"`
+			} `json:"runtime"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.WithinDuration(t, startedAt, got.Data.Runtime.StartedAt, time.Second)
+	assert.GreaterOrEqual(t, got.Data.Runtime.UptimeSec, int64(89))
+	assert.LessOrEqual(t, got.Data.Runtime.UptimeSec, int64(91))
+}
+
+// Stopped stream → started_at omitted and uptime_sec stays zero so the UI
+// can show "—" instead of an epoch-zero timestamp.
+func TestStreamHandler_Get_StoppedStreamOmitsUptime(t *testing.T) {
+	t.Parallel()
+	h, repo, _, _, _ := newStreamHandlerForTest(t)
+	repo.seed(&domain.Stream{Code: "off", Name: "Off"})
+
+	w := httptest.NewRecorder()
+	h.Get(w, chiReq(t, http.MethodGet, "/streams/off", nil, map[string]string{"code": "off"}))
+	require.Equal(t, http.StatusOK, w.Code)
+	body := w.Body.String()
+	assert.NotContains(t, body, `"started_at"`, "stopped stream must omit started_at")
+	assert.NotContains(t, body, `"uptime_sec"`, "stopped stream must omit uptime_sec")
 }
 
 // Runtime streams aren't in the on-disk repo but Get must still resolve

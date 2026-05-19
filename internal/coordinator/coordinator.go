@@ -62,6 +62,15 @@ type Coordinator struct {
 	// entry in the map (or the entry has all flags false). The
 	// presence of an entry with any flag set → StatusDegraded.
 	degradation map[domain.StreamCode]*streamDegradation
+	// startedAt records when each currently-running stream's pipeline
+	// went live. Set inside Start once every subsystem (manager,
+	// publisher, transcoder, dvr) has been wired without error and
+	// cleared on Stop. The pre-existing Prometheus
+	// StreamStartTimeSeconds metric serves the dashboards; this map
+	// powers the same value over REST (GET /streams returns the runtime
+	// envelope including started_at + uptime_sec) so frontend can
+	// render uptime without a Prometheus round-trip.
+	startedAt map[domain.StreamCode]time.Time
 }
 
 // streamDegradation flags the discrete failure modes that should pull a
@@ -105,6 +114,7 @@ func New(i do.Injector) (*Coordinator, error) {
 		abrCopies:   make(map[domain.StreamCode]*abrCopyEntry),
 		abrMixers:   make(map[domain.StreamCode]*abrMixerEntry),
 		degradation: make(map[domain.StreamCode]*streamDegradation),
+		startedAt:   make(map[domain.StreamCode]time.Time),
 	}
 	// Watermarks library is optional — coordinator runs fine without it
 	// (only direct ImagePath watermarks resolve). Tolerate "no provider".
@@ -156,6 +166,7 @@ func newForTesting(
 		abrCopies:   make(map[domain.StreamCode]*abrCopyEntry),
 		abrMixers:   make(map[domain.StreamCode]*abrMixerEntry),
 		degradation: make(map[domain.StreamCode]*streamDegradation),
+		startedAt:   make(map[domain.StreamCode]time.Time),
 	}
 	c.mgr.SetExhaustedCallback(c.handleAllInputsExhausted)
 	c.mgr.SetRestoredCallback(c.handleInputRestored)
@@ -214,6 +225,37 @@ func (c *Coordinator) clearDegradation(code domain.StreamCode) {
 	c.statusMu.Lock()
 	delete(c.degradation, code)
 	c.statusMu.Unlock()
+}
+
+// recordStartedAt stamps the moment a stream's pipeline went live so the
+// API can compute uptime over REST without scraping Prometheus. Stored
+// under statusMu (same lock as degradation) to avoid a second mutex when
+// most stream-status reads already touch this critical section.
+func (c *Coordinator) recordStartedAt(code domain.StreamCode, t time.Time) {
+	c.statusMu.Lock()
+	c.startedAt[code] = t
+	c.statusMu.Unlock()
+}
+
+// clearStartedAt drops the startedAt entry on Stop. Returning to "not
+// running" must not leave a stale start time the next StreamStartedAt
+// query could surface — uptime semantics demand the timestamp track the
+// CURRENT pipeline incarnation, not a prior one.
+func (c *Coordinator) clearStartedAt(code domain.StreamCode) {
+	c.statusMu.Lock()
+	delete(c.startedAt, code)
+	c.statusMu.Unlock()
+}
+
+// StreamStartedAt returns the wallclock moment the named stream's
+// pipeline went live, or (zero, false) when the stream is not running.
+// Used by the stream handler to populate runtime.started_at /
+// runtime.uptime_sec on GET /streams responses.
+func (c *Coordinator) StreamStartedAt(code domain.StreamCode) (time.Time, bool) {
+	c.statusMu.RLock()
+	t, ok := c.startedAt[code]
+	c.statusMu.RUnlock()
+	return t, ok
 }
 
 // Start creates the buffer, registers the stream with the manager (ingest + failover),
@@ -322,9 +364,11 @@ func (c *Coordinator) Start(ctx context.Context, stream *domain.Stream) error {
 		}
 	}
 
+	now := time.Now()
 	if c.m != nil {
-		c.m.StreamStartTimeSeconds.WithLabelValues(string(stream.Code)).Set(float64(time.Now().Unix()))
+		c.m.StreamStartTimeSeconds.WithLabelValues(string(stream.Code)).Set(float64(now.Unix()))
 	}
+	c.recordStartedAt(stream.Code, now)
 
 	c.clearDegradation(stream.Code)
 
@@ -443,6 +487,7 @@ func (c *Coordinator) Stop(ctx context.Context, streamID domain.StreamCode) {
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.DeleteLabelValues(string(streamID))
 	}
+	c.clearStartedAt(streamID)
 
 	c.clearDegradation(streamID)
 

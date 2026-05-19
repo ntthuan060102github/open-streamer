@@ -598,6 +598,36 @@ func TestFormatFFmpegCmd_EscapesSingleQuote(t *testing.T) {
 	require.Contains(t, got, `'title=Bob'\''s Show'`)
 }
 
+// TestBuildFFmpegArgs_RealtimeInputAlwaysOn verifies the `-re` flag is
+// always present and ordered BEFORE the `-i pipe:0` so FFmpeg applies it
+// to the input. `-re` after `-i` is silently ignored by FFmpeg — the most
+// common way this flag breaks in production is mis-ordering.
+func TestBuildFFmpegArgs_RealtimeInputAlwaysOn(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{Video: domain.VideoTranscodeConfig{Copy: true}}
+
+	args, err := buildFFmpegArgs([]Profile{{Bitrate: "1k"}}, tc, nil)
+	require.NoError(t, err)
+	reIdx := indexOf(args, "-re")
+	require.Greater(t, reIdx, -1, "-re must be emitted on every transcode invocation")
+	inputIdx := indexOf(args, "-i")
+	require.Greater(t, inputIdx, reIdx, "-re must precede -i or FFmpeg ignores it")
+}
+
+// Same invariant for the multi-output args path — both single-output and
+// multi-output transcoder modes always emit `-re`.
+func TestBuildMultiOutputArgs_RealtimeInputAlwaysOn(t *testing.T) {
+	t.Parallel()
+	tc := &domain.TranscoderConfig{}
+	profs := []Profile{{Width: 1280, Height: 720, Bitrate: "1500k"}}
+
+	args, err := buildMultiOutputArgs(profs, tc, nil)
+	require.NoError(t, err)
+	reIdx := indexOf(args, "-re")
+	require.Greater(t, reIdx, -1)
+	require.Greater(t, indexOf(args, "-i"), reIdx)
+}
+
 func indexOf(s []string, v string) int {
 	for i, x := range s {
 		if x == v {
