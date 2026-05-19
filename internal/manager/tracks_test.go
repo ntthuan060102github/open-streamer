@@ -76,7 +76,7 @@ func TestInputTrackStats_MP2AppearsInSnapshot(t *testing.T) {
 		t.Errorf("MP2 must classify as audio, got %s", tracks[0].Kind)
 	}
 	if tracks[0].Codec != "mp2a" {
-		t.Errorf("expected codec label 'mp2a' (Flussonic-compatible), got %q", tracks[0].Codec)
+		t.Errorf("expected codec label 'mp2a' (operator-dashboard-compatible), got %q", tracks[0].Codec)
 	}
 	if tracks[0].BitrateKbps == 0 {
 		t.Error("MP2 bitrate must be reported, got 0")
@@ -85,7 +85,7 @@ func TestInputTrackStats_MP2AppearsInSnapshot(t *testing.T) {
 
 // TestInputTrackStats_MP3AppearsAsDistinctTrack ensures MP3 (Layer III)
 // surfaces in the panel under its own "mp3" label rather than collapsing
-// into the generic "mp2a" bucket. Critical for operators who run Flussonic
+// into the generic "mp2a" bucket. Critical for operators running production media servers
 // alongside Open-Streamer and expect identical codec naming.
 func TestInputTrackStats_MP3AppearsAsDistinctTrack(t *testing.T) {
 	st := newInputTrackStats()

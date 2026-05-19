@@ -2,7 +2,7 @@ package pull
 
 // pid_filter.go — pass through only an operator-specified set of TS PIDs.
 //
-// Use cases (mirrors Flussonic's `pids` input option):
+// Use cases (mirrors the common `pids` input option):
 //   - Source PSI is malformed or missing → MPTSProgramFilter can't auto-
 //     detect ES PIDs; operator hardcodes the PIDs they know.
 //   - Cherry-pick: the source is multi-language (1 video + N audios) but
@@ -16,7 +16,7 @@ package pull
 // in the list themselves; otherwise downstream players have nothing to
 // decode the elementary streams against. Logging that case is deliberately
 // out of scope: misconfiguration is the operator's responsibility, and
-// silent forwarding matches Flussonic's behaviour.
+// silent forwarding matches the common operator-tooling behaviour.
 //
 // Composition: the reader factory chains MPTSProgramFilter → PIDFilter so
 // `program` runs first (rewrites PAT, narrows to one program) and `pids`

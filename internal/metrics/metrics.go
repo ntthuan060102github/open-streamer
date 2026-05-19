@@ -36,7 +36,7 @@ type Metrics struct {
 	// ingress (DASH packager handleH264 / handleAAC). Use
 	// `rate(transcoder_frames_total[1m])` to chart per-stream FPS;
 	// dips below the source frame rate signal the transcoder is
-	// dropping or queueing frames. Mirrors Flussonic's
+	// dropping or queueing frames. Mirrors the operator-tooling
 	// "Output frames count" panel shape.
 	//
 	// Labels:

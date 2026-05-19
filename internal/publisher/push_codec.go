@@ -46,7 +46,7 @@ type pushCodecAdapter struct {
 	ascSent bool
 
 	// metadataSent gates the one-time `@setDataFrame onMetaData` emission so
-	// receivers (YouTube/Twitch/Flussonic) get codec hints up front.
+	// receivers (common RTMP destinations) get codec hints up front.
 	metadataSent bool
 
 	// onMsg sinks the composed FLV-tag RtmpMsg — typically lal PushSession.WriteMsg.
@@ -189,7 +189,7 @@ func (a *pushCodecAdapter) FeedAAC(adtsFrame []byte, dtsMs int64) error {
 }
 
 // ensureMetadata emits the one-time `@setDataFrame onMetaData` AMF tag with
-// codec hints — required by some strict ingest endpoints (YouTube, certain
+// codec hints — required by some strict ingest endpoints (common strict ingest endpoints, certain
 // CDN pops) before they accept media. Mirrors what lal's AvPacket2RtmpRemuxer
 // does on first emit.
 func (a *pushCodecAdapter) ensureMetadata() error {

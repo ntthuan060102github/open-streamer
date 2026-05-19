@@ -18,7 +18,7 @@ const (
 )
 
 // SessionNamedBy describes how the session's UserName was resolved.
-// Mirrors Flussonic's `named_by` so external dashboards expecting that
+// Mirrors the common `named_by` field so external dashboards expecting that
 // vocabulary keep working.
 type SessionNamedBy string
 

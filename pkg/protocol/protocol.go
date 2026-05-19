@@ -70,7 +70,7 @@ func Detect(rawURL string) Kind {
 		}
 		// Raw MPEG-TS over HTTP: matches both the explicit `/mpegts` server
 		// endpoint exposed by Open-Streamer and the conventional `.ts` suffix
-		// used by other media servers (Flussonic / nimble / mistserver) that
+		// used by other media servers (common production media servers) that
 		// expose a single chunked TS stream.
 		if strings.HasSuffix(path, "/mpegts") || strings.HasSuffix(path, ".ts") {
 			return KindHTTPTS

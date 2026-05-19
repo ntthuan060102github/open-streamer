@@ -15,7 +15,7 @@ package publisher
 // Why lal (q191201771/lal) instead of yapingcat/gomedia:
 //
 // gomedia's RtmpClient panics on AMF marker bytes it doesn't recognise (we hit
-// "unsupport amf type 98" pushing to Flussonic — the panic killed the whole
+// "unsupport amf type 98" pushing to a strict media server — the panic killed the whole
 // service). lal's AMF parser returns errors instead of panicking, and its
 // publish handshake is a strict synchronous Push() that returns only after the
 // remote replies — no separate publish.start state machine to gate writes
@@ -218,8 +218,8 @@ func (p *rtmpPushPackager) connect(ctx context.Context) error {
 
 	p.session = rtmp.NewPushSession(func(option *rtmp.PushSessionOption) {
 		option.PushTimeoutMs = int(timeout / time.Millisecond)
-		// Complex handshake matches FFmpeg/OBS — required by most strict
-		// peers (YouTube, Twitch, Flussonic). Plain handshake breaks
+		// Complex handshake matches FFmpeg and common encoders — required by most strict
+		// peers (common RTMP destinations). Plain handshake breaks
 		// silently on those.
 		option.HandshakeComplexFlag = true
 		if u.Scheme == "rtmps" {

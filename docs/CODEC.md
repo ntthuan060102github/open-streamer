@@ -193,7 +193,7 @@ resolution order on every key NALU message:
    from a prior `AVCPacketType=0` tag, prepend it to the slice-only
    IDR. This handles encoders that send param sets only via the
    sequence-header tag (FFmpeg `-bsf:v dump_extra=freq=keyframe`
-   disabled, OBS default).
+   disabled, encoder default).
 3. **Drop** — neither found ⇒ return `nil` so the buffer hub never
    sees an IDR without init params. Without this drop, the IDR would
    land in the buffer hub, every downstream HLS/DASH muxer would queue
@@ -225,7 +225,7 @@ muxers with un-init-able keyframes.
 
 `internal/ingestor/push/rtmp_writer.go` strips SPS/PPS/AUD/SEI NALUs
 from per-frame video tags via `buildAvccSliceOnly` because strict
-players (Flussonic, JW Player) reject NALU tags that contain non-slice
+players (strict players) reject NALU tags that contain non-slice
 NALUs — those belong in the AVCDecoderConfigurationRecord. Sequence
 headers ride either:
 
@@ -324,7 +324,7 @@ The PMT scanner reports bitrate at the **TS payload level** (includes PES
 headers and adaptation field). gompeg2 (the older path) reported it at
 the **elementary stream level** (PES headers stripped). For typical IPTV
 streams the difference is ~3–5% — TS-level matches what `ss -lump`,
-`tcpdump`, and Flussonic display.
+`tcpdump`, and operator-monitor display.
 
 ---
 

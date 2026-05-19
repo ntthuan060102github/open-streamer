@@ -233,7 +233,7 @@ func TestPackager_PairingGate_HoldsUntilBothTracks(t *testing.T) {
 }
 
 // TestPackager_AccumulateVideoPS_LargeFramesBeforeSPS — regression
-// test for the bac_ninh/track_1 1080p ABR shard failure. Before the
+// test for the stream_a/track_1 1080p ABR shard failure. Before the
 // per-frame NAL extractor, accumulateVideoPS blindly appended every
 // frame's full Annex-B bytes to p.videoPS. 1080p frames are 50-200 KB,
 // so after ~10 frames with no inline SPS/PPS the 1 MiB cap fired and

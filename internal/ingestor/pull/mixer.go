@@ -137,7 +137,7 @@ func NewMixerReader(input domain.Input, bufSvc *buffer.Service, lookup StreamLoo
 	// (HLS-pull chunk arrivals, transcoder FFmpeg warmup flush, file
 	// pre-read). Without pacing, V or A bursts forward in PTS at the
 	// mixer egress; downstream Normaliser then preserves the burst-
-	// elevated PTS as a permanent V/A offset (test_mixer: bac_ninh
+	// elevated PTS as a permanent V/A offset (test_mixer: stream_a
 	// transcoder produced 4 s of V in ~100 ms when mixer's TS demuxer
 	// finally got its PMT, baking a stable 40+s V-leads-A gap). The
 	// TSDemuxPacketReader's per-instance pace() throttles emit by

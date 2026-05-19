@@ -48,7 +48,7 @@ const (
 // missing DTS — the original contract — meant every consumer had to
 // remember the substitution; one production caller (serve_rtsp.go)
 // missed it, and computeAudioRTP(0) collapsed the AAC RTP timeline
-// into +1-tick monotonic-clamp emits that Flussonic / ffmpeg rejected
+// into +1-tick monotonic-clamp emits that strict ffmpeg consumers rejected
 // as non-monotonic. Doing the substitution here at the boundary makes
 // the contract impossible to miss.
 type OnFrameFunc func(cid StreamType, frame []byte, ptsMs, dtsMs uint64)

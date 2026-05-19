@@ -4,7 +4,7 @@ package pull
 //
 // Migrated from yapingcat/gomedia/go-rtmp after that library exposed a
 // process-killing panic on AMF type bytes outside the AMF0/AMF3 spec
-// range (Flussonic and other production servers send vendor-specific
+// range (production servers send vendor-specific
 // extensions in connect responses). lal's rtmp parser tolerates those
 // gracefully and the rest of our codebase already trusts lal for the
 // outbound RTMP push path — consolidating on a single library removes

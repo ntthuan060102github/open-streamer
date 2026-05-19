@@ -233,7 +233,7 @@ func (s *Segmenter) findIDRCutPoint(q *FrameQueue, segDurMS uint64) int {
 // buildCutDecision packages the cut-up-to-frame-N answer. For a V+A
 // stream, AudioCount is COUPLED to V's emitted duration so the
 // per-segment V/A durations match in time-domain — the cure for the
-// bac_ninh_raw 8 s / test2 4 s baked-in drift bug:
+// stream_a_raw 8 s / test2 4 s baked-in drift bug:
 //
 //   - V's emitted ms = (nextPTSms − first.PTSms) if a next frame is
 //     queued; else (cutPTSms − first.PTSms).
@@ -318,7 +318,7 @@ func (s *Segmenter) buildCutDecision(q *FrameQueue, lastVideoIdx int, haveAudio 
 // emitted MPD <S d=…> stays close to the operator-configured target
 // (vs the entire queue, which can be up to maxQueueSpanMs = 30 s of
 // audio after a startup burst — that produced 28-second audio
-// segments on bac_ninh / test_copy ABR audio shards when the video
+// segments on stream_a / test_copy ABR audio shards when the video
 // queue happened to drain between V cuts and cutAudioOnly fired).
 //
 // Returns Ok=true with AudioCount = the number of frames whose

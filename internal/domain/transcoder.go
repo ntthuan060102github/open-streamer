@@ -42,7 +42,7 @@ const (
 // ResizeMode controls how the source frame is fitted into the output dimensions.
 type ResizeMode string
 
-// ResizeMode values match Flussonic's resize modes. "" defaults to ResizeModePad.
+// ResizeMode values match the common operator-tooling resize modes. "" defaults to ResizeModePad.
 const (
 	ResizeModePad     ResizeMode = "pad"     // letterbox: keep aspect, fill remainder with black
 	ResizeModeCrop    ResizeMode = "crop"    // fill: keep aspect, crop excess

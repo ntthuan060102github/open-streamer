@@ -41,7 +41,7 @@ import (
 // breaking TS continuity, and the transcoder downstream sees corrupted PES
 // headers (decode_slice_header errors, wild PTS jumps, garbled output).
 //
-// Production media servers like Flussonic use SO_RCVBUFFORCE for exactly
+// Production media servers use SO_RCVBUFFORCE for exactly
 // this reason — matching that behaviour means the operator doesn't have to
 // raise sysctls just to feed a high-bitrate multicast feed.
 //
@@ -77,7 +77,7 @@ func setUDPRecvBuffer(conn *net.UDPConn, n int) {
 // socket — regardless of whether THIS socket joined that group.
 //
 // Operational impact: when this server runs alongside another multicast
-// receiver (Flussonic, smcroute, mediasrv, …) that has joined groups
+// receiver (smcroute, mediasrv, …) that has joined groups
 // 239.0.113.2..12, our socket bound to 0.0.0.0:5001 with only group
 // 239.0.113.1 joined still receives the entire 12-channel firehose. The
 // HLS segmenter then writes ~12× the expected bytes per segment, with

@@ -327,12 +327,12 @@ protocols:                       # Each true → publisher starts that output.
   srt:  false
 
 push:                            # Outbound destinations.
-  - url:               "rtmp://a.rtmp.youtube.com/live2/{key}"
+  - url:               "rtmp://rtmp.example.com/live2/{key}"
     enabled:           true
     timeout_sec:       0         # 0 = default (10).
     retry_timeout_sec: 0         # 0 = default (5).
     limit:             0         # 0 = unlimited retries.
-    comment:           "YouTube"
+    comment: "Live stream"
 
 dvr:                             # null = no DVR.
   enabled:          true
@@ -626,7 +626,7 @@ Single source of truth: [internal/domain/defaults.go](../internal/domain/default
 
 ## 7. Worked examples
 
-### Pull HLS, transcode 3 rungs NVENC, publish HLS + DASH + RTSP, push to YouTube + Twitch, record DVR
+### Pull HLS, transcode 3 rungs NVENC, publish HLS + DASH + RTSP, push to multiple live destinations, record DVR
 
 ```yaml
 code: tv1
@@ -646,8 +646,8 @@ protocols:
   dash: true
   rtsp: true
 push:
-  - { url: "rtmp://a.rtmp.youtube.com/live2/YT_KEY",     enabled: true, comment: "YouTube" }
-  - { url: "rtmp://live.twitch.tv/app/TWITCH_KEY",       enabled: true, comment: "Twitch"  }
+  - { url: "rtmp://rtmp.example.com/live2/STREAM_KEY",     enabled: true, comment: "Live stream" }
+  - { url: "rtmp://rtmp.example.com/app/STREAM_KEY",       enabled: true, comment: "Live stream"  }
 dvr:
   enabled:          true
   segment_duration: 4
@@ -655,7 +655,7 @@ dvr:
   max_size_gb:      200
 ```
 
-### RTMP push ingest from OBS, copy passthrough to HLS
+### RTMP push ingest from an encoder, copy passthrough to HLS
 
 ```yaml
 code: obs_feed
@@ -667,7 +667,7 @@ protocols:
 # no transcoder — copy passthrough
 ```
 
-OBS configuration: server `rtmp://your-server:1935/live`, key `secret_key`.
+Encoder configuration: server `rtmp://your-server:1935/live`, key `secret_key`.
 
 ### Multi-input failover with manual override
 
