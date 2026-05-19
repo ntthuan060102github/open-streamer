@@ -7,7 +7,7 @@ package pull
 // over a single multicast IP. Forwarding the whole MPTS into HLS / DASH
 // segments produces players-confusing nb_programs > 1 output (interleaved
 // DTS from unrelated channels, "Packet corrupt" warnings, decode_slice_header
-// errors). Production media servers (Flussonic, Wowza, etc.) demultiplex by
+// errors). Production media servers (production media servers) demultiplex by
 // program_number so only the chosen channel reaches the publisher; this
 // filter does the same at the byte level without decoding any frames.
 //

@@ -17,7 +17,7 @@ package pull
 //     whose ffprobe-reported duration is *hours*.
 //
 // Net effect: the player either rejects the segment outright (no playback)
-// or stutters badly. Flussonic and other production media servers avoid
+// or stutters badly. production media servers avoid
 // this entirely by treating raw TS as opaque bytes — only re-demuxing when
 // a transcode is actually required.
 //

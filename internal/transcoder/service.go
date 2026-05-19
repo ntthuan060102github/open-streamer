@@ -861,7 +861,7 @@ func (s *Service) logStderr(streamID domain.StreamCode, profile string, r io.Rea
 		}
 		// H.264 decoder / demuxer noise: probe gaps, segment joins, B-frame reorder, MMCO.
 		// "Invalid timestamps" is mpegts-muxer noise: input has DTS > PTS or
-		// non-monotonic PTS (common with re-muxed Wowza/Flussonic upstreams
+		// non-monotonic PTS (common with re-muxed production-media-server upstreams
 		// or weird B-frame structures); muxer self-corrects, output stays
 		// valid. Without this filter the warn-level spam is one line per
 		// affected packet (30/sec for 30fps).

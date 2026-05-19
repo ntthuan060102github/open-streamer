@@ -44,7 +44,7 @@ import (
 
 // mpegtsContentType is the IANA media type for raw MPEG-TS over HTTP. Some
 // clients (FFmpeg) accept several variants; this one is the most widely
-// recognised and is what Flussonic / nimble emit.
+// recognised and is what common production media servers emit.
 const mpegtsContentType = "video/mp2t"
 
 // HandleMPEGTS returns an http.HandlerFunc that streams raw MPEG-TS bytes

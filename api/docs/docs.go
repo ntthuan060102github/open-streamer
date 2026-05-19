@@ -3108,7 +3108,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "url": {
-                    "description": "URL is the destination ingest endpoint.\nSupported schemes:\n  rtmp://  — plain TCP, default port 1935 (e.g. rtmp://a.rtmp.youtube.com/live2/{key})\n  rtmps:// — TLS-wrapped RTMP, default port 443 (e.g. rtmps://live-api-s.facebook.com:443/rtmp/{key})",
+                    "description": "URL is the destination ingest endpoint.\nSupported schemes:\n  rtmp://  — plain TCP, default port 1935 (e.g. rtmp://rtmp.example.com/live2/{key})\n  rtmps:// — TLS-wrapped RTMP, default port 443 (e.g. rtmps://rtmps.example.com:443/rtmp/{key})",
                     "type": "string"
                 }
             }

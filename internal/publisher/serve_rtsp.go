@@ -87,7 +87,7 @@ const rtspMaxBackJumpMs = 250
 // transcoders empty their queue much faster than realtime) push hundreds of
 // AV packets in <1s, then idle for 4-6s. Forwarding that pattern straight to
 // `gortsplib.ServerStream.WritePacketRTP` makes strict RTSP clients (VLC,
-// Flussonic, ffmpeg copy) underrun their jitter buffer between bursts and
+// strict consumers including ffmpeg copy) underrun their jitter buffer between bursts and
 // either freeze, drop frames, or surface "non monotonically increasing dts"
 // because the inter-packet wallclock delta no longer matches the RTP/PTS
 // delta the demuxer expected.
@@ -700,7 +700,7 @@ func (sess *rtspSession) initStream() error {
 		// strict clients (gortsplib v4 / v5 pull, ffmpeg) reject with
 		// `invalid SDP: media N is invalid: sizelength is missing`.
 		// 13 / 3 / 3 are the universal AAC-hbr Mode 1 values (matches
-		// FFmpeg's RTP muxer, Wowza, Flussonic).
+		// FFmpeg's RTP muxer).
 		aacFormat = &format.MPEG4Audio{
 			PayloadTyp:       97,
 			Config:           sess.aacCfg,
@@ -897,7 +897,7 @@ func (sess *rtspSession) writeAudioRTP(frame []byte, dts uint64) {
 	// correct +1024 spacing relative to the first.
 	//
 	// The previous behaviour (`pkt.Timestamp = rtpTS`) collapsed every
-	// AU in a batch to the same timestamp; ffmpeg / Flussonic rebuilt
+	// AU in a batch to the same timestamp; strict consumers rebuilt
 	// the implicit AU timeline (TS, TS+1024, TS+2048…) and saw
 	// "non-monotonically increasing dts" once a later frame's base TS
 	// fell below an earlier frame's last implied AU time, freezing

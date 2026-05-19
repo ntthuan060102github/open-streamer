@@ -12,19 +12,6 @@ import (
 	"github.com/ntt0601zcoder/open-streamer/internal/domain"
 )
 
-// TestCheckHealth_FailbackSweeper_RecoversFromProbeRace reproduces the
-// ca_mau bug observed on prod-flussonic-100 (2026-05-14):
-//
-// A stream's primary input (priority 0) timed out and failed over to the
-// backup VOD (priority 1, "bao_tri.mp4"). The first probe ran 8 s after
-// the failover (failbackProbeCooldown = 8s) and succeeded — the live URL
-// had recovered. Promotion to StatusIdle landed correctly, BUT the
-// failback condition in runProbe (line ~987) requires sinceSwitch >=
-// failbackSwitchCooldown (12s) to fire. Probe completed in ~2-3s, so
-// sinceSwitch was ~10-11s, missing the cooldown by a hair. Failback
-// never fired and the stream stayed permanently on the maintenance VOD
-// loop until manual intervention.
-//
 // The sweeper added in checkHealth re-evaluates every monitor tick (2s),
 // so the missed-failback window is bounded by one tick instead of being
 // permanent.

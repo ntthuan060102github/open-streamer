@@ -208,11 +208,11 @@ rendition.
 curl -XPOST http://localhost:8080/api/v1/streams/news -d '{
   "push": [
     {
-      "url": "rtmp://a.rtmp.youtube.com/live2/STREAM_KEY",
+      "url": "rtmp://rtmp.example.com/live2/STREAM_KEY",
       "enabled": true
     },
     {
-      "url": "rtmps://live-api-s.facebook.com:443/rtmp/STREAM_KEY",
+      "url": "rtmps://rtmps.example.com:443/rtmp/STREAM_KEY",
       "enabled": true,
       "limit": 10,
       "retry_timeout_sec": 30

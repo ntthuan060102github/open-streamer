@@ -327,7 +327,7 @@ func (s *Service) runOnce(
 	// enough that the OS pipe writer goroutine returned). The worker
 	// MUST restart — leaving here with crashed=false silently retires
 	// the transcoder for the rest of the stream's lifetime even though
-	// ingest resumes. Field-reproduced on bac_ninh after an HLS-pull
+	// ingest resumes. Field-reproduced on stream_a after an HLS-pull
 	// source briefly 404'd and was redirected to a new URL: ingestor
 	// recovered, but the FFmpeg child had already exited code 0 during
 	// the stall, and the loop's `if !crashed { return }` orphaned the

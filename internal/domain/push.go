@@ -17,8 +17,8 @@ const (
 type PushDestination struct {
 	// URL is the destination ingest endpoint.
 	// Supported schemes:
-	//   rtmp://  — plain TCP, default port 1935 (e.g. rtmp://a.rtmp.youtube.com/live2/{key})
-	//   rtmps:// — TLS-wrapped RTMP, default port 443 (e.g. rtmps://live-api-s.facebook.com:443/rtmp/{key})
+	//   rtmp://  — plain TCP, default port 1935 (e.g. rtmp://rtmp.example.com/live2/{key})
+	//   rtmps:// — TLS-wrapped RTMP, default port 443 (e.g. rtmps://rtmps.example.com:443/rtmp/{key})
 	URL string `json:"url" yaml:"url"`
 
 	// Enabled controls whether this destination is active.

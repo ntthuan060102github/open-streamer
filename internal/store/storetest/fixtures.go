@@ -89,12 +89,12 @@ func NewFullStream(code domain.StreamCode) *domain.Stream {
 		},
 		Push: []domain.PushDestination{
 			{
-				URL:             "rtmp://a.rtmp.youtube.com/live2/yt-key",
+				URL:             "rtmp://rtmp.example.com/live2/live-key",
 				Enabled:         true,
 				TimeoutSec:      10,
 				RetryTimeoutSec: 5,
 				Limit:           3,
-				Comment:         "YouTube Live",
+				Comment:         "Live stream",
 			},
 		},
 		DVR: &domain.StreamDVRConfig{

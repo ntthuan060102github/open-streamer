@@ -504,7 +504,7 @@ Reads from Buffer Hub subscriber, segments into output formats:
      efficiency). Without splitting, `writeAudioSegment`'s
      `len(frames) × 1024` segment-dur math collapses the sample count
      by the bundling factor and the audio MPD timeline lags wallclock
-     by 80 % (root cause of bac_ninh / test_copy / test1 / test_mixer
+     by 80 % (root cause of stream_a / test_copy / test1 / test_mixer
      audio at ~20 % rate before fix). Splitter emits per-frame PTS =
      base + `frameIdx × 1024 × 1000 / sampleRate`.
   2. **First-IDR-past-segDur cut** in `segmenter.findIDRCutPoint`: HLS-
@@ -540,7 +540,7 @@ Reads from Buffer Hub subscriber, segments into output formats:
   scanning raw TS for SPS/PPS (gomedia's TSDemuxer often drops
   standalone parameter-set NALUs before invoking `OnFrame`), strips
   SPS/PPS/AUD/SEI from per-frame video tags via `buildAvccSliceOnly`
-  for strict-player compatibility (Flussonic / JW Player reject NALU
+  for strict-player compatibility (strict players reject NALU
   tags that contain non-slice NALUs), and **splits gomedia-bundled
   AAC PES into one RTMP audio tag per ADTS frame** with monotonic
   per-frame DTS — without splitting, a downstream pull-RTMP consumer

@@ -309,7 +309,7 @@ func TestComputeDiff_PushChanged(t *testing.T) {
 	old := baseStream()
 	new := baseStream()
 	new.Push = []domain.PushDestination{
-		{URL: "rtmp://youtube.com/live/key", Enabled: true},
+		{URL: "rtmp://platform.example.com/live/key", Enabled: true},
 	}
 
 	d := ComputeDiff(old, new)

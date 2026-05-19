@@ -15,7 +15,7 @@ package push
 //                              ▼
 //                         buffer.Service.Write(bufID, Packet{AV: ...})
 //
-// External RTMP play clients (VLC / ffplay / OBS preview) connect to the
+// External RTMP play clients (common play clients) connect to the
 // same TCP port; lal raises OnNewRtmpSubSession which delegates to the
 // publisher-side PlayFunc — see internal/publisher/serve_rtmp.go for the
 // reader-side that streams from the buffer hub into the lal session.

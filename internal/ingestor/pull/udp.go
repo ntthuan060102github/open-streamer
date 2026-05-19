@@ -124,7 +124,7 @@ func (r *UDPReader) Open(_ context.Context) error {
 	}
 	// On Linux this prefers SO_RCVBUFFORCE (bypasses net.core.rmem_max when
 	// the process has CAP_NET_ADMIN — root does) and falls back to plain
-	// SO_RCVBUF otherwise. Matches Flussonic / production media servers that
+	// SO_RCVBUF otherwise. Matches production media servers that
 	// don't require operators to raise rmem_max for high-bitrate multicast.
 	// Non-Linux builds use plain SetReadBuffer.
 	setUDPRecvBuffer(conn, r.opts.osBuf)

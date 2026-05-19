@@ -28,12 +28,12 @@ package push
 // receiving player can't initialise its decoder. The writer enforces
 // this by latching `seqSent` flags on first frame.
 //
-// Strict players (Flussonic, JW Player, ffplay -err_detect) also expect:
+// strict players also expect:
 //
 //   - An `onMetaData` AMF0 script tag with codec IDs *before* any AV data.
 //     Without it they refuse to play with "unknown stream" — even if all
 //     subsequent video / audio tags are valid. Lenient players (LAL pull,
-//     OBS preview) tolerate the omission, which is why the bug went
+//     preview clients) tolerate the omission, which is why the bug went
 //     unnoticed against open-streamer ↔ open-streamer.
 //   - Sequence headers at timestamp 0, not at the first frame's DTS.
 //     The wire timestamp on the seq header is informational; players
@@ -174,12 +174,12 @@ func (w *RTMPFrameWriter) WriteFrame(kind FrameKind, data []byte, pts, dts uint3
 //
 // `@setDataFrame` is an RTMP NetStream command that flags the AMF
 // payload as cacheable stream metadata (vs. a one-shot data event).
-// Strict players (Flussonic, JW Player, OBS preview) ignore raw
+// strict players ignore raw
 // onMetaData tags lacking this prefix — they treat them as opaque
 // data messages, never parse codec/resolution from them, then time
 // out the play session ~7-8s later when their decoder still has no
 // init params. Lenient players (LAL pull, ffplay) tolerate the
-// omission, which is why the issue only surfaced against Flussonic.
+// omission, which is why the issue only surfaced against strict players.
 func (w *RTMPFrameWriter) sendMetadata() error {
 	width, height := -1, -1
 	if w.width > 0 && w.height > 0 {
@@ -217,8 +217,8 @@ func (w *RTMPFrameWriter) writeH264(annexB []byte, pts, dts uint32) error {
 			// can't decode without them anyway.
 			return nil
 		}
-		// Parse SPS for width/height so onMetaData carries them — Flussonic
-		// and other strict players use the metadata resolution to size the
+		// Parse SPS for width/height so onMetaData carries them —
+		// strict players use the metadata resolution to size the
 		// video element before the first frame arrives.
 		var ctx avc.Context
 		if err := avc.ParseSps(sps, &ctx); err == nil {
@@ -234,8 +234,8 @@ func (w *RTMPFrameWriter) writeH264(annexB []byte, pts, dts uint32) error {
 		// avc.BuildSeqHeaderFromSpsPps already prepends the 5-byte FLV
 		// video tag header (FrameType<<4|CodecId, AVCPacketType=0,
 		// CompositionTime=0). Wrapping it again with buildFLVAvcTag
-		// would double the prefix — strict players (Flussonic, ffmpeg)
-		// then misalign their AVCDecoderConfigurationRecord parser, see
+		// would double the prefix — strict players then
+		// misalign their AVCDecoderConfigurationRecord parser, see
 		// 5 stray bytes inside the record, and fall back to "NAL type
 		// 13 in extradata" warnings before failing every subsequent
 		// NALU split. Send the buffer LAL returned as-is.
@@ -245,7 +245,7 @@ func (w *RTMPFrameWriter) writeH264(annexB []byte, pts, dts uint32) error {
 		w.avcSeqSent = true
 	}
 
-	// Build AVCC payload from slice NALs only — strict players (Flussonic)
+	// Build AVCC payload from slice NALs only — strict players
 	// reject NALU tags that contain SPS / PPS / AUD because those belong
 	// in the sequence header, not in the per-frame tag. avc.Annexb2Avcc
 	// would copy *every* NAL including the SPS/PPS prefix on IDR; that

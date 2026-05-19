@@ -34,7 +34,7 @@ type MediaTrackInfo struct {
 // contract lives next to the struct that exposes it.
 //
 // "mp2a" is the FourCC for MPEG-1/2 Audio (Layer I/II/III). Matches the
-// Flussonic UI label convention so operators familiar with that tooling see
+// operator-tooling UI label convention so operators familiar with established tooling see
 // the same string for the same codec on both servers; the underlying format
 // covers everything that arrives via TS stream_type 0x03 or 0x04.
 //

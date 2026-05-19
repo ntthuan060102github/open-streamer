@@ -159,7 +159,7 @@ regenerate from annotations).
   **runtime stream** on the fly. Runtime streams are RAM-only, appear
   in `GET /streams` with `source: "runtime"`, and disappear 30 s
   after the last packet.
-- **Push out** — RTMP/RTMPS to platforms (YouTube, Facebook, Twitch,
+- **Push out** — RTMP/RTMPS to platforms (popular live platforms,
   CDN). Per-destination state visible at
   `runtime.publisher.pushes[]`.
 - **DVR + Timeshift** — persistent recording per stream; resume across

@@ -708,7 +708,7 @@ Per-destination state in `runtime.publisher.pushes[]`:
 
 ```json
 {
-  "url":          "rtmp://a.rtmp.youtube.com/live2/KEY",
+  "url":          "rtmp://rtmp.example.com/live2/KEY",
   "status":       "active",
   "attempt":      1,
   "connected_at": "2026-04-26T10:00:00Z",

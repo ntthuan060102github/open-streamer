@@ -165,7 +165,7 @@ func TestConvertVideo_AVC_InlineSPSPPS_FirstIDREmittedAndPrefixCached(t *testing
 
 // IDR arriving WITHOUT any prior sequence header AND no inline param sets
 // must be dropped — emitting it would push an undecodable IDR into the
-// buffer hub. This is the bac_ninh / test5 root-cause case.
+// buffer hub. This is the stream_a / test5 root-cause case.
 func TestConvertVideo_AVC_NoParamSetsAtAll_IDRDropped(t *testing.T) {
 	t.Parallel()
 	c := NewRTMPMsgConverter()

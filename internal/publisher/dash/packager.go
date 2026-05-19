@@ -468,7 +468,7 @@ func (p *Packager) pushAudioWithDiag(f AudioFrame) {
 //
 // Rationale: a 1080p H.264 IDR is 100-200 KB; a few P-frames between
 // IDR delivery can push the accumulator past the cap before SPS/PPS
-// arrive (root cause of the bac_ninh/track_1 + test_copy/track_1
+// arrive (root cause of the stream_a/track_1 + test_copy/track_1
 // videoPSGivenUp failure observed on production — same source, same
 // transcoder, only the 1080p shard failed because its frame bytes
 // were larger). The extractor keeps videoPS tiny (~hundreds of bytes
@@ -688,7 +688,7 @@ func (p *Packager) tryCut(now time.Time) {
 
 // diagAudioStarvation logs a queue snapshot whenever a Cut decision
 // included video but excluded all audio despite frames being queued —
-// the smoking gun for the bac_ninh_raw / test1 / test5 audio-dead bug.
+// the smoking gun for the stream_a_raw / test1 / test5 audio-dead bug.
 // Rate-limited to ≤ 1 log/sec/packager so the 50 ms tryCut cadence
 // can't flood the journal. Caller holds p.mu.
 //

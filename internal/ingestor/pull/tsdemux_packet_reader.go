@@ -104,7 +104,7 @@ type TSDemuxPacketReader struct {
 	// pacing throttles AVPacket emission to wall-clock based on DTS.  Used for
 	// chunk-based sources that deliver media faster than real-time (HLS pulls
 	// each segment as one HTTP GET → hundreds of packets in microseconds).
-	// Without this, downstream RTMP push to YouTube/etc. sends timestamps that
+	// Without this, downstream RTMP push to common live platforms sends timestamps that
 	// jump 13–26× wall-clock and the ingest server closes the connection.
 	pacing   bool
 	paceOnce bool

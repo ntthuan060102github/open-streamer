@@ -40,34 +40,34 @@ func TestRtmpDialURLParsing(t *testing.T) {
 	}{
 		{
 			name:         "rtmp no port gets default 1935",
-			rawURL:       "rtmp://a.rtmp.youtube.com/live2/key",
+			rawURL:       "rtmp://rtmp.example.com/live2/key",
 			wantScheme:   "rtmp",
-			wantHost:     "a.rtmp.youtube.com:1935",
-			wantHostname: "a.rtmp.youtube.com",
+			wantHost:     "rtmp.example.com:1935",
+			wantHostname: "rtmp.example.com",
 			wantPort:     "1935",
 		},
 		{
 			name:         "rtmp explicit port preserved",
-			rawURL:       "rtmp://a.rtmp.youtube.com:1935/live2/key",
+			rawURL:       "rtmp://rtmp.example.com:1935/live2/key",
 			wantScheme:   "rtmp",
-			wantHost:     "a.rtmp.youtube.com:1935",
-			wantHostname: "a.rtmp.youtube.com",
+			wantHost:     "rtmp.example.com:1935",
+			wantHostname: "rtmp.example.com",
 			wantPort:     "1935",
 		},
 		{
 			name:         "rtmps no port gets default 443",
-			rawURL:       "rtmps://live-api-s.facebook.com/rtmp/key",
+			rawURL:       "rtmps://rtmps.example.com/rtmp/key",
 			wantScheme:   "rtmps",
-			wantHost:     "live-api-s.facebook.com:443",
-			wantHostname: "live-api-s.facebook.com",
+			wantHost:     "rtmps.example.com:443",
+			wantHostname: "rtmps.example.com",
 			wantPort:     "443",
 		},
 		{
 			name:         "rtmps explicit port preserved",
-			rawURL:       "rtmps://live-api-s.facebook.com:443/rtmp/key",
+			rawURL:       "rtmps://rtmps.example.com:443/rtmp/key",
 			wantScheme:   "rtmps",
-			wantHost:     "live-api-s.facebook.com:443",
-			wantHostname: "live-api-s.facebook.com",
+			wantHost:     "rtmps.example.com:443",
+			wantHostname: "rtmps.example.com",
 			wantPort:     "443",
 		},
 		{
@@ -102,8 +102,8 @@ func TestServeRTMPPush_SchemeGuard(t *testing.T) {
 	// but for invalid schemes serveRTMPPush must return immediately without attempting
 	// a dial.  We verify this by inspecting the scheme detection logic directly.
 	valid := []string{
-		"rtmp://a.rtmp.youtube.com/live2/key",
-		"rtmps://live-api-s.facebook.com:443/rtmp/key",
+		"rtmp://rtmp.example.com/live2/key",
+		"rtmps://rtmps.example.com:443/rtmp/key",
 	}
 	invalid := []string{
 		"http://example.com/live",
