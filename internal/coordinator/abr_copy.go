@@ -181,9 +181,11 @@ func (c *Coordinator) startABRCopy(ctx context.Context, downstream, upstream *do
 		go c.runABRCopyTap(tapCtx, wg, entry, downstream.Code, upRends[i].BufferID, downRends[i].BufferID, downRends[i].Slug)
 	}
 
+	now := time.Now()
 	if c.m != nil {
-		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(time.Now().Unix()))
+		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(now.Unix()))
 	}
+	c.recordStartedAt(downstream.Code, now)
 	c.clearDegradation(downstream.Code)
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStarted,
@@ -213,6 +215,7 @@ func (c *Coordinator) stopABRCopy(ctx context.Context, code domain.StreamCode, a
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.DeleteLabelValues(string(code))
 	}
+	c.clearStartedAt(code)
 	c.clearDegradation(code) // clears the per-stream status entry
 
 	c.bus.Publish(ctx, domain.Event{

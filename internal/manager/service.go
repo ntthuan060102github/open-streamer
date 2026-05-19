@@ -210,6 +210,16 @@ type RuntimeStatus struct {
 	Transcoder *transcoder.RuntimeStatus `json:"transcoder,omitempty"`
 	Publisher  *publisher.RuntimeStatus  `json:"publisher,omitempty"`
 
+	// StartedAt is the wallclock moment the pipeline went live. Populated
+	// by the stream handler from coordinator.StreamStartedAt; nil for a
+	// stopped stream so the UI can show "—" instead of an epoch zero.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	// UptimeSec is the precomputed elapsed seconds since StartedAt at the
+	// moment of the response. Bundled so frontend can render uptime without
+	// reading wallclock + doing the subtraction itself (and getting clock-
+	// skew weirdness when the browser is hours off from the server).
+	UptimeSec int64 `json:"uptime_sec,omitempty"`
+
 	// Media is the UI-friendly summary of the current input → output track
 	// shape (what the dashboard renders as "Input media info / Output media
 	// info / 954kbit/s -> 2577kbit/s"). Populated by the API handler — the

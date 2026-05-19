@@ -225,9 +225,11 @@ func (c *Coordinator) startABRMixer(ctx context.Context, downstream, videoUp, au
 	//nolint:contextcheck // tapCtx detached from request; cancelled by Stop()
 	go c.runABRMixerAudioFanOut(tapCtx, wg, entry, downstream.Code, audioBufID, audioBufferIsTS, downBufIDs)
 
+	now := time.Now()
 	if c.m != nil {
-		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(time.Now().Unix()))
+		c.m.StreamStartTimeSeconds.WithLabelValues(string(downstream.Code)).Set(float64(now.Unix()))
 	}
+	c.recordStartedAt(downstream.Code, now)
 	c.clearDegradation(downstream.Code)
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStarted,
@@ -257,6 +259,7 @@ func (c *Coordinator) stopABRMixer(ctx context.Context, code domain.StreamCode, 
 	if c.m != nil {
 		c.m.StreamStartTimeSeconds.DeleteLabelValues(string(code))
 	}
+	c.clearStartedAt(code)
 	c.clearDegradation(code)
 	c.bus.Publish(ctx, domain.Event{
 		Type:       domain.EventStreamStopped,
